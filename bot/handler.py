@@ -24,6 +24,13 @@ def _build_snippet(history: list[dict], current_user_turn: str, display: str) ->
     return "\n".join(lines)
 
 
+def _last_bot_response(history: list[dict]) -> str | None:
+    for entry in reversed(history):
+        if entry["role"] == "assistant":
+            return entry["content"]
+    return None
+
+
 async def _reply(update: Update, pool: asyncpg.Pool, triggered_by_mention: bool) -> None:
     message = update.effective_message
     user = update.effective_user
@@ -34,6 +41,7 @@ async def _reply(update: Update, pool: asyncpg.Pool, triggered_by_mention: bool)
 
     is_group = chat.type in ("group", "supergroup")
     group_title = chat.title if is_group else None
+    group_id = chat.id if is_group else None
 
     await memory.upsert_user(pool, user.id, user.username, user.first_name, user.last_name)
     if is_group:
@@ -41,17 +49,18 @@ async def _reply(update: Update, pool: asyncpg.Pool, triggered_by_mention: bool)
 
     text = message.text.strip()
 
-    explicit_reply = await extractor.handle_explicit_memory(pool, user.id, text)
+    explicit_reply = await extractor.handle_explicit_memory(pool, user.id, group_id, text)
     if explicit_reply is not None:
         await message.reply_text(explicit_reply)
         return
 
     user_memories = await memory.get_memories(pool, "user", user.id)
     group_memories = await memory.get_memories(pool, "group", chat.id) if is_group else []
+    bot_memories = await memory.get_memories(pool, "bot", chat.id) if is_group else []
     history = await memory.get_recent_messages(pool, chat.id)
 
     display = _display_name(user)
-    system = brain.build_system_prompt(user_memories, group_memories, display, group_title)
+    system = brain.build_system_prompt(user_memories, group_memories, bot_memories, display, group_title)
     llm_messages = brain.history_to_llm_messages(history)
 
     if is_group and not triggered_by_mention:
@@ -84,6 +93,13 @@ async def _reply(update: Update, pool: asyncpg.Pool, triggered_by_mention: bool)
     asyncio.create_task(
         extractor.extract_and_store_automatic(pool, user.id, display, snippet)
     )
+
+    if is_group and triggered_by_mention:
+        prev_bot = _last_bot_response(history)
+        if prev_bot:
+            asyncio.create_task(
+                extractor.extract_reaction_about_bot(pool, chat.id, prev_bot, text)
+            )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

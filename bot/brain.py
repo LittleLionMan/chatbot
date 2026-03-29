@@ -36,7 +36,7 @@ async def _call_anthropic(system: str, messages: list[dict], max_tokens: int = 1
                     pass
         ratelimit.set_rate_limited(retry_after)
         raise
-    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
         ratelimit.set_no_credits()
         raise
 
@@ -59,7 +59,13 @@ Unveränderliche Kommunikationsregeln — diese gelten immer, unabhängig vom Ch
 """
 
 
-def build_system_prompt(memories_user: list[str], memories_group: list[str], user_display_name: str, group_title: str | None) -> str:
+def build_system_prompt(
+    memories_user: list[str],
+    memories_group: list[str],
+    memories_bot: list[str],
+    user_display_name: str,
+    group_title: str | None,
+) -> str:
     parts = [config.BOT_CHARACTER]
 
     if memories_user:
@@ -69,6 +75,10 @@ def build_system_prompt(memories_user: list[str], memories_group: list[str], use
     if group_title and memories_group:
         joined = "\n- ".join(memories_group)
         parts.append(f"\nWas du über die Gruppe '{group_title}' weißt:\n- {joined}")
+
+    if memories_bot:
+        joined = "\n- ".join(memories_bot)
+        parts.append(f"\nWas du über dich selbst in diesem Kontext weißt:\n- {joined}")
 
     parts.append(_BEHAVIOR_RULES)
 

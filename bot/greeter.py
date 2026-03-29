@@ -25,7 +25,7 @@ def is_greeting(text: str) -> bool:
 def introduction_text() -> str:
     name = config.BOT_NAME
     provider = config.LLM_PROVIDER
-    model = config.LLM_MODE
+    model = config.LLM_MODEL
     tag = config.BOT_TAG
     return (
         f"Hey. Ich bin {name} und laufe auf {model} vom Provider {provider}.\n\n"
