@@ -16,6 +16,8 @@ POSTGRES_USER: str = os.environ["POSTGRES_USER"]
 POSTGRES_PASSWORD: str = os.environ["POSTGRES_PASSWORD"]
 
 BOT_NAME: str = os.getenv("BOT_NAME", "Bot")
+BOT_TAG: str = os.getenv("BOT_TAG", "@Bob_bot")
+
 BOT_CHARACTER: str = os.getenv("BOT_CHARACTER", "Du bist ein hilfreicher Assistent.")
 BOT_SPONTANEOUS_PROBABILITY: float = float(os.getenv("BOT_SPONTANEOUS_PROBABILITY", "0.15"))
 BOT_SPONTANEOUS_COOLDOWN_SECONDS: int = int(os.getenv("BOT_SPONTANEOUS_COOLDOWN_SECONDS", "120"))

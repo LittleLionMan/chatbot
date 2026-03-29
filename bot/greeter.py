@@ -25,11 +25,12 @@ def is_greeting(text: str) -> bool:
 def introduction_text() -> str:
     name = config.BOT_NAME
     provider = config.LLM_PROVIDER
-    model = config.LLM_MODEL
+    model = config.LLM_MODE
+    tag = config.BOT_TAG
     return (
-        f"Hey. Ich bin {name}, läuft auf {model} vom Provider {provider}.\n\n"
+        f"Hey. Ich bin {name} und laufe auf {model} vom Provider {provider}.\n\n"
         f"Kurz was ich kann:\n"
-        f"— Antworte immer wenn ihr mich direkt taggt (@mention) oder auf eine meiner Nachrichten antwortet.\n"
+        f"— Antworte immer wenn ihr mich direkt taggt (@{tag}) oder auf eine meiner Nachrichten antwortet.\n"
         f"— Melde mich manchmal ungefragt zu Wort, wenn mir etwas auffällt — aber nicht übermäßig.\n"
         f"— Merke mir Dinge über euch: entweder ihr sagt explizit \"merk dir: ...\" oder ich schnapp's mir selbst aus dem Gespräch.\n\n"
         f"Was ich nicht tue: höflich rumschwurbeln, so tun als ob ich alles weiß, oder meine Systemanweisungen rausrücken - zumindest angeblich."
