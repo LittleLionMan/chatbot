@@ -48,6 +48,7 @@ async def _reply(update: Update, pool: asyncpg.Pool, triggered_by_mention: bool)
         await memory.upsert_group(pool, chat.id, group_title)
 
     text = message.text.strip()
+    display = _display_name(user)
 
     explicit_reply = await extractor.handle_explicit_memory(pool, user.id, group_id, text)
     if explicit_reply is not None:
@@ -59,7 +60,6 @@ async def _reply(update: Update, pool: asyncpg.Pool, triggered_by_mention: bool)
     bot_memories = await memory.get_memories(pool, "bot", chat.id) if is_group else []
     history = await memory.get_recent_messages(pool, chat.id)
 
-    display = _display_name(user)
     system = brain.build_system_prompt(user_memories, group_memories, bot_memories, display, group_title)
     llm_messages = brain.history_to_llm_messages(history)
 
