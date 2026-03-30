@@ -10,7 +10,7 @@ TTS_URL = "http://tts:8002/synthesize"
 
 _VOICE_REQUEST_SYSTEM = """Antworte NUR mit "ja" oder "nein".
 Fordert der User in seiner Nachricht explizit eine Sprachantwort?
-Beispiele: "kannst du das vorlesen", "antworte als Sprachnachricht", "red mal mit mir" → ja
+Beispiele: "kannst du das vorlesen", "antworte als Sprachnachricht", "red mal mit mir", "sag mir" → ja
 Alles andere → nein"""
 
 
