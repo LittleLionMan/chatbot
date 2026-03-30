@@ -43,14 +43,12 @@ def synthesize(req: TTSRequest) -> Response:
 
     try:
         with wave.open(tmp_path, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(voice.config.sample_rate)
-            voice.synthesize(req.text, wav_file)
+            voice.synthesize_wav(req.text, wav_file, set_wav_format=True)
 
         with open(tmp_path, "rb") as f:
             audio_bytes = f.read()
     finally:
         os.unlink(tmp_path)
 
+    logger.info("Synthesized %d bytes for lang=%s", len(audio_bytes), lang)
     return Response(content=audio_bytes, media_type="audio/wav")
