@@ -1,5 +1,6 @@
 import logging
-from telegram.ext import ApplicationBuilder, MessageHandler, filters
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, TypeHandler, filters
 from bot import config, memory, handler
 
 logging.basicConfig(
@@ -7,10 +8,23 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+logger = logging.getLogger(__name__)
+
 
 async def post_init(application) -> None:
     application.bot_data["pool"] = await memory.get_pool()
     logging.info("Database pool initialized.")
+
+
+async def _debug_all(update: Update, context) -> None:
+    msg = update.effective_message
+    if msg:
+        logger.info(
+            "DEBUG update: text=%s voice=%s audio=%s",
+            bool(msg.text),
+            bool(msg.voice),
+            bool(msg.audio),
+        )
 
 
 def main() -> None:
@@ -20,6 +34,8 @@ def main() -> None:
         .post_init(post_init)
         .build()
     )
+
+    app.add_handler(TypeHandler(Update, _debug_all), group=-1)
 
     app.add_handler(
         MessageHandler(filters.VOICE, handler.handle_voice)
