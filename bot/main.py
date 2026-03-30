@@ -1,5 +1,5 @@
-import asyncio
 import logging
+from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
 from bot import config, memory, handler
 
@@ -30,7 +30,12 @@ def main() -> None:
     )
 
     logging.info("Bot starting...")
-    app.run_polling()
+    app.run_polling(
+        allowed_updates=[
+            Update.MESSAGE,
+            Update.EDITED_MESSAGE,
+        ]
+    )
 
 
 if __name__ == "__main__":
