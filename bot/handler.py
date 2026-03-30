@@ -181,7 +181,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 triggered_by_mention=True,
                 transcribed_text=transcribed,
                 detected_language=lang,
-                force_voice=True,
+                force_voice=False,
             )
         else:
             should = await decider.should_respond_spontaneously(
@@ -196,7 +196,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     triggered_by_mention=False,
                     transcribed_text=transcribed,
                     detected_language=lang,
-                    force_voice=True,
+                    force_voice=False,
                 )
     else:
         await _reply(
@@ -204,7 +204,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             triggered_by_mention=True,
             transcribed_text=transcribed,
             detected_language=lang,
-            force_voice=True,
+            force_voice=False,
         )
 
 
