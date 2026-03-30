@@ -1,5 +1,6 @@
-import io
 import logging
+import os
+import tempfile
 import wave
 from fastapi import FastAPI
 from fastapi.responses import Response
@@ -37,12 +38,19 @@ def synthesize(req: TTSRequest) -> Response:
     lang = req.language if req.language in VOICES else "de"
     voice = VOICES[lang]
 
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(voice.config.sample_rate)
-        voice.synthesize(req.text, wav_file)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
 
-    buf.seek(0)
-    return Response(content=buf.read(), media_type="audio/wav")
+    try:
+        with wave.open(tmp_path, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(voice.config.sample_rate)
+            voice.synthesize(req.text, wav_file)
+
+        with open(tmp_path, "rb") as f:
+            audio_bytes = f.read()
+    finally:
+        os.unlink(tmp_path)
+
+    return Response(content=audio_bytes, media_type="audio/wav")
