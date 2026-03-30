@@ -1,7 +1,6 @@
 import io
 import logging
 import wave
-import struct
 from fastapi import FastAPI
 from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
@@ -40,11 +39,7 @@ def synthesize(req: TTSRequest) -> Response:
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(voice.config.sample_rate)
-        for audio_bytes in voice.synthesize_stream_raw(req.text):
-            wav_file.writeframes(audio_bytes)
+        voice.synthesize(req.text, wav_file)
 
     buf.seek(0)
     return Response(content=buf.read(), media_type="audio/wav")
