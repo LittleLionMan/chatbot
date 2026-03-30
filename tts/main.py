@@ -2,7 +2,7 @@ import io
 import logging
 import wave
 from fastapi import FastAPI
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 from piper.voice import PiperVoice
 
@@ -39,6 +39,9 @@ def synthesize(req: TTSRequest) -> Response:
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(voice.config.sample_rate)
         voice.synthesize(req.text, wav_file)
 
     buf.seek(0)
