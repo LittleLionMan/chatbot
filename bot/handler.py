@@ -134,6 +134,7 @@ async def _reply(
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info("handle_voice triggered")
     pool: asyncpg.Pool = context.bot_data["pool"]
     message = update.effective_message
     chat = update.effective_chat
@@ -141,15 +142,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not message or not message.voice:
         return
 
+    bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
-    is_reply_to_bot = (
-        message.reply_to_message is not None
-        and message.reply_to_message.from_user is not None
-        and message.reply_to_message.from_user.id == context.bot.id
-    )
-
-    if is_group and not is_reply_to_bot:
-        return
 
     if ratelimit.is_rate_limited():
         await message.reply_text(ratelimit.rate_limit_message())
@@ -165,16 +159,53 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     if not transcribed.strip():
-        await message.reply_text("Habe nichts verstanden.")
+        logger.info("STT returned empty transcript")
         return
 
-    await _reply(
-        update, pool,
-        triggered_by_mention=True,
-        transcribed_text=transcribed,
-        detected_language=lang,
-        force_voice=True,
+    logger.info("STT transcript: %s (lang: %s)", transcribed, lang)
+
+    is_mention = (
+        (bot_username and f"@{bot_username}".lower() in transcribed.lower())
+        or config.BOT_NAME.lower() in transcribed.lower()
     )
+    is_reply_to_bot = (
+        message.reply_to_message is not None
+        and message.reply_to_message.from_user is not None
+        and message.reply_to_message.from_user.id == context.bot.id
+    )
+
+    if is_group:
+        if is_mention or is_reply_to_bot:
+            await _reply(
+                update, pool,
+                triggered_by_mention=True,
+                transcribed_text=transcribed,
+                detected_language=lang,
+                force_voice=True,
+            )
+        else:
+            should = await decider.should_respond_spontaneously(
+                pool=pool,
+                group_id=chat.id,
+                message_text=transcribed,
+                bot_character=config.BOT_CHARACTER,
+            )
+            if should:
+                await _reply(
+                    update, pool,
+                    triggered_by_mention=False,
+                    transcribed_text=transcribed,
+                    detected_language=lang,
+                    force_voice=True,
+                )
+    else:
+        await _reply(
+            update, pool,
+            triggered_by_mention=True,
+            transcribed_text=transcribed,
+            detected_language=lang,
+            force_voice=True,
+        )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -193,7 +224,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text(greeter.introduction_text())
         return
 
-    is_mention = (bot_username and f"@{bot_username}".lower() in text.lower()) or config.BOT_NAME.lower() in text.lower()
+    is_mention = (
+        (bot_username and f"@{bot_username}".lower() in text.lower())
+        or config.BOT_NAME.lower() in text.lower()
+    )
     is_reply_to_bot = (
         message.reply_to_message is not None
         and message.reply_to_message.from_user is not None
