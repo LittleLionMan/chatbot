@@ -1,16 +1,11 @@
+
 FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --no-cache-dir \
-    faster-whisper>=1.0.0 \
-    fastapi>=0.110.0 \
-    uvicorn>=0.29.0 \
-    python-multipart>=0.0.9
-
 WORKDIR /app
-COPY main.py .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY bot/ ./bot/
+
+CMD ["python", "-m", "bot.main"]
