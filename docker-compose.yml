@@ -15,6 +15,32 @@ services:
       timeout: 5s
       retries: 10
 
+  stt:
+    build: ./stt
+    restart: unless-stopped
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+    volumes:
+      - whisper_models:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+
+  tts:
+    build: ./tts
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
   bot:
     build: .
     restart: unless-stopped
@@ -22,6 +48,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      stt:
+        condition: service_healthy
+      tts:
+        condition: service_healthy
 
 volumes:
   postgres_data:
+  whisper_models:

@@ -23,6 +23,9 @@ def main() -> None:
     )
 
     app.add_handler(
+        MessageHandler(filters.VOICE, handler.handle_voice)
+    )
+    app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_message)
     )
 

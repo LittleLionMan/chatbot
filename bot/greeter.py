@@ -30,10 +30,10 @@ def introduction_text() -> str:
     return (
         f"Hey. Ich bin {name} und laufe auf {model} vom Provider {provider}.\n\n"
         f"Kurz was ich kann:\n"
-        f"— Antworte immer wenn ihr mich direkt taggt (@{tag}) oder auf eine meiner Nachrichten antwortet.\n"
+        f"— Antworte wenn ihr mich mit meinem Namen ({name}) oder per Tag (@{tag}) ansprecht, oder auf eine meiner Nachrichten antwortet.\n"
         f"— Melde mich manchmal ungefragt zu Wort, wenn mir etwas auffällt — aber nicht übermäßig.\n"
         f"— Merke mir Dinge über euch: entweder ihr sagt explizit \"merk dir: ...\" oder ich schnapp's mir selbst aus dem Gespräch.\n"
-        f"— Ich kenne auch meinen eigenen Kontext hier: was ihr mir über mich gesagt habt, lande ich in meinem Gedächtnis.\n\n"
+        f"— Ich kenne auch meinen eigenen Kontext hier: was ihr mir über mich gesagt habt, landet in meinem Gedächtnis.\n\n"
         f"Nützliche Kommandos:\n"
         f"— \"was weißt du über mich\" → zeigt was ich über dich gespeichert habe\n"
         f"— \"was weißt du über die gruppe\" → zeigt was ich über diese Gruppe weiß\n\n"
