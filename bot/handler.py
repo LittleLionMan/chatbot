@@ -102,7 +102,7 @@ async def _reply(
     llm_messages.append({"role": "user", "content": user_turn})
 
     try:
-        response = await brain.chat(system=system, messages=llm_messages)
+        response = await brain.chat(system=system, messages=llm_messages, use_web_search=True)
     except anthropic.RateLimitError:
         if triggered_by_mention:
             await message.reply_text(ratelimit.rate_limit_message())
