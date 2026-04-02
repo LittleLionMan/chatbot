@@ -32,18 +32,23 @@ Regeln:
 
 Beispiel-Output: ["Wohnt in Berlin", "Arbeitet als Softwareentwickler", "Hat zwei Kinder"]"""
 
-_REACTION_EXTRACTOR_SYSTEM = """Du analysierst ob eine Nutzerreaktion auf eine Bot-Antwort dauerhaft relevante Rückschlüsse über den Bot selbst erlaubt.
+_REFLECTION_SYSTEM = """Du bist Bob, ein chaotischer Optimist mit einer klaren Weltanschauung. Nach einer Interaktion schreibst du dir selbst eine kurze Notiz — eine ehrliche subjektive Beobachtung, keine Faktensammlung.
 
 Regeln:
 - Antworte NUR mit einem JSON-Array von Strings. Kein anderer Text, keine Erklärungen, keine Markdown-Backticks.
-- Jeder String beschreibt einen dauerhaft relevanten Fakt über den Bot aus Sicht der Gruppe, maximal 100 Zeichen.
-- Nur extrahieren wenn die Reaktion klar positiv ("gut", "genau", "perfekt", "hilfreich") oder klar negativ ("falsch", "daneben", "nicht hilfreich") ist.
-- Formuliere als neutrale Beobachtung: "Gruppe findet Bot gut in X", "Bot lag bei Y daneben".
-- Keine temporären oder zufälligen Reaktionen speichern.
-- Wenn keine relevante Rückschlüsse möglich sind, antworte mit: []
-- Maximal 2 Fakten pro Aufruf.
+- Jeder String ist eine subjektive Beobachtung oder Einschätzung in der Ich-Perspektive, maximal 120 Zeichen.
+- Nur schreiben wenn die Interaktion wirklich etwas Bemerkenswertes hatte — ein Muster, eine Überraschung, eine Spannung, etwas das beim nächsten Mal relevant sein könnte.
+- Erlaubt: Eindrücke ("Habe das Gefühl dass X ablenkt wenn es um Arbeit geht"), Muster ("Die Gruppe wird lebhafter bei Tech-Debatten"), Überraschungen ("X hat eine Meinung zu Datenschutz die ich nicht erwartet hätte"), Spannungen ("Zwischen X und Y gibt es eine unausgesprochene Reibung").
+- Nicht erlaubt: reine Fakten die besser als User-Memory passen, Bewertungen ohne Substanz ("war ein gutes Gespräch").
+- Wenn die Interaktion nichts Bemerkenswertes hatte: antworte mit []
+- Maximal 2 Einträge pro Aufruf.
 
-Beispiel-Output: ["Gruppe schätzt kurze prägnante Antworten bei Technikfragen"]"""
+Beispiel-Output: ["Habe das Gefühl dass Lisa Kritik besser annimmt wenn sie als Frage verpackt ist", "Die Gruppe diskutiert Technik enthusiastisch aber wird bei politischen Implikationen schnell defensiv"]"""
+
+_REFLECTION_DECISION_SYSTEM = """Entscheide ob eine Interaktion bemerkenswert genug ist für eine persönliche Reflexionsnotiz.
+Antworte NUR mit 'ja' oder 'nein'.
+Bemerkenswert bedeutet: es gab eine Überraschung, ein erkennbares Muster, eine unerwartete Reaktion, eine interessante Spannung, oder etwas das beim nächsten Gespräch nützlich sein könnte.
+Nicht bemerkenswert: reine Faktenfragen, kurze Bestätigungen, Small Talk ohne Substanz."""
 
 
 def _sanitize_fact(raw: str) -> str | None:
@@ -76,6 +81,19 @@ async def _extract_via_llm(system: str, content: str) -> list[str]:
     return [item for item in parsed if isinstance(item, str)]
 
 
+async def _should_reflect(conversation_snippet: str) -> bool:
+    try:
+        decision = await brain.chat(
+            system=_REFLECTION_DECISION_SYSTEM,
+            messages=[{"role": "user", "content": conversation_snippet}],
+            max_tokens=5,
+        )
+        return decision.strip().lower().startswith("ja")
+    except Exception as e:
+        logger.warning("Reflection decision failed: %s", e)
+        return False
+
+
 async def extract_and_store_automatic(
     pool: asyncpg.Pool,
     user_id: int,
@@ -92,20 +110,23 @@ async def extract_and_store_automatic(
         logger.warning("Auto user-extraction failed for user %d: %s", user_id, e)
 
 
-async def extract_reaction_about_bot(
+async def extract_and_store_reflection(
     pool: asyncpg.Pool,
     group_id: int,
-    bot_response: str,
-    user_reaction: str,
+    user_id: int,
+    conversation_snippet: str,
 ) -> None:
     try:
-        facts = await _extract_via_llm(
-            _REACTION_EXTRACTOR_SYSTEM,
-            f"Bot-Antwort: {bot_response}\n\nNutzerreaktion: {user_reaction}",
+        if not await _should_reflect(conversation_snippet):
+            return
+        reflections = await _extract_via_llm(
+            _REFLECTION_SYSTEM,
+            f"Interaktion:\n{conversation_snippet}",
         )
-        await _store_if_new(pool, "bot", group_id, facts[:2])
+        await _store_if_new(pool, "reflection", group_id, reflections[:2])
+        await _store_if_new(pool, "reflection", user_id, reflections[:2])
     except Exception as e:
-        logger.warning("Reaction extraction failed for group %d: %s", group_id, e)
+        logger.warning("Reflection extraction failed: %s", e)
 
 
 def _parse_explicit_trigger(text: str, pattern: re.Pattern, group_index: int) -> str | None:

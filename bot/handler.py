@@ -89,9 +89,17 @@ async def _reply(
     user_memories = await memory.get_memories(pool, "user", user.id)
     group_memories = await memory.get_memories(pool, "group", chat.id) if is_group else []
     bot_memories = await memory.get_memories(pool, "bot", chat.id) if is_group else []
+    reflection_memories = await memory.get_reflection_memories(pool, chat.id, user.id)
     history = await memory.get_recent_messages(pool, chat.id)
 
-    system = brain.build_system_prompt(user_memories, group_memories, bot_memories, display, group_title)
+    system = brain.build_system_prompt(
+        user_memories,
+        group_memories,
+        bot_memories,
+        reflection_memories,
+        display,
+        group_title,
+    )
     llm_messages = brain.history_to_llm_messages(history)
 
     if is_group and not triggered_by_mention:
@@ -124,13 +132,9 @@ async def _reply(
     asyncio.create_task(
         extractor.extract_and_store_automatic(pool, user.id, display, snippet)
     )
-
-    if is_group and triggered_by_mention:
-        prev_bot = _last_bot_response(history)
-        if prev_bot:
-            asyncio.create_task(
-                extractor.extract_reaction_about_bot(pool, chat.id, prev_bot, text)
-            )
+    asyncio.create_task(
+        extractor.extract_and_store_reflection(pool, chat.id, user.id, snippet)
+    )
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -188,7 +192,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 pool=pool,
                 group_id=chat.id,
                 message_text=transcribed,
-                bot_character=config.BOT_CHARACTER,
             )
             if should:
                 await _reply(
@@ -247,7 +250,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pool=pool,
                 group_id=chat.id,
                 message_text=text,
-                bot_character=config.BOT_CHARACTER,
             )
             if should:
                 await _reply(update, pool, triggered_by_mention=False)

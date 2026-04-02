@@ -80,12 +80,31 @@ async def get_memories(pool: asyncpg.Pool, subject_type: str, subject_id: int, l
     return [r["content"] for r in rows]
 
 
+async def get_reflection_memories(
+    pool: asyncpg.Pool,
+    group_id: int,
+    user_id: int,
+    limit: int = 8,
+) -> list[str]:
+    rows = await pool.fetch(
+        """
+        SELECT content FROM memories
+        WHERE subject_type = 'reflection'
+          AND subject_id IN ($1, $2)
+        ORDER BY created_at DESC
+        LIMIT $3
+        """,
+        group_id, user_id, limit,
+    )
+    return [r["content"] for r in rows]
+
+
 async def get_cooldown_seconds_since_last_spontaneous(pool: asyncpg.Pool, group_id: int) -> float:
     row = await pool.fetchrow(
         "SELECT last_spontaneous_at FROM group_cooldowns WHERE group_id = $1",
         group_id,
     )
-    if not row:
+    if not row or row["last_spontaneous_at"] is None:
         return float("inf")
     delta = datetime.utcnow() - row["last_spontaneous_at"].replace(tzinfo=None)
     return delta.total_seconds()
