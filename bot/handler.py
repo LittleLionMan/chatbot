@@ -5,6 +5,7 @@ import asyncpg
 from telegram import Update
 from telegram.ext import ContextTypes
 from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +75,6 @@ async def _reply(
     text = transcribed_text if transcribed_text is not None else (message.text or "").strip()
     if not text:
         return
-
 
     display = _display_name(user)
 

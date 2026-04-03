@@ -4,10 +4,9 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
-from bot import brain, memory
 import asyncpg
-
-logger = logging.getLogger(__name__)
+from bot import brain, config, memory
+from bot.utils import clean_llm_json
 
 _TASK_PARSER_SYSTEM = """Du extrahierst einen wiederkehrenden Auftrag aus einer Nutzeranfrage.
 
@@ -77,7 +76,7 @@ async def parse_task(
             messages=[{"role": "user", "content": text}],
             max_tokens=256,
         )
-        parsed = json.loads(raw.strip())
+        parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):
             return None
 
@@ -137,7 +136,7 @@ async def parse_stop_request(
             }],
             max_tokens=64,
         )
-        parsed = json.loads(raw.strip())
+        parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):
             return []
         return [item for item in parsed if isinstance(item, int)]
@@ -147,7 +146,6 @@ async def parse_stop_request(
 
 
 def next_run_after(schedule: str, timezone: str) -> datetime:
-    from bot import config
     try:
         tz = ZoneInfo(timezone)
     except ZoneInfoNotFoundError:

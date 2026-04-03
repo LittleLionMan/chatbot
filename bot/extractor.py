@@ -4,6 +4,7 @@ import logging
 import re
 import asyncpg
 from bot import brain, memory
+from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ async def _store_if_new(pool: asyncpg.Pool, subject_type: str, subject_id: int, 
 
 async def _extract_via_llm(system: str, content: str) -> list[str]:
     raw = await brain.chat(system=system, messages=[{"role": "user", "content": content}], max_tokens=256)
-    parsed = json.loads(raw.strip())
+    parsed = json.loads(clean_llm_json(raw))
     if not isinstance(parsed, list):
         return []
     return [item for item in parsed if isinstance(item, str)]

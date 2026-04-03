@@ -1,9 +1,11 @@
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import asyncpg
 import telegram
-from bot import config, memory, brain, extractor, decider
+from bot import config, memory, brain, extractor, decider, task_runner
+from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +61,12 @@ async def _extract_reflections_for_session(
     snippet: str,
 ) -> list[str]:
     try:
-        import json
-        from bot.extractor import _REFLECTION_SYSTEM, _sanitize_fact
         raw = await brain.chat(
-            system=_REFLECTION_SYSTEM,
+            system=extractor._REFLECTION_SYSTEM,
             messages=[{"role": "user", "content": f"Interaktion:\n{snippet}"}],
             max_tokens=512,
         )
-        parsed = json.loads(raw.strip())
+        parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):
             return []
         facts = [item for item in parsed if isinstance(item, str)]
@@ -75,7 +75,7 @@ async def _extract_reflections_for_session(
         existing_lower = {e.lower() for e in existing}
         stored = []
         for fact in facts[:3]:
-            sanitized = _sanitize_fact(fact)
+            sanitized = extractor._sanitize_fact(fact)
             if sanitized is None or sanitized.lower() in existing_lower:
                 continue
             await memory.add_memory(pool, "reflection", group_id, sanitized)
@@ -134,7 +134,6 @@ async def _maybe_send_proactive(
 
 
 async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
-    from bot import task_runner
     logger.info("Scheduler started. Interval: %ds, Session timeout: %ds",
                 config.BOT_SCHEDULER_INTERVAL_SECONDS, config.BOT_SESSION_TIMEOUT_SECONDS)
     while True:
