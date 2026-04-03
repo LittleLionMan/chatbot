@@ -116,23 +116,33 @@ async def _binary(system: str, text: str) -> bool:
 
 
 async def is_agent_creation(text: str) -> bool:
-    return await _binary(_CREATE_TRIGGER_SYSTEM, text)
+    result = await _binary(_CREATE_TRIGGER_SYSTEM, text)
+    logger.warning("is_agent_creation(%r) -> %s", text[:50], result)
+    return result
 
 
 async def is_agent_stop_request(text: str) -> bool:
-    return await _binary(_STOP_TRIGGER_SYSTEM, text)
+    result = await _binary(_STOP_TRIGGER_SYSTEM, text)
+    logger.warning("is_agent_stop_request(%r) -> %s", text[:50], result)
+    return result
 
 
 async def is_agent_list_request(text: str) -> bool:
-    return await _binary(_LIST_TRIGGER_SYSTEM, text)
+    result = await _binary(_LIST_TRIGGER_SYSTEM, text)
+    logger.warning("is_agent_list_request(%r) -> %s", text[:50], result)
+    return result
 
 
 async def is_agent_rename_request(text: str) -> bool:
-    return await _binary(_RENAME_TRIGGER_SYSTEM, text)
+    result = await _binary(_RENAME_TRIGGER_SYSTEM, text)
+    logger.warning("is_agent_rename_request(%r) -> %s", text[:50], result)
+    return result
 
 
 async def is_agent_talk(text: str) -> bool:
-    return await _binary(_TALK_TRIGGER_SYSTEM, text)
+    result = await _binary(_TALK_TRIGGER_SYSTEM, text)
+    logger.warning("is_agent_talk(%r) -> %s", text[:50], result)
+    return result
 
 
 async def resolve_agent_by_text(
