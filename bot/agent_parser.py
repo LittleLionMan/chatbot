@@ -70,10 +70,12 @@ _RENAME_TRIGGER_SYSTEM = """Entscheide ob der Nutzer einen Agenten umbenennen m�
 Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
 Beispiele: "Nenn Linus jetzt Max" → ja, "Benenne den GPU-Agenten um in Torsten" → ja, "Stopp Linus" → nein."""
 
-_TALK_TRIGGER_SYSTEM = """Entscheide ob der Nutzer mit einem bestimmten Agenten sprechen oder ihn direkt ansprechen möchte.
-Das umfasst: nach dem Status fragen, Konfiguration ändern, bisherige Ergebnisse abfragen, oder den Agenten direkt beim Namen ansprechen.
+_TALK_TRIGGER_SYSTEM = """Entscheide ob der Nutzer mit einem bereits existierenden, namentlich bekannten Agenten spricht oder nach ihm fragt.
 Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Beispiele: "Wie läuft Linus?" → ja, "Argus, konzentriere dich nur auf den nginx Container" → ja, "Was hat Gordon bisher beobachtet?" → ja, "Zeig meine Agenten" → nein, "Stopp Linus" → nein."""
+Voraussetzung für 'ja': Der Nutzer nennt einen konkreten Agenten-Namen oder referenziert eindeutig einen laufenden Agenten ("dein Agent", "der GPU-Agent").
+Kein Talk wenn: Der Nutzer eine neue Aufgabe oder Beobachtung beschreibt ohne einen bestehenden Agenten zu nennen.
+Beispiele: "Wie läuft Linus?" → ja, "Linus, konzentriere dich auf RTX 4090" → ja, "Was hat Gordon bisher beobachtet?" → ja, "Wie läuft dein GPU-Agent?" → ja.
+Beispiele für nein: "Beobachte täglich den Markt nach GPUs" → nein, "Überwache meine Docker Container" → nein, "Verfolge Bitcoin und melde Trendwechsel" → nein."""
 
 _NAME_RESOLUTION_SYSTEM = """Identifiziere welcher Agent aus der Liste gemeint ist.
 Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.

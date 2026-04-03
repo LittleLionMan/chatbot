@@ -93,6 +93,7 @@ def build_system_prompt(
     memories_reflection: list[str],
     user_display_name: str,
     group_title: str | None,
+    active_agents: list[dict] | None = None,
 ) -> str:
     parts = [SOUL]
 
@@ -111,6 +112,13 @@ def build_system_prompt(
     if memories_reflection:
         joined = "\n- ".join(memories_reflection)
         parts.append(f"\n## Deine eigenen Beobachtungen aus früheren Gesprächen\n- {joined}")
+
+    if active_agents:
+        lines = "\n".join(
+            f"- {a['name']}: {a['config'].get('instruction', '')[:100]}"
+            for a in active_agents
+        )
+        parts.append(f"\n## Deine laufenden Agenten\nDu hast aktive Agenten die im Hintergrund laufen. Wenn ein Gesprächsthema zu einem Agenten passt, kannst du das beiläufig erwähnen — aber nur wenn es natürlich wirkt, nicht als Pflichthinweis.\n{lines}")
 
     parts.append(_BEHAVIOR_RULES)
 

@@ -96,20 +96,17 @@ async def _reply(
             await message.reply_text("Deine aktiven Agenten:\n" + "\n".join(lines))
         return
 
-    if await agent_parser.is_agent_stop_request(text):
+    if active_agents and await agent_parser.is_agent_stop_request(text):
         target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
         if target_agent:
             await memory.deactivate_agent(pool, target_agent["id"])
             await message.reply_text(f"{target_agent['name']} wurde gestoppt.")
         else:
-            if active_agents:
-                names = ", ".join(a["name"] for a in active_agents)
-                await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
-            else:
-                await message.reply_text("Du hast keine aktiven Agenten.")
+            names = ", ".join(a["name"] for a in active_agents)
+            await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
         return
 
-    if await agent_parser.is_agent_rename_request(text):
+    if active_agents and await agent_parser.is_agent_rename_request(text):
         target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
         new_name = await agent_parser.parse_rename_request(text)
         if target_agent and new_name:
@@ -120,7 +117,7 @@ async def _reply(
             await message.reply_text("Ich konnte den Agenten oder den neuen Namen nicht eindeutig erkennen.")
         return
 
-    if await agent_parser.is_agent_talk(text):
+    if active_agents and await agent_parser.is_agent_talk(text):
         target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
         if target_agent:
             state = await memory.get_agent_state(pool, target_agent["id"])
@@ -130,11 +127,8 @@ async def _reply(
                 await memory.update_agent_config(pool, target_agent["id"], new_config)
             await message.reply_text(response)
         else:
-            if active_agents:
-                names = ", ".join(a["name"] for a in active_agents)
-                await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
-            else:
-                await message.reply_text("Du hast keine aktiven Agenten.")
+            names = ", ".join(a["name"] for a in active_agents)
+            await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
         return
 
     if await agent_parser.is_agent_creation(text):
@@ -236,6 +230,7 @@ async def _reply(
         reflection_memories,
         display,
         group_title,
+        active_agents=active_agents,
     )
     llm_messages = brain.history_to_llm_messages(history)
 
