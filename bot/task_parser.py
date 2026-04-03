@@ -14,7 +14,7 @@ _TASK_PARSER_SYSTEM = """Du extrahierst einen wiederkehrenden Auftrag aus einer 
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
 Felder:
-- "description": Was soll getan werden? Klarer Aufgabentext in einem Satz, maximal 1000 Zeichen.
+- "description": Was soll getan werden? Klarer Aufgabentext in einem Satz, maximal 200 Zeichen.
 - "schedule": Wann und wie oft? Als Cron-Expression (5 Felder: Minute Stunde Tag Monat Wochentag). Beispiele: täglich um 9 Uhr = "0 9 * * *", stündlich = "0 * * * *", montags um 8 = "0 8 * * 1".
 - "target": "same" wenn das Ergebnis in denselben Chat soll, "dm" wenn es als Privatnachricht an den User gehen soll.
 
@@ -100,7 +100,10 @@ async def parse_task(
 
         now = datetime.now(tz)
         cron = croniter(schedule, now)
-        next_run = cron.get_next(datetime)
+        next_run_utc = cron.get_next(datetime)
+        if next_run_utc.tzinfo is None:
+            next_run_utc = next_run_utc.replace(tzinfo=ZoneInfo("UTC"))
+        next_run_local = next_run_utc.astimezone(tz)
 
         target_chat_id = user_id if target == "dm" else source_chat_id
 
@@ -108,7 +111,7 @@ async def parse_task(
             "description": description,
             "schedule": schedule,
             "target_chat_id": target_chat_id,
-            "next_run_at": next_run,
+            "next_run_at": next_run_local,
         }
     except Exception as e:
         logger.warning("Task parsing failed: %s", e)
@@ -150,4 +153,7 @@ def next_run_after(schedule: str, timezone: str) -> datetime:
     except ZoneInfoNotFoundError:
         tz = ZoneInfo(config.BOT_DEFAULT_TIMEZONE)
     now = datetime.now(tz)
-    return croniter(schedule, now).get_next(datetime)
+    next_run_utc = croniter(schedule, now).get_next(datetime)
+    if next_run_utc.tzinfo is None:
+        next_run_utc = next_run_utc.replace(tzinfo=ZoneInfo("UTC"))
+    return next_run_utc.astimezone(tz)
