@@ -64,6 +64,9 @@ async def _reply(
     if not message or not user:
         return
 
+    logger.warning("_reply called: text=%r triggered_by_mention=%s",
+                   (message.text or "")[:60], triggered_by_mention)
+
     is_group = chat.type in ("group", "supergroup")
     group_title = chat.title if is_group else None
     group_id = chat.id if is_group else None
