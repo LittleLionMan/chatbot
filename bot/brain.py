@@ -3,6 +3,7 @@ import logging
 import anthropic
 from bot import config, ratelimit
 from bot.soul import SOUL
+from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ def build_system_prompt(
 
     if active_agents:
         lines = "\n".join(
-            f"- {a['name']}: {a['config'].get('instruction', '')[:100]}"
+            f"- {a['name']}: {parse_agent_config(a['config']).get('instruction', '')[:100]}"
             for a in active_agents
         )
         parts.append(f"\n## Deine laufenden Agenten\nDu hast aktive Agenten die im Hintergrund laufen. Wenn ein Gesprächsthema zu einem Agenten passt, kannst du das beiläufig erwähnen — aber nur wenn es natürlich wirkt, nicht als Pflichthinweis.\n{lines}")

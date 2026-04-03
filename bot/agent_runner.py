@@ -4,6 +4,7 @@ import asyncpg
 import telegram
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
+from bot.utils import parse_agent_config
 from bot.soul import SOUL
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ async def execute_agent(
     user_id: int = agent["user_id"]
     target_chat_id: int = agent["target_chat_id"]
     name: str = agent["name"]
-    config_data: dict = agent["config"] if isinstance(agent["config"], dict) else {}
+    config_data: dict = parse_agent_config(agent["config"])
     schedule: str = agent["schedule"]
 
     logger.info("Executing agent %d (%s) for user %d", agent_id, name, user_id)

@@ -5,6 +5,7 @@ import asyncpg
 from telegram import Update
 from telegram.ext import ContextTypes
 from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner
+from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ async def _reply(
         if not active_agents:
             await message.reply_text("Du hast keine aktiven Agenten.")
         else:
-            lines = [f"{a['name']} — {a['config'].get('instruction', '')[:60]}… ({a['schedule']})" for a in active_agents]
+            lines = [f"{a['name']} — {parse_agent_config(a['config']).get('instruction', '')[:60]}… ({a['schedule']})" for a in active_agents]
             await message.reply_text("Deine aktiven Agenten:\n" + "\n".join(lines))
         return
 

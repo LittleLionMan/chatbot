@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 import asyncpg
 from bot import brain, config, memory
-from bot.utils import clean_llm_json
+from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ async def resolve_agent_by_text(
     if not active_agents:
         return None
     agent_list = "\n".join(
-        f"ID {a['id']}: {a['name']} — {a['config'].get('instruction', '')[:80]}"
+        f"ID {a['id']}: {a['name']} — {parse_agent_config(a['config']).get('instruction', '')[:80]}"
         for a in active_agents
     )
     try:
@@ -259,7 +259,7 @@ async def handle_agent_talk(
     state: dict[str, str],
     agent_memories: list[str],
 ) -> tuple[str, dict | None]:
-    config_data = agent["config"] if isinstance(agent["config"], dict) else {}
+    config_data = parse_agent_config(agent["config"])
     state_summary = "\n".join(f"{k}: {v}" for k, v in state.items()) if state else "noch kein State"
     memories_summary = "\n- ".join(agent_memories) if agent_memories else "noch keine Beobachtungen"
 
