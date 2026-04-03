@@ -60,9 +60,11 @@ _STOP_TRIGGER_SYSTEM = """Entscheide ob der Nutzer einen laufenden Agenten stopp
 Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
 Beispiele: "Stopp Linus" → ja, "Deaktiviere den GPU-Agenten" → ja, "Argus soll aufhören" → ja, "Erstelle einen Agenten" → nein."""
 
-_LIST_TRIGGER_SYSTEM = """Entscheide ob der Nutzer seine aktiven Agenten auflisten möchte.
+_LIST_TRIGGER_SYSTEM = """Entscheide ob der Nutzer seine bereits existierenden Agenten auflisten möchte.
 Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Beispiele: "Zeig meine Agenten" → ja, "Welche Agenten laufen" → ja, "Was macht Linus" → nein, "Stopp Gordon" → nein."""
+Nur 'ja' wenn der Nutzer explizit nach einer Liste oder einem Überblick seiner laufenden Agenten fragt.
+Beispiele: "Zeig meine Agenten" → ja, "Welche Agenten laufen" → ja, "Was für Agenten habe ich" → ja.
+Beispiele für nein: "Was macht Linus" → nein, "Stopp Gordon" → nein, "Beobachte täglich den Markt" → nein, "Erstelle einen Agenten" → nein."""
 
 _RENAME_TRIGGER_SYSTEM = """Entscheide ob der Nutzer einen Agenten umbenennen möchte.
 Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
