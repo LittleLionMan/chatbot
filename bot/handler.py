@@ -92,6 +92,29 @@ async def _reply(
             await message.reply_text("Deine aktiven Aufgaben:\n" + "\n".join(lines))
         return
 
+    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+    if await task_parser.is_task_stop_request(text):
+        quoted_text = (
+            message.reply_to_message.text
+            if message.reply_to_message and message.reply_to_message.text
+            else None
+        )
+        stop_context = f"{text}\n\nZitierte Nachricht: {quoted_text}" if quoted_text else text
+        stop_ids = await task_parser.parse_stop_request(stop_context, active_tasks)
+        if stop_ids:
+            count = await memory.deactivate_tasks_by_description(pool, user.id, stop_ids)
+            await message.reply_text(f"{count} Aufgabe(n) gestoppt.")
+        else:
+            if active_tasks:
+                lines = [f"{t['id']}. {t['description']}" for t in active_tasks]
+                await message.reply_text(
+                    "Ich bin nicht sicher welche Aufgabe du meinst. Deine aktiven Aufgaben:\n"
+                    + "\n".join(lines)
+                )
+            else:
+                await message.reply_text("Du hast keine aktiven Aufgaben.")
+        return
+
     if await task_parser.is_task_creation(text):
         parsed = await task_parser.parse_task(text, user.id, chat.id, pool)
         if parsed:
@@ -108,17 +131,10 @@ async def _reply(
             await message.reply_text(
                 f"Aufgabe gespeichert{target_note}: {parsed['description']}\n"
                 f"Zeitplan: {parsed['schedule']}\n"
-                f"Nächste Ausführung: {parsed['next_run_at'].strftime('%d.%m.%Y %H:%M')}"
+                f"Nächste Ausführung: {parsed['next_run_display'].strftime('%d.%m.%Y %H:%M')}"
             )
         else:
             await message.reply_text("Ich konnte keinen gültigen Zeitplan erkennen. Versuch's nochmal konkreter.")
-        return
-
-    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
-    stop_ids = await task_parser.parse_stop_request(text, active_tasks)
-    if stop_ids:
-        count = await memory.deactivate_tasks_by_description(pool, user.id, stop_ids)
-        await message.reply_text(f"{count} Aufgabe(n) gestoppt.")
         return
 
     voice_request = await voice.parse_voice_request(text)

@@ -32,12 +32,28 @@ Kein anderer Text, keine Markdown-Backticks.
 
 Beispiel: [3, 7]"""
 
+_STOP_TRIGGER_SYSTEM = """Möchte der Nutzer eine oder mehrere wiederkehrende Aufgaben oder Tasks beenden, stoppen oder löschen?
+Antworte NUR mit 'ja' oder 'nein'."""
+
 _LIST_TRIGGER_SYSTEM = """Fragt der Nutzer nach seinen aktiven Aufgaben oder Tasks?
 Antworte NUR mit 'ja' oder 'nein'."""
 
 _CREATE_TRIGGER_SYSTEM = """Möchte der Nutzer eine neue wiederkehrende Aufgabe erstellen?
 Kriterien: Die Nachricht beschreibt etwas das regelmäßig oder zu einem bestimmten Zeitpunkt automatisch erledigt werden soll.
 Antworte NUR mit 'ja' oder 'nein'."""
+
+
+async def is_task_stop_request(text: str) -> bool:
+    try:
+        result = await brain.chat(
+            system=_STOP_TRIGGER_SYSTEM,
+            messages=[{"role": "user", "content": text}],
+            max_tokens=5,
+        )
+        return result.strip().lower().startswith("ja")
+    except Exception as e:
+        logger.warning("Task stop detection failed: %s", e)
+        return False
 
 
 async def is_task_creation(text: str) -> bool:
@@ -103,6 +119,7 @@ async def parse_task(
         now = datetime.now(tz)
         cron = croniter(schedule, now)
         next_run_local = cron.get_next(datetime)
+        next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
 
         target_chat_id = user_id if target == "dm" else source_chat_id
 
@@ -110,7 +127,8 @@ async def parse_task(
             "description": description,
             "schedule": schedule,
             "target_chat_id": target_chat_id,
-            "next_run_at": next_run_local,
+            "next_run_at": next_run_utc,
+            "next_run_display": next_run_local,
         }
     except Exception as e:
         logger.warning("Task parsing failed: %s", e)
@@ -151,4 +169,5 @@ def next_run_after(schedule: str, timezone: str) -> datetime:
     except ZoneInfoNotFoundError:
         tz = ZoneInfo(config.BOT_DEFAULT_TIMEZONE)
     now = datetime.now(tz)
-    return croniter(schedule, now).get_next(datetime)
+    next_run_local = croniter(schedule, now).get_next(datetime)
+    return next_run_local.astimezone(ZoneInfo("UTC"))
