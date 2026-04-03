@@ -8,6 +8,8 @@ import asyncpg
 from bot import brain, config, memory
 from bot.utils import clean_llm_json
 
+logger = logging.getLogger(__name__)
+
 _TASK_PARSER_SYSTEM = """Du extrahierst einen wiederkehrenden Auftrag aus einer Nutzeranfrage.
 
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
@@ -76,6 +78,7 @@ async def parse_task(
             messages=[{"role": "user", "content": text}],
             max_tokens=256,
         )
+        logger.warning("Task parser raw LLM output: %r", raw)
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):
             return None
