@@ -103,11 +103,8 @@ async def parse_task(
         now = datetime.now(tz)
         cron = croniter(schedule, now)
         next_run_naive = cron.get_next(datetime)
-        if next_run_naive.tzinfo is None:
-            next_run_aware = next_run_naive.replace(tzinfo=tz)
-        else:
-            next_run_aware = next_run_naive
-        next_run_local = next_run_aware.astimezone(tz)
+        next_run_utc = next_run_naive.replace(tzinfo=ZoneInfo("UTC"))
+        next_run_local = next_run_utc.astimezone(tz)
 
         target_chat_id = user_id if target == "dm" else source_chat_id
 
@@ -157,8 +154,5 @@ def next_run_after(schedule: str, timezone: str) -> datetime:
         tz = ZoneInfo(config.BOT_DEFAULT_TIMEZONE)
     now = datetime.now(tz)
     next_run_naive = croniter(schedule, now).get_next(datetime)
-    if next_run_naive.tzinfo is None:
-        next_run_aware = next_run_naive.replace(tzinfo=tz)
-    else:
-        next_run_aware = next_run_naive
-    return next_run_aware.astimezone(tz)
+    next_run_utc = next_run_naive.replace(tzinfo=ZoneInfo("UTC"))
+    return next_run_utc.astimezone(tz)

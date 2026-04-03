@@ -1,12 +1,23 @@
 import asyncio
 import logging
-from telegram.ext import ApplicationBuilder, MessageHandler, filters
+from telegram import Update
+from telegram.error import NetworkError, TimedOut
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from bot import config, memory, handler, scheduler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, (NetworkError, TimedOut)):
+        logger.debug("Transient network error (ignored): %s", context.error)
+        return
+    logger.error("Unhandled exception", exc_info=context.error)
 
 
 async def post_init(application) -> None:
@@ -25,12 +36,9 @@ def main() -> None:
         .build()
     )
 
-    app.add_handler(
-        MessageHandler(filters.VOICE, handler.handle_voice)
-    )
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_message)
-    )
+    app.add_error_handler(error_handler)
+    app.add_handler(MessageHandler(filters.VOICE, handler.handle_voice))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_message))
 
     logging.info("Bot starting...")
     app.run_polling()

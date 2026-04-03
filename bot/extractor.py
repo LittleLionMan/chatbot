@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import asyncpg
 from bot import brain, memory
 from bot.utils import clean_llm_json
@@ -15,6 +16,11 @@ _EXPLICIT_USER_TRIGGERS = re.compile(
 
 _EXPLICIT_BOT_TRIGGERS = re.compile(
     r"^(du bist|du kannst|du weißt|du hast|ihr seid|hier bist du|in dieser gruppe bist du)[:\s,]+(.+)$",
+    re.IGNORECASE,
+)
+
+_TIMEZONE_TRIGGER = re.compile(
+    r"^(meine zeitzone ist|my timezone is|zeitzone)[:\s]+(\S+)$",
     re.IGNORECASE,
 )
 
@@ -143,6 +149,16 @@ async def handle_explicit_memory(
     group_id: int | None,
     text: str,
 ) -> str | None:
+    tz_match = _TIMEZONE_TRIGGER.match(text.strip())
+    if tz_match is not None:
+        tz_str = tz_match.group(2).strip()
+        try:
+            ZoneInfo(tz_str)
+        except ZoneInfoNotFoundError:
+            return f"Unbekannte Zeitzone: {tz_str}. Gültige Beispiele: Europe/Berlin, UTC, America/New_York."
+        await memory.set_user_timezone(pool, user_id, tz_str)
+        return f"Zeitzone gesetzt: {tz_str}."
+
     user_fact = _parse_explicit_trigger(text, _EXPLICIT_USER_TRIGGERS, 3)
     if user_fact is not None:
         existing = await memory.get_memories(pool, "user", user_id, limit=50)

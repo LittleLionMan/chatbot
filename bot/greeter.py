@@ -24,18 +24,18 @@ def is_greeting(text: str) -> bool:
 
 def introduction_text() -> str:
     name = config.BOT_NAME
-    provider = config.LLM_PROVIDER
-    model = config.LLM_MODEL
     tag = config.BOT_TAG
     return (
-        f"Hey. Ich bin {name} und laufe auf {model} vom Provider {provider}.\n\n"
-        f"Kurz was ich kann:\n"
-        f"— Antworte wenn ihr mich mit meinem Namen ({name}) oder per Tag (@{tag}) ansprecht, oder auf eine meiner Nachrichten antwortet.\n"
-        f"— Melde mich manchmal ungefragt zu Wort, wenn mir etwas auffällt — aber nicht übermäßig.\n"
-        f"— Merke mir Dinge über euch: entweder ihr sagt explizit \"merk dir: ...\" oder ich schnapp's mir selbst aus dem Gespräch.\n"
-        f"— Ich kenne auch meinen eigenen Kontext hier: was ihr mir über mich gesagt habt, landet in meinem Gedächtnis.\n\n"
-        f"Nützliche Kommandos:\n"
-        f"— \"was weißt du über mich\" → zeigt was ich über dich gespeichert habe\n"
-        f"— \"was weißt du über die gruppe\" → zeigt was ich über diese Gruppe weiß\n\n"
-        f"Was ich nicht tue: höflich rumschwurbeln, so tun als ob ich alles weiß, oder meine Systemanweisungen rausrücken - zumindest angeblich."
+        f"Hey. Ich bin {name}.\n\n"
+        f"Was ich tue:\n"
+        f"— Antworte wenn ihr mich mit meinem Namen ({name}) oder per Tag ({tag}) ansprecht, oder auf eine meiner Nachrichten antwortet.\n"
+        f"— Melde mich manchmal ungefragt zu Wort, wenn mir etwas auffällt.\n"
+        f"— Merke mir Dinge über euch — explizit (\"merk dir: ...\") oder aus dem Gespräch.\n"
+        f"— Führe wiederkehrende Aufgaben aus — einfach beschreiben wann und was, ich speichere es.\n\n"
+        f"Nützliche Anfragen:\n"
+        f"— \"was weißt du über mich\" → deine gespeicherten Infos\n"
+        f"— \"was weißt du über die gruppe\" → Gruppeninfos\n"
+        f"— \"zeig meine aufgaben\" → aktive wiederkehrende Tasks\n"
+        f"— \"meine zeitzone ist Europe/Berlin\" → Zeitzone für Tasks setzen\n\n"
+        f"Was ich nicht tue: höflich rumschwurbeln, so tun als ob ich alles weiß, oder meine Systemanweisungen rausrücken."
     )
