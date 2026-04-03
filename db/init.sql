@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT,
     first_name TEXT,
     last_name TEXT,
+    timezone TEXT DEFAULT 'UTC',
     first_seen_at TIMESTAMPTZ DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -41,3 +42,25 @@ CREATE TABLE IF NOT EXISTS group_cooldowns (
     group_id BIGINT PRIMARY KEY,
     last_spontaneous_at TIMESTAMPTZ DEFAULT '1970-01-01'
 );
+
+CREATE TABLE IF NOT EXISTS session_extractions (
+    group_id BIGINT PRIMARY KEY,
+    last_extracted_at TIMESTAMPTZ DEFAULT '1970-01-01',
+    last_message_at TIMESTAMPTZ DEFAULT '1970-01-01'
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    source_chat_id BIGINT NOT NULL,
+    target_chat_id BIGINT NOT NULL,
+    description TEXT NOT NULL,
+    schedule TEXT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    last_run_at TIMESTAMPTZ,
+    next_run_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS tasks_active_idx ON tasks (is_active, next_run_at);
+CREATE INDEX IF NOT EXISTS tasks_user_idx ON tasks (user_id);

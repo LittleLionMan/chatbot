@@ -4,8 +4,7 @@ import anthropic
 import asyncpg
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice
-
+from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser
 logger = logging.getLogger(__name__)
 
 
@@ -76,11 +75,50 @@ async def _reply(
     if not text:
         return
 
+
     display = _display_name(user)
 
     explicit_reply = await extractor.handle_explicit_memory(pool, user.id, group_id, text)
     if explicit_reply is not None:
         await message.reply_text(explicit_reply)
+        return
+
+    if await task_parser.is_task_list_request(text):
+        active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+        if not active_tasks:
+            await message.reply_text("Du hast keine aktiven Aufgaben.")
+        else:
+            lines = [f"{t['id']}. {t['description']} — {t['schedule']}" for t in active_tasks]
+            await message.reply_text("Deine aktiven Aufgaben:\n" + "\n".join(lines))
+        return
+
+    if await task_parser.is_task_creation(text):
+        parsed = await task_parser.parse_task(text, user.id, chat.id, pool)
+        if parsed:
+            task_id = await memory.create_task(
+                pool,
+                user_id=user.id,
+                source_chat_id=chat.id,
+                target_chat_id=parsed["target_chat_id"],
+                description=parsed["description"],
+                schedule=parsed["schedule"],
+                next_run_at=parsed["next_run_at"],
+            )
+            target_note = " (per DM)" if parsed["target_chat_id"] == user.id else ""
+            await message.reply_text(
+                f"Aufgabe gespeichert{target_note}: {parsed['description']}\n"
+                f"Zeitplan: {parsed['schedule']}\n"
+                f"Nächste Ausführung: {parsed['next_run_at'].strftime('%d.%m.%Y %H:%M')}"
+            )
+        else:
+            await message.reply_text("Ich konnte keinen gültigen Zeitplan erkennen. Versuch's nochmal konkreter.")
+        return
+
+    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+    stop_ids = await task_parser.parse_stop_request(text, active_tasks)
+    if stop_ids:
+        count = await memory.deactivate_tasks_by_description(pool, user.id, stop_ids)
+        await message.reply_text(f"{count} Aufgabe(n) gestoppt.")
         return
 
     voice_request = await voice.parse_voice_request(text)
@@ -122,6 +160,9 @@ async def _reply(
 
     await memory.save_message(pool, chat.id, user.id, "user", user_turn)
     await memory.save_message(pool, chat.id, None, "assistant", response)
+
+    if is_group:
+        await memory.touch_session_message(pool, chat.id)
 
     if not triggered_by_mention and is_group:
         await memory.update_spontaneous_timestamp(pool, chat.id)

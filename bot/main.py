@@ -1,6 +1,7 @@
+import asyncio
 import logging
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
-from bot import config, memory, handler
+from bot import config, memory, handler, scheduler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -9,8 +10,11 @@ logging.basicConfig(
 
 
 async def post_init(application) -> None:
-    application.bot_data["pool"] = await memory.get_pool()
+    pool = await memory.get_pool()
+    application.bot_data["pool"] = pool
     logging.info("Database pool initialized.")
+    asyncio.create_task(scheduler.run(pool, application.bot))
+    logging.info("Scheduler started.")
 
 
 def main() -> None:

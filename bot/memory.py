@@ -28,6 +28,20 @@ async def upsert_user(pool: asyncpg.Pool, telegram_id: int, username: str | None
     )
 
 
+async def get_user_timezone(pool: asyncpg.Pool, user_id: int) -> str:
+    row = await pool.fetchrow("SELECT timezone FROM users WHERE telegram_id = $1", user_id)
+    if not row:
+        return "UTC"
+    return row["timezone"] or "UTC"
+
+
+async def set_user_timezone(pool: asyncpg.Pool, user_id: int, timezone: str) -> None:
+    await pool.execute(
+        "UPDATE users SET timezone = $1 WHERE telegram_id = $2",
+        timezone, user_id,
+    )
+
+
 async def upsert_group(pool: asyncpg.Pool, telegram_id: int, title: str | None) -> None:
     await pool.execute(
         """
@@ -99,6 +113,74 @@ async def get_reflection_memories(
     return [r["content"] for r in rows]
 
 
+async def get_all_group_ids(pool: asyncpg.Pool) -> list[int]:
+    rows = await pool.fetch("SELECT telegram_id FROM groups")
+    return [r["telegram_id"] for r in rows]
+
+
+async def touch_session_message(pool: asyncpg.Pool, group_id: int) -> None:
+    await pool.execute(
+        """
+        INSERT INTO session_extractions (group_id, last_extracted_at, last_message_at)
+        VALUES ($1, '1970-01-01', NOW())
+        ON CONFLICT (group_id) DO UPDATE SET last_message_at = NOW()
+        """,
+        group_id,
+    )
+
+
+async def get_sessions_due_for_extraction(
+    pool: asyncpg.Pool,
+    session_timeout_seconds: int,
+) -> list[int]:
+    rows = await pool.fetch(
+        """
+        SELECT group_id FROM session_extractions
+        WHERE last_message_at > last_extracted_at
+          AND EXTRACT(EPOCH FROM (NOW() - last_message_at)) > $1
+        """,
+        session_timeout_seconds,
+    )
+    return [r["group_id"] for r in rows]
+
+
+async def mark_session_extracted(pool: asyncpg.Pool, group_id: int) -> None:
+    await pool.execute(
+        """
+        UPDATE session_extractions SET last_extracted_at = NOW()
+        WHERE group_id = $1
+        """,
+        group_id,
+    )
+
+
+async def get_session_messages(
+    pool: asyncpg.Pool,
+    group_id: int,
+    since: datetime,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT role, content, user_id, created_at
+        FROM messages
+        WHERE chat_id = $1 AND created_at > $2
+        ORDER BY created_at ASC
+        """,
+        group_id, since,
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_last_extracted_at(pool: asyncpg.Pool, group_id: int) -> datetime:
+    row = await pool.fetchrow(
+        "SELECT last_extracted_at FROM session_extractions WHERE group_id = $1",
+        group_id,
+    )
+    if not row:
+        return datetime.min
+    return row["last_extracted_at"].replace(tzinfo=None)
+
+
 async def get_cooldown_seconds_since_last_spontaneous(pool: asyncpg.Pool, group_id: int) -> float:
     row = await pool.fetchrow(
         "SELECT last_spontaneous_at FROM group_cooldowns WHERE group_id = $1",
@@ -119,3 +201,76 @@ async def update_spontaneous_timestamp(pool: asyncpg.Pool, group_id: int) -> Non
         """,
         group_id,
     )
+
+
+async def create_task(
+    pool: asyncpg.Pool,
+    user_id: int,
+    source_chat_id: int,
+    target_chat_id: int,
+    description: str,
+    schedule: str,
+    next_run_at: datetime,
+) -> int:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO tasks (user_id, source_chat_id, target_chat_id, description, schedule, next_run_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id
+        """,
+        user_id, source_chat_id, target_chat_id, description, schedule, next_run_at,
+    )
+    return row["id"]
+
+
+async def get_active_tasks_for_user(pool: asyncpg.Pool, user_id: int) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, description, schedule, target_chat_id, next_run_at, last_run_at
+        FROM tasks
+        WHERE user_id = $1 AND is_active = TRUE
+        ORDER BY created_at ASC
+        """,
+        user_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_due_tasks(pool: asyncpg.Pool) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, user_id, source_chat_id, target_chat_id, description, schedule
+        FROM tasks
+        WHERE is_active = TRUE AND next_run_at <= NOW()
+        ORDER BY next_run_at ASC
+        """,
+    )
+    return [dict(r) for r in rows]
+
+
+async def update_task_run(pool: asyncpg.Pool, task_id: int, next_run_at: datetime) -> None:
+    await pool.execute(
+        """
+        UPDATE tasks SET last_run_at = NOW(), next_run_at = $1 WHERE id = $2
+        """,
+        next_run_at, task_id,
+    )
+
+
+async def deactivate_task(pool: asyncpg.Pool, task_id: int) -> None:
+    await pool.execute("UPDATE tasks SET is_active = FALSE WHERE id = $1", task_id)
+
+
+async def deactivate_tasks_by_description(
+    pool: asyncpg.Pool,
+    user_id: int,
+    task_ids: list[int],
+) -> int:
+    result = await pool.execute(
+        """
+        UPDATE tasks SET is_active = FALSE
+        WHERE user_id = $1 AND id = ANY($2::int[]) AND is_active = TRUE
+        """,
+        user_id, task_ids,
+    )
+    return int(result.split()[-1])
