@@ -4,7 +4,7 @@ import json
 import logging
 import asyncpg
 import telegram
-from bot import config, memory, brain, extractor, decider, task_runner
+from bot import config, memory, brain, extractor, decider, task_runner, agent_runner
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -155,3 +155,10 @@ async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
                 await task_runner.execute_task(pool, bot, task)
         except Exception as e:
             logger.error("Scheduler task cycle failed: %s", e)
+
+        try:
+            due_agents = await memory.get_due_agents(pool)
+            for agent in due_agents:
+                await agent_runner.execute_agent(pool, bot, agent)
+        except Exception as e:
+            logger.error("Scheduler agent cycle failed: %s", e)

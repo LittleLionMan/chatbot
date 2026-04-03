@@ -274,3 +274,120 @@ async def deactivate_tasks_by_description(
         user_id, task_ids,
     )
     return int(result.split()[-1])
+
+
+async def create_agent(
+    pool: asyncpg.Pool,
+    user_id: int,
+    target_chat_id: int,
+    name: str,
+    config_json: dict,
+    schedule: str,
+    next_run_at: datetime,
+) -> int:
+    import json
+    row = await pool.fetchrow(
+        """
+        INSERT INTO agents (user_id, target_chat_id, name, config, schedule, next_run_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id
+        """,
+        user_id, target_chat_id, name, json.dumps(config_json), schedule, next_run_at,
+    )
+    return row["id"]
+
+
+async def get_active_agents_for_user(pool: asyncpg.Pool, user_id: int) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, name, config, schedule, target_chat_id, next_run_at, last_run_at
+        FROM agents
+        WHERE user_id = $1 AND is_active = TRUE
+        ORDER BY created_at ASC
+        """,
+        user_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_due_agents(pool: asyncpg.Pool) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, user_id, target_chat_id, name, config, schedule
+        FROM agents
+        WHERE is_active = TRUE AND next_run_at <= NOW()
+        ORDER BY next_run_at ASC
+        """,
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_agent_by_name(pool: asyncpg.Pool, user_id: int, name: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT id, name, config, schedule, target_chat_id, next_run_at, last_run_at, is_active
+        FROM agents
+        WHERE user_id = $1 AND LOWER(name) = LOWER($2)
+        """,
+        user_id, name,
+    )
+    return dict(row) if row else None
+
+
+async def update_agent_run(pool: asyncpg.Pool, agent_id: int, next_run_at: datetime) -> None:
+    await pool.execute(
+        "UPDATE agents SET last_run_at = NOW(), next_run_at = $1 WHERE id = $2",
+        next_run_at, agent_id,
+    )
+
+
+async def deactivate_agent(pool: asyncpg.Pool, agent_id: int) -> None:
+    await pool.execute("UPDATE agents SET is_active = FALSE WHERE id = $1", agent_id)
+
+
+async def rename_agent(pool: asyncpg.Pool, agent_id: int, new_name: str) -> None:
+    await pool.execute("UPDATE agents SET name = $1 WHERE id = $2", new_name, agent_id)
+
+
+async def update_agent_config(pool: asyncpg.Pool, agent_id: int, config_json: dict) -> None:
+    import json
+    await pool.execute(
+        "UPDATE agents SET config = $1 WHERE id = $2",
+        json.dumps(config_json), agent_id,
+    )
+
+
+async def get_agent_state(pool: asyncpg.Pool, agent_id: int) -> dict[str, str]:
+    rows = await pool.fetch(
+        "SELECT key, value FROM agent_state WHERE agent_id = $1",
+        agent_id,
+    )
+    return {r["key"]: r["value"] for r in rows}
+
+
+async def set_agent_state(pool: asyncpg.Pool, agent_id: int, state: dict[str, str]) -> None:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for key, value in state.items():
+                await conn.execute(
+                    """
+                    INSERT INTO agent_state (agent_id, key, value, updated_at)
+                    VALUES ($1, $2, $3, NOW())
+                    ON CONFLICT (agent_id, key) DO UPDATE
+                    SET value = EXCLUDED.value, updated_at = NOW()
+                    """,
+                    agent_id, key, value,
+                )
+
+
+async def get_agent_memories(pool: asyncpg.Pool, agent_id: int, limit: int = 20) -> list[str]:
+    rows = await pool.fetch(
+        """
+        SELECT content FROM memories
+        WHERE subject_type = 'agent' AND subject_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        agent_id, limit,
+    )
+    return [r["content"] for r in rows]

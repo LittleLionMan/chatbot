@@ -64,3 +64,27 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS tasks_active_idx ON tasks (is_active, next_run_at);
 CREATE INDEX IF NOT EXISTS tasks_user_idx ON tasks (user_id);
+
+CREATE TABLE IF NOT EXISTS agents (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    target_chat_id BIGINT NOT NULL,
+    name TEXT NOT NULL,
+    config JSONB NOT NULL,
+    schedule TEXT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    last_run_at TIMESTAMPTZ,
+    next_run_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS agents_active_idx ON agents (is_active, next_run_at);
+CREATE INDEX IF NOT EXISTS agents_user_idx ON agents (user_id);
+
+CREATE TABLE IF NOT EXISTS agent_state (
+    agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (agent_id, key)
+);

@@ -4,7 +4,7 @@ import anthropic
 import asyncpg
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser
+from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,86 @@ async def _reply(
             )
         else:
             await message.reply_text("Ich konnte keinen gültigen Zeitplan erkennen. Versuch's nochmal konkreter.")
+        return
+
+    active_agents = await memory.get_active_agents_for_user(pool, user.id)
+
+    if await agent_parser.is_agent_list_request(text):
+        if not active_agents:
+            await message.reply_text("Du hast keine aktiven Agenten.")
+        else:
+            lines = [f"{a['name']} — {a['config'].get('topic', '')} ({a['schedule']})" for a in active_agents]
+            await message.reply_text("Deine aktiven Agenten:\n" + "\n".join(lines))
+        return
+
+    if await agent_parser.is_agent_stop_request(text):
+        target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
+        if target_agent:
+            await memory.deactivate_agent(pool, target_agent["id"])
+            await message.reply_text(f"{target_agent['name']} wurde gestoppt.")
+        else:
+            if active_agents:
+                names = ", ".join(a["name"] for a in active_agents)
+                await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
+            else:
+                await message.reply_text("Du hast keine aktiven Agenten.")
+        return
+
+    if await agent_parser.is_agent_rename_request(text):
+        target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
+        new_name = await agent_parser.parse_rename_request(text)
+        if target_agent and new_name:
+            old_name = target_agent["name"]
+            await memory.rename_agent(pool, target_agent["id"], new_name)
+            await message.reply_text(f"{old_name} heißt jetzt {new_name}.")
+        else:
+            await message.reply_text("Ich konnte den Agenten oder den neuen Namen nicht eindeutig erkennen.")
+        return
+
+    if await agent_parser.is_agent_talk(text):
+        target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
+        if target_agent:
+            state = await memory.get_agent_state(pool, target_agent["id"])
+            agent_memories = await memory.get_agent_memories(pool, target_agent["id"])
+            response, new_config = await agent_parser.handle_agent_talk(text, target_agent, state, agent_memories)
+            if new_config is not None:
+                await memory.update_agent_config(pool, target_agent["id"], new_config)
+            await message.reply_text(response)
+        else:
+            if active_agents:
+                names = ", ".join(a["name"] for a in active_agents)
+                await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
+            else:
+                await message.reply_text("Du hast keine aktiven Agenten.")
+        return
+
+    if await agent_parser.is_agent_creation(text):
+        parsed_agent = await agent_parser.parse_agent_creation(text, user.id, chat.id, pool)
+        if parsed_agent:
+            suggested = parsed_agent.get("suggested_name")
+            name = suggested if suggested else agent_parser._pick_name_for_topic(parsed_agent["config"]["type"])
+            agent_id = await memory.create_agent(
+                pool,
+                user_id=user.id,
+                target_chat_id=parsed_agent["target_chat_id"],
+                name=name,
+                config_json=parsed_agent["config"],
+                schedule=parsed_agent["schedule"],
+                next_run_at=parsed_agent["next_run_at"],
+            )
+            topic = parsed_agent["config"].get("topic", "")
+            next_display = parsed_agent["next_run_display"].strftime("%d.%m.%Y %H:%M")
+            if parsed_agent.get("wants_name") and not suggested:
+                await message.reply_text(
+                    f"Agent angelegt: {name} beobachtet '{topic}' ab {next_display}.\n"
+                    f"Soll er einen anderen Namen bekommen?"
+                )
+            else:
+                await message.reply_text(
+                    f"Agent angelegt: {name} beobachtet '{topic}' ab {next_display}."
+                )
+        else:
+            await message.reply_text("Ich konnte keinen sinnvollen Beobachtungsauftrag erkennen. Versuch's konkreter.")
         return
 
     voice_request = await voice.parse_voice_request(text)
