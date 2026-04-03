@@ -32,15 +32,17 @@ Kein anderer Text, keine Markdown-Backticks.
 
 Beispiel: [3, 7]"""
 
-_STOP_TRIGGER_SYSTEM = """Möchte der Nutzer eine oder mehrere wiederkehrende Aufgaben oder Tasks beenden, stoppen oder löschen?
-Antworte NUR mit 'ja' oder 'nein'."""
+_STOP_TRIGGER_SYSTEM = """Entscheide ob der Nutzer eine wiederkehrende Aufgabe beenden, stoppen oder löschen möchte.
+Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
+Beispiele: "Beende die Aufgabe" → ja, "Stopp den Task" → ja, "Lösch den piep-Job" → ja, "Erstelle eine Aufgabe" → nein."""
 
-_LIST_TRIGGER_SYSTEM = """Fragt der Nutzer nach seinen aktiven Aufgaben oder Tasks?
-Antworte NUR mit 'ja' oder 'nein'."""
+_LIST_TRIGGER_SYSTEM = """Entscheide ob der Nutzer seine aktiven Aufgaben oder Tasks sehen möchte.
+Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
+Beispiele: "Zeig meine Aufgaben" → ja, "Was läuft gerade" → ja, "Beende einen Task" → nein."""
 
-_CREATE_TRIGGER_SYSTEM = """Möchte der Nutzer eine neue wiederkehrende Aufgabe erstellen?
-Kriterien: Die Nachricht beschreibt etwas das regelmäßig oder zu einem bestimmten Zeitpunkt automatisch erledigt werden soll.
-Antworte NUR mit 'ja' oder 'nein'."""
+_CREATE_TRIGGER_SYSTEM = """Entscheide ob der Nutzer eine neue wiederkehrende Aufgabe erstellen möchte.
+Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
+Beispiele: "Such täglich nach GPU-Preisen" → ja, "Erinnere mich jeden Montag" → ja, "Beende die Aufgabe" → nein, "Zeig meine Tasks" → nein."""
 
 
 async def is_task_stop_request(text: str) -> bool:
