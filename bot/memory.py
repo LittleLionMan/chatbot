@@ -29,10 +29,11 @@ async def upsert_user(pool: asyncpg.Pool, telegram_id: int, username: str | None
 
 
 async def get_user_timezone(pool: asyncpg.Pool, user_id: int) -> str:
+    from bot import config
     row = await pool.fetchrow("SELECT timezone FROM users WHERE telegram_id = $1", user_id)
     if not row:
-        return "UTC"
-    return row["timezone"] or "UTC"
+        return config.BOT_DEFAULT_TIMEZONE
+    return row["timezone"] or config.BOT_DEFAULT_TIMEZONE
 
 
 async def set_user_timezone(pool: asyncpg.Pool, user_id: int, timezone: str) -> None:

@@ -144,9 +144,10 @@ async def parse_stop_request(
 
 
 def next_run_after(schedule: str, timezone: str) -> datetime:
+    from bot import config
     try:
         tz = ZoneInfo(timezone)
     except ZoneInfoNotFoundError:
-        tz = ZoneInfo("UTC")
+        tz = ZoneInfo(config.BOT_DEFAULT_TIMEZONE)
     now = datetime.now(tz)
     return croniter(schedule, now).get_next(datetime)
