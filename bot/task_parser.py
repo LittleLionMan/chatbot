@@ -41,8 +41,11 @@ Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen W
 Beispiele: "Zeig meine Aufgaben" → ja, "Was läuft gerade" → ja, "Beende einen Task" → nein."""
 
 _CREATE_TRIGGER_SYSTEM = """Entscheide ob der Nutzer eine neue wiederkehrende Aufgabe erstellen möchte.
+Eine Aufgabe ist stateless — jeder Lauf ist unabhängig vom vorherigen, kein Vergleich mit früheren Ergebnissen nötig.
 Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Beispiele: "Such täglich nach GPU-Preisen" → ja, "Erinnere mich jeden Montag" → ja, "Beende die Aufgabe" → nein, "Zeig meine Tasks" → nein."""
+Beispiele: "Such täglich nach GPU-Preisen" → ja, "Erinnere mich jeden Montag" → ja, "Schreib täglich um 9 piep" → ja, "Zeig mir täglich den Bitcoin-Kurs" → ja.
+Kein Task wenn der Auftrag explizit Vergleich mit früheren Ergebnissen oder Lernen über Zeit verlangt: "beobachte und melde Änderungen", "lerne was ein Schnäppchen ist", "melde wenn sich etwas ändert", "überwache".
+Beispiele für kein Task: "Beobachte GPU-Preise und lerne was günstig ist" → nein, "Überwache meine Docker Container und melde Ausfälle" → nein, "Verfolge Bitcoin und sag mir wenn der Trend kippt" → nein."""
 
 
 async def is_task_stop_request(text: str) -> bool:

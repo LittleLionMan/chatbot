@@ -86,67 +86,13 @@ async def _reply(
         await message.reply_text(explicit_reply)
         return
 
-    if await task_parser.is_task_list_request(text):
-        active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
-        if not active_tasks:
-            await message.reply_text("Du hast keine aktiven Aufgaben.")
-        else:
-            lines = [f"{t['id']}. {t['description']} — {t['schedule']}" for t in active_tasks]
-            await message.reply_text("Deine aktiven Aufgaben:\n" + "\n".join(lines))
-        return
-
-    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
-    if await task_parser.is_task_stop_request(text):
-        quoted_text = (
-            message.reply_to_message.text
-            if message.reply_to_message and message.reply_to_message.text
-            else None
-        )
-        stop_context = f"{text}\n\nZitierte Nachricht: {quoted_text}" if quoted_text else text
-        stop_ids = await task_parser.parse_stop_request(stop_context, active_tasks)
-        if stop_ids:
-            count = await memory.deactivate_tasks_by_description(pool, user.id, stop_ids)
-            await message.reply_text(f"{count} Aufgabe(n) gestoppt.")
-        else:
-            if active_tasks:
-                lines = [f"{t['id']}. {t['description']}" for t in active_tasks]
-                await message.reply_text(
-                    "Ich bin nicht sicher welche Aufgabe du meinst. Deine aktiven Aufgaben:\n"
-                    + "\n".join(lines)
-                )
-            else:
-                await message.reply_text("Du hast keine aktiven Aufgaben.")
-        return
-
-    if await task_parser.is_task_creation(text):
-        parsed = await task_parser.parse_task(text, user.id, chat.id, pool)
-        if parsed:
-            task_id = await memory.create_task(
-                pool,
-                user_id=user.id,
-                source_chat_id=chat.id,
-                target_chat_id=parsed["target_chat_id"],
-                description=parsed["description"],
-                schedule=parsed["schedule"],
-                next_run_at=parsed["next_run_at"],
-            )
-            target_note = " (per DM)" if parsed["target_chat_id"] == user.id else ""
-            await message.reply_text(
-                f"Aufgabe gespeichert{target_note}: {parsed['description']}\n"
-                f"Zeitplan: {parsed['schedule']}\n"
-                f"Nächste Ausführung: {parsed['next_run_display'].strftime('%d.%m.%Y %H:%M')}"
-            )
-        else:
-            await message.reply_text("Ich konnte keinen gültigen Zeitplan erkennen. Versuch's nochmal konkreter.")
-        return
-
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
 
     if await agent_parser.is_agent_list_request(text):
         if not active_agents:
             await message.reply_text("Du hast keine aktiven Agenten.")
         else:
-            lines = [f"{a['name']} — {a['config'].get('topic', '')} ({a['schedule']})" for a in active_agents]
+            lines = [f"{a['name']} — {a['config'].get('instruction', '')[:60]}… ({a['schedule']})" for a in active_agents]
             await message.reply_text("Deine aktiven Agenten:\n" + "\n".join(lines))
         return
 
@@ -196,7 +142,7 @@ async def _reply(
         if parsed_agent:
             suggested = parsed_agent.get("suggested_name")
             name = suggested if suggested else agent_parser._pick_name_for_topic(parsed_agent["config"]["type"])
-            agent_id = await memory.create_agent(
+            await memory.create_agent(
                 pool,
                 user_id=user.id,
                 target_chat_id=parsed_agent["target_chat_id"],
@@ -205,19 +151,73 @@ async def _reply(
                 schedule=parsed_agent["schedule"],
                 next_run_at=parsed_agent["next_run_at"],
             )
-            topic = parsed_agent["config"].get("topic", "")
+            instruction_preview = parsed_agent["config"].get("instruction", "")[:80]
             next_display = parsed_agent["next_run_display"].strftime("%d.%m.%Y %H:%M")
             if parsed_agent.get("wants_name") and not suggested:
                 await message.reply_text(
-                    f"Agent angelegt: {name} beobachtet '{topic}' ab {next_display}.\n"
+                    f"Agent angelegt: {name} — {instruction_preview}… — ab {next_display}.\n"
                     f"Soll er einen anderen Namen bekommen?"
                 )
             else:
                 await message.reply_text(
-                    f"Agent angelegt: {name} beobachtet '{topic}' ab {next_display}."
+                    f"Agent angelegt: {name} — {instruction_preview}… — ab {next_display}."
                 )
         else:
             await message.reply_text("Ich konnte keinen sinnvollen Beobachtungsauftrag erkennen. Versuch's konkreter.")
+        return
+
+    if await task_parser.is_task_list_request(text):
+        active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+        if not active_tasks:
+            await message.reply_text("Du hast keine aktiven Aufgaben.")
+        else:
+            lines = [f"{t['id']}. {t['description']} — {t['schedule']}" for t in active_tasks]
+            await message.reply_text("Deine aktiven Aufgaben:\n" + "\n".join(lines))
+        return
+
+    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+    if await task_parser.is_task_stop_request(text):
+        quoted_text = (
+            message.reply_to_message.text
+            if message.reply_to_message and message.reply_to_message.text
+            else None
+        )
+        stop_context = f"{text}\n\nZitierte Nachricht: {quoted_text}" if quoted_text else text
+        stop_ids = await task_parser.parse_stop_request(stop_context, active_tasks)
+        if stop_ids:
+            count = await memory.deactivate_tasks_by_description(pool, user.id, stop_ids)
+            await message.reply_text(f"{count} Aufgabe(n) gestoppt.")
+        else:
+            if active_tasks:
+                lines = [f"{t['id']}. {t['description']}" for t in active_tasks]
+                await message.reply_text(
+                    "Ich bin nicht sicher welche Aufgabe du meinst. Deine aktiven Aufgaben:\n"
+                    + "\n".join(lines)
+                )
+            else:
+                await message.reply_text("Du hast keine aktiven Aufgaben.")
+        return
+
+    if await task_parser.is_task_creation(text):
+        parsed = await task_parser.parse_task(text, user.id, chat.id, pool)
+        if parsed:
+            await memory.create_task(
+                pool,
+                user_id=user.id,
+                source_chat_id=chat.id,
+                target_chat_id=parsed["target_chat_id"],
+                description=parsed["description"],
+                schedule=parsed["schedule"],
+                next_run_at=parsed["next_run_at"],
+            )
+            target_note = " (per DM)" if parsed["target_chat_id"] == user.id else ""
+            await message.reply_text(
+                f"Aufgabe gespeichert{target_note}: {parsed['description']}\n"
+                f"Zeitplan: {parsed['schedule']}\n"
+                f"Nächste Ausführung: {parsed['next_run_display'].strftime('%d.%m.%Y %H:%M')}"
+            )
+        else:
+            await message.reply_text("Ich konnte keinen gültigen Zeitplan erkennen. Versuch's nochmal konkreter.")
         return
 
     voice_request = await voice.parse_voice_request(text)
