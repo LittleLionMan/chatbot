@@ -219,6 +219,10 @@ async def parse_agent_creation(
             "type": parsed.get("type", "default"),
         }
 
+        raw_suggested: str | None = parsed.get("suggested_name")
+        if raw_suggested and raw_suggested.strip().lower() == config.BOT_NAME.lower():
+            raw_suggested = None
+
         return {
             "config": agent_config,
             "schedule": schedule,
@@ -226,7 +230,7 @@ async def parse_agent_creation(
             "next_run_at": next_run_utc,
             "next_run_display": next_run_local,
             "wants_name": bool(parsed.get("wants_name", False)),
-            "suggested_name": parsed.get("suggested_name"),
+            "suggested_name": raw_suggested,
         }
     except Exception as e:
         logger.warning("Agent parsing failed: %s", e)

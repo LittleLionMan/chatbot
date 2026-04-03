@@ -147,15 +147,10 @@ async def _reply(
             )
             instruction_preview = parsed_agent["config"].get("instruction", "")[:80]
             next_display = parsed_agent["next_run_display"].strftime("%d.%m.%Y %H:%M")
-            if parsed_agent.get("wants_name") and not suggested:
-                await message.reply_text(
-                    f"Agent angelegt: {name} — {instruction_preview}… — ab {next_display}.\n"
-                    f"Soll er einen anderen Namen bekommen?"
-                )
-            else:
-                await message.reply_text(
-                    f"Agent angelegt: {name} — {instruction_preview}… — ab {next_display}."
-                )
+            await message.reply_text(
+                f"Agent angelegt: {name} — {instruction_preview}… — ab {next_display}.\n"
+                f"Soll er einen anderen Namen bekommen?"
+            )
         else:
             await message.reply_text("Ich konnte keinen sinnvollen Beobachtungsauftrag erkennen. Versuch's konkreter.")
         return
