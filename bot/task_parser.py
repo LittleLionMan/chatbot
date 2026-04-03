@@ -52,7 +52,7 @@ async def is_task_stop_request(text: str) -> bool:
             messages=[{"role": "user", "content": text}],
             max_tokens=5,
         )
-        logger.warning("is_task_stop_request(%r) -> %r", text[:50], result.strip())
+        logger.debug("is_task_stop_request(%r) -> %r", text[:50], result.strip())
         return result.strip().lower().startswith("ja")
     except Exception as e:
         logger.warning("Task stop detection failed: %s", e)
@@ -66,7 +66,7 @@ async def is_task_creation(text: str) -> bool:
             messages=[{"role": "user", "content": text}],
             max_tokens=5,
         )
-        logger.warning("is_task_creation(%r) -> %r", text[:50], result.strip())
+        logger.debug("is_task_creation(%r) -> %r", text[:50], result.strip())
         return result.strip().lower().startswith("ja")
     except Exception as e:
         logger.warning("Task creation detection failed: %s", e)
@@ -80,7 +80,7 @@ async def is_task_list_request(text: str) -> bool:
             messages=[{"role": "user", "content": text}],
             max_tokens=5,
         )
-        logger.warning("is_task_list_request(%r) -> %r", text[:50], result.strip())
+        logger.debug("is_task_list_request(%r) -> %r", text[:50], result.strip())
         return result.strip().lower().startswith("ja")
     except Exception as e:
         logger.warning("Task list detection failed: %s", e)

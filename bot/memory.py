@@ -16,15 +16,15 @@ async def get_pool() -> asyncpg.Pool:
 async def upsert_user(pool: asyncpg.Pool, telegram_id: int, username: str | None, first_name: str | None, last_name: str | None) -> None:
     await pool.execute(
         """
-        INSERT INTO users (telegram_id, username, first_name, last_name, last_seen_at)
-        VALUES ($1, $2, $3, $4, NOW())
+        INSERT INTO users (telegram_id, username, first_name, last_name, timezone, last_seen_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
         ON CONFLICT (telegram_id) DO UPDATE
         SET username = EXCLUDED.username,
             first_name = EXCLUDED.first_name,
             last_name = EXCLUDED.last_name,
             last_seen_at = NOW()
         """,
-        telegram_id, username, first_name, last_name,
+        telegram_id, username, first_name, last_name, config.BOT_DEFAULT_TIMEZONE,
     )
 
 

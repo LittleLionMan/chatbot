@@ -53,9 +53,10 @@ Regeln:
 Beispiel-Output: ["Habe das Gefühl dass Lisa Kritik besser annimmt wenn sie als Frage verpackt ist", "Die Gruppe diskutiert Technik enthusiastisch aber wird bei politischen Implikationen schnell defensiv"]"""
 
 _REFLECTION_DECISION_SYSTEM = """Entscheide ob eine Interaktion bemerkenswert genug ist für eine persönliche Reflexionsnotiz.
-Antworte NUR mit 'ja' oder 'nein'.
-Bemerkenswert bedeutet: es gab eine Überraschung, ein erkennbares Muster, eine unerwartete Reaktion, eine interessante Spannung, oder etwas das beim nächsten Gespräch nützlich sein könnte.
-Nicht bemerkenswert: reine Faktenfragen, kurze Bestätigungen, Small Talk ohne Substanz."""
+Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
+Bemerkenswert: Überraschung, erkennbares Muster, unerwartete Reaktion, interessante Spannung, etwas das beim nächsten Gespräch nützlich sein könnte.
+Nicht bemerkenswert: reine Faktenfragen, kurze Bestätigungen, Small Talk ohne Substanz.
+Beispiele: "User reagiert defensiv auf Kritik" → ja, "User fragt nach Uhrzeit" → nein."""
 
 
 def _sanitize_fact(raw: str) -> str | None:

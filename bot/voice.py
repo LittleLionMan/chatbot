@@ -8,10 +8,9 @@ logger = logging.getLogger(__name__)
 STT_URL = "http://stt:8001/transcribe"
 TTS_URL = "http://tts:8002/synthesize"
 
-_VOICE_REQUEST_SYSTEM = """Antworte NUR mit "ja" oder "nein".
-Fordert der User in seiner Nachricht explizit eine Sprachantwort?
-Beispiele: "kannst du das vorlesen", "antworte als Sprachnachricht", "red mal mit mir", "sag mir" → ja
-Alles andere → nein"""
+_VOICE_REQUEST_SYSTEM = """Entscheide ob der Nutzer explizit eine Sprachantwort anfordert.
+Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
+Beispiele: "kannst du das vorlesen" → ja, "antworte als Sprachnachricht" → ja, "red mal mit mir" → ja, "sag mir" → ja, "was denkst du" → nein, "erkläre mir X" → nein."""
 
 
 async def parse_voice_request(text: str) -> bool:

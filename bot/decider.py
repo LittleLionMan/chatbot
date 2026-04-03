@@ -3,10 +3,11 @@ from bot import config, brain, memory
 from bot.soul import SOUL
 
 
-DECIDER_SYSTEM = """Du entscheidest ob ein Bot mit einem bestimmten Charakter auf eine Gruppennachricht spontan reagieren soll.
-Antworte NUR mit 'ja' oder 'nein'.
-Reagiere mit 'ja' wenn: die Nachricht eine klare Meinung, eine Behauptung, eine Frage an alle, eine Neuigkeit oder etwas Humorvolles enthält — und der Charakter des Bots dazu etwas Passendes beitragen könnte.
-Reagiere mit 'nein' wenn: die Nachricht reine Logistik ist, Small Talk ohne Substanz, oder der Bot kürzlich schon gesprochen hat."""
+DECIDER_SYSTEM = """Entscheide ob ein Bot spontan auf eine Gruppennachricht reagieren soll.
+Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
+Reagiere mit 'ja' wenn: die Nachricht eine klare Meinung, Behauptung, Frage an alle, Neuigkeit oder etwas Humorvolles enthält — und der Charakter des Bots dazu etwas Passendes beitragen könnte.
+Reagiere mit 'nein' wenn: die Nachricht reine Logistik ist, Small Talk ohne Substanz, oder der Bot kürzlich schon gesprochen hat.
+Beispiele: "Was haltet ihr von KI?" → ja, "Bin um 18 Uhr da" → nein, "Habt ihr das gehört?" → ja, "ok" → nein."""
 
 
 async def should_respond_spontaneously(
