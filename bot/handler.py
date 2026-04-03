@@ -107,25 +107,16 @@ async def _reply(
             await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
         return
 
-    if active_agents and await agent_parser.is_agent_rename_request(text):
-        target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
-        new_name = await agent_parser.parse_rename_request(text)
-        if target_agent and new_name:
-            old_name = target_agent["name"]
-            await memory.rename_agent(pool, target_agent["id"], new_name)
-            await message.reply_text(f"{old_name} heißt jetzt {new_name}.")
-        else:
-            await message.reply_text("Ich konnte den Agenten oder den neuen Namen nicht eindeutig erkennen.")
-        return
-
     if active_agents and await agent_parser.is_agent_talk(text):
         target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
         if target_agent:
             state = await memory.get_agent_state(pool, target_agent["id"])
             agent_memories = await memory.get_agent_memories(pool, target_agent["id"])
-            response, new_config = await agent_parser.handle_agent_talk(text, target_agent, state, agent_memories)
+            response, new_config, new_name = await agent_parser.handle_agent_talk(text, target_agent, state, agent_memories)
             if new_config is not None:
                 await memory.update_agent_config(pool, target_agent["id"], new_config)
+            if new_name is not None:
+                await memory.rename_agent(pool, target_agent["id"], new_name)
             await message.reply_text(response)
         else:
             names = ", ".join(a["name"] for a in active_agents)

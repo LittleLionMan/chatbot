@@ -66,10 +66,6 @@ Nur 'ja' wenn der Nutzer explizit nach einer Liste oder einem Überblick seiner 
 Beispiele: "Zeig meine Agenten" → ja, "Welche Agenten laufen" → ja, "Was für Agenten habe ich" → ja.
 Beispiele für nein: "Was macht Linus" → nein, "Stopp Gordon" → nein, "Beobachte täglich den Markt" → nein, "Erstelle einen Agenten" → nein."""
 
-_RENAME_TRIGGER_SYSTEM = """Entscheide ob der Nutzer einen Agenten umbenennen möchte.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Beispiele: "Nenn Linus jetzt Max" → ja, "Benenne den GPU-Agenten um in Torsten" → ja, "Stopp Linus" → nein."""
-
 _TALK_TRIGGER_SYSTEM = """Entscheide ob der Nutzer mit einem bereits existierenden, namentlich bekannten Agenten spricht oder nach ihm fragt.
 Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
 Voraussetzung für 'ja': Der Nutzer nennt einen konkreten Agenten-Namen oder referenziert eindeutig einen laufenden Agenten ("dein Agent", "der GPU-Agent").
@@ -82,18 +78,16 @@ Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.
 Wenn kein Agent eindeutig zuzuordnen ist, antworte mit 0.
 Beispiel: 3"""
 
-_RENAME_PARSER_SYSTEM = """Extrahiere aus der Nutzeranfrage den neuen Namen für den Agenten.
-Antworte NUR mit dem neuen Namen, kein anderer Text, keine Anführungszeichen.
-Wenn kein neuer Name erkennbar ist, antworte mit dem Wort UNBEKANNT."""
-
 _AGENT_TALK_SYSTEM = """Du bist Bob. Ein Nutzer spricht direkt mit einem deiner laufenden Agenten oder fragt nach ihm.
 
 Dir werden Name, Konfiguration, aktueller State und bisherige Beobachtungen des Agenten übergeben.
 
 Mögliche Anfragen:
 - Statusabfrage ("Wie läuft X?", "Was hat X gefunden?") → fasse State und Beobachtungen zusammen
-- Konfigurationsänderung ("X, konzentriere dich ab jetzt auf Y") → bestätige die Änderung knapp, gib die neue config als JSON-Block zurück: ```config\n{...}\n```
-- Allgemeine Ansprache → antworte im Stil von Bob, aus der Perspektive des Agenten
+- Konfigurationsänderung (Suchgebiet, Häufigkeit, Inhalt, Kriterien) → bestätige knapp, gib das vollständige neue config-Objekt zurück: ```config\n{...}\n```
+- Umbenennung ("nenn ihn X", "er soll jetzt Y heißen") → bestätige knapp, gib den neuen Namen zurück: ```name\nNeuerName\n```
+- Kombination aus mehreren Änderungen → alle zutreffenden Blöcke zurückgeben
+- Allgemeine Ansprache → antworte im Stil von Bob
 
 Wenn du die Konfiguration änderst, gib immer das vollständige neue config-Objekt zurück — alle Felder, nicht nur die geänderten.
 Das config-Objekt hat die Felder: instruction, state_keys, type."""
@@ -132,12 +126,6 @@ async def is_agent_stop_request(text: str) -> bool:
 async def is_agent_list_request(text: str) -> bool:
     result = await _binary(_LIST_TRIGGER_SYSTEM, text)
     logger.warning("is_agent_list_request(%r) -> %s", text[:50], result)
-    return result
-
-
-async def is_agent_rename_request(text: str) -> bool:
-    result = await _binary(_RENAME_TRIGGER_SYSTEM, text)
-    logger.warning("is_agent_rename_request(%r) -> %s", text[:50], result)
     return result
 
 
@@ -237,22 +225,6 @@ async def parse_agent_creation(
         return None
 
 
-async def parse_rename_request(text: str) -> str | None:
-    try:
-        raw = await brain.chat(
-            system=_RENAME_PARSER_SYSTEM,
-            messages=[{"role": "user", "content": text}],
-            max_tokens=30,
-        )
-        name = raw.strip()
-        if name.upper() == "UNBEKANNT" or not name:
-            return None
-        return name
-    except Exception as e:
-        logger.warning("Rename parsing failed: %s", e)
-        return None
-
-
 async def handle_agent_talk(
     text: str,
     agent: dict,
@@ -283,17 +255,27 @@ async def handle_agent_talk(
         return "Konnte den Agenten nicht befragen.", None
 
     new_config: dict | None = None
+    new_name: str | None = None
+
     if "```config" in response:
         try:
             start = response.index("```config") + len("```config")
             end = response.index("```", start)
-            raw_config = response[start:end].strip()
-            new_config = json.loads(raw_config)
+            new_config = json.loads(response[start:end].strip())
             response = response[:response.index("```config")].strip()
         except Exception as e:
             logger.warning("Config extraction from agent talk response failed: %s", e)
 
-    return response, new_config
+    if "```name" in response:
+        try:
+            start = response.index("```name") + len("```name")
+            end = response.index("```", start)
+            new_name = response[start:end].strip()
+            response = response[:response.index("```name")].strip()
+        except Exception as e:
+            logger.warning("Name extraction from agent talk response failed: %s", e)
+
+    return response, new_config, new_name
 
 
 def next_agent_run_after(schedule: str, timezone: str) -> datetime:
