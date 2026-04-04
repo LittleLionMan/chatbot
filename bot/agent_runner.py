@@ -24,7 +24,7 @@ Verfügbare Tools in tool_calls:
 - {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — speichert einen Wert
 - {"tool": "db_read", "namespace": "...", "key": "..."} — liest einen Wert (wird im nächsten Lauf als Kontext übergeben)
 - {"tool": "db_query", "namespace": "..."} — liest alle Einträge eines Namespaces
-- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}} — löst einen anderen Agenten aus
+- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus, optional zeitverzögert
 - {"tool": "notify_user", "message": "..."} — sendet eine direkte Nachricht (alternative zu notify_user: true)
 
 Beispiel-Output:
@@ -100,8 +100,9 @@ async def _execute_tool_calls(
             elif tool == "trigger_agent":
                 target_name: str = call.get("target_agent_name", "")
                 payload: dict = call.get("payload", {})
+                delay: int = int(call.get("delay_minutes", 0))
                 if target_name:
-                    await memory.enqueue_agent_trigger(pool, agent_id, target_name, payload)
+                    await memory.enqueue_agent_trigger(pool, agent_id, target_name, payload, delay)
                     logger.info("Agent %d queued trigger for: %s", agent_id, target_name)
 
             elif tool == "notify_user":

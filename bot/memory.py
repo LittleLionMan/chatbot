@@ -447,14 +447,15 @@ async def enqueue_agent_trigger(
     source_agent_id: int,
     target_agent_name: str,
     payload: dict,
+    delay_minutes: int = 0,
 ) -> None:
     import json
     await pool.execute(
         """
-        INSERT INTO agent_trigger_queue (source_agent_id, target_agent_name, payload)
-        VALUES ($1, $2, $3)
+        INSERT INTO agent_trigger_queue (source_agent_id, target_agent_name, payload, scheduled_for)
+        VALUES ($1, $2, $3, NOW() + ($4 * INTERVAL '1 minute'))
         """,
-        source_agent_id, target_agent_name, json.dumps(payload),
+        source_agent_id, target_agent_name, json.dumps(payload), delay_minutes,
     )
 
 
@@ -463,8 +464,8 @@ async def get_pending_triggers(pool: asyncpg.Pool) -> list[dict]:
         """
         SELECT id, source_agent_id, target_agent_name, payload
         FROM agent_trigger_queue
-        WHERE processed_at IS NULL
-        ORDER BY created_at ASC
+        WHERE processed_at IS NULL AND scheduled_for <= NOW()
+        ORDER BY scheduled_for ASC
         """,
     )
     return [dict(r) for r in rows]

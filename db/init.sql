@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS agent_trigger_queue (
     source_agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     target_agent_name TEXT NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}',
+    scheduled_for TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     processed_at TIMESTAMPTZ
 );
