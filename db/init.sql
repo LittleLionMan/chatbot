@@ -88,3 +88,38 @@ CREATE TABLE IF NOT EXISTS agent_state (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (agent_id, key)
 );
+
+CREATE TABLE IF NOT EXISTS agent_data (
+    id SERIAL PRIMARY KEY,
+    agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    namespace TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (agent_id, namespace, key)
+);
+
+CREATE INDEX IF NOT EXISTS agent_data_namespace_idx ON agent_data (agent_id, namespace);
+CREATE INDEX IF NOT EXISTS agent_data_global_idx ON agent_data (namespace, key);
+
+CREATE TABLE IF NOT EXISTS agent_trigger_queue (
+    id SERIAL PRIMARY KEY,
+    source_agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    target_agent_name TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    processed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS agent_trigger_queue_pending_idx ON agent_trigger_queue (processed_at) WHERE processed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id SERIAL PRIMARY KEY,
+    caller TEXT NOT NULL,
+    input_tokens INT NOT NULL,
+    output_tokens INT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS llm_usage_created_idx ON llm_usage (created_at DESC);
+CREATE INDEX IF NOT EXISTS llm_usage_caller_idx ON llm_usage (caller, created_at DESC);

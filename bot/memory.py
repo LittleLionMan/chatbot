@@ -391,3 +391,112 @@ async def get_agent_memories(pool: asyncpg.Pool, agent_id: int, limit: int = 20)
         agent_id, limit,
     )
     return [r["content"] for r in rows]
+
+
+async def write_agent_data(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    namespace: str,
+    key: str,
+    value: str,
+) -> None:
+    await pool.execute(
+        """
+        INSERT INTO agent_data (agent_id, namespace, key, value, updated_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (agent_id, namespace, key) DO UPDATE
+        SET value = EXCLUDED.value, updated_at = NOW()
+        """,
+        agent_id, namespace, key, value,
+    )
+
+
+async def read_agent_data(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    namespace: str,
+    key: str,
+) -> str | None:
+    row = await pool.fetchrow(
+        "SELECT value FROM agent_data WHERE agent_id = $1 AND namespace = $2 AND key = $3",
+        agent_id, namespace, key,
+    )
+    return row["value"] if row else None
+
+
+async def query_agent_data(
+    pool: asyncpg.Pool,
+    namespace: str,
+    limit: int = 50,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT agent_id, key, value, updated_at
+        FROM agent_data
+        WHERE namespace = $1
+        ORDER BY updated_at DESC
+        LIMIT $2
+        """,
+        namespace, limit,
+    )
+    return [dict(r) for r in rows]
+
+
+async def enqueue_agent_trigger(
+    pool: asyncpg.Pool,
+    source_agent_id: int,
+    target_agent_name: str,
+    payload: dict,
+) -> None:
+    import json
+    await pool.execute(
+        """
+        INSERT INTO agent_trigger_queue (source_agent_id, target_agent_name, payload)
+        VALUES ($1, $2, $3)
+        """,
+        source_agent_id, target_agent_name, json.dumps(payload),
+    )
+
+
+async def get_pending_triggers(pool: asyncpg.Pool) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, source_agent_id, target_agent_name, payload
+        FROM agent_trigger_queue
+        WHERE processed_at IS NULL
+        ORDER BY created_at ASC
+        """,
+    )
+    return [dict(r) for r in rows]
+
+
+async def mark_trigger_processed(pool: asyncpg.Pool, trigger_id: int) -> None:
+    await pool.execute(
+        "UPDATE agent_trigger_queue SET processed_at = NOW() WHERE id = $1",
+        trigger_id,
+    )
+
+
+async def get_agent_by_name_global(pool: asyncpg.Pool, name: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT id, user_id, name, config, schedule, target_chat_id, next_run_at, is_active
+        FROM agents
+        WHERE LOWER(name) = LOWER($1) AND is_active = TRUE
+        LIMIT 1
+        """,
+        name,
+    )
+    return dict(row) if row else None
+
+
+async def log_llm_usage(
+    pool: asyncpg.Pool,
+    caller: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    await pool.execute(
+        "INSERT INTO llm_usage (caller, input_tokens, output_tokens) VALUES ($1, $2, $3)",
+        caller, input_tokens, output_tokens,
+    )

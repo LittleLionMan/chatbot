@@ -4,7 +4,7 @@ import json
 import logging
 import asyncpg
 import telegram
-from bot import config, memory, brain, extractor, decider, task_runner, agent_runner, ratelimit
+from bot import config, memory, brain, extractor, ratelimit, task_runner, agent_runner
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -134,6 +134,35 @@ async def _maybe_send_proactive(
         logger.warning("Proactive message failed for group %d: %s", group_id, e)
 
 
+async def _run_trigger_queue(
+    pool: asyncpg.Pool,
+    bot: telegram.Bot,
+) -> None:
+    try:
+        triggers = await memory.get_pending_triggers(pool)
+        for trigger in triggers:
+            trigger_id: int = trigger["id"]
+            target_name: str = trigger["target_agent_name"]
+            raw_payload = trigger["payload"]
+            payload: dict = raw_payload if isinstance(raw_payload, dict) else json.loads(raw_payload)
+
+            target_agent = await memory.get_agent_by_name_global(pool, target_name)
+            if not target_agent:
+                logger.warning("Trigger %d: target agent '%s' not found or inactive, skipping.", trigger_id, target_name)
+                await memory.mark_trigger_processed(pool, trigger_id)
+                continue
+
+            logger.info("Trigger %d: firing agent '%s' (id=%d)", trigger_id, target_name, target_agent["id"])
+            try:
+                await agent_runner.execute_agent(pool, bot, target_agent, trigger_payload=payload)
+            except Exception as e:
+                logger.error("Trigger %d: agent '%s' execution failed: %s", trigger_id, target_name, e)
+
+            await memory.mark_trigger_processed(pool, trigger_id)
+    except Exception as e:
+        logger.error("Trigger queue processing failed: %s", e)
+
+
 async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
     logger.info("Scheduler started. Interval: %ds, Session timeout: %ds",
                 config.BOT_SCHEDULER_INTERVAL_SECONDS, config.BOT_SESSION_TIMEOUT_SECONDS)
@@ -165,3 +194,11 @@ async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
                 logger.info("Scheduler agent cycle skipped: rate limited.")
         except Exception as e:
             logger.error("Scheduler agent cycle failed: %s", e)
+
+        try:
+            if not ratelimit.is_rate_limited():
+                await _run_trigger_queue(pool, bot)
+            else:
+                logger.info("Scheduler trigger queue skipped: rate limited.")
+        except Exception as e:
+            logger.error("Scheduler trigger queue cycle failed: %s", e)

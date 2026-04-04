@@ -1,10 +1,11 @@
+from __future__ import annotations
 import asyncio
 import logging
 import anthropic
 import asyncpg
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner
+from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner, intent_classifier
 from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -88,16 +89,30 @@ async def _reply(
         return
 
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
+    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
 
-    if await agent_parser.is_agent_list_request(text):
+    intent = await intent_classifier.classify(
+        text,
+        pool,
+        has_active_agents=bool(active_agents),
+        has_active_tasks=bool(active_tasks),
+    )
+
+    if intent == "agent_list":
         if not active_agents:
             await message.reply_text("Du hast keine aktiven Agenten.")
         else:
-            lines = [f"{a['name']} — {parse_agent_config(a['config']).get('instruction', '')[:60]}… ({a['schedule']})" for a in active_agents]
+            lines = [
+                f"{a['name']} — {parse_agent_config(a['config']).get('instruction', '')[:60]}… ({a['schedule']})"
+                for a in active_agents
+            ]
             await message.reply_text("Deine aktiven Agenten:\n" + "\n".join(lines))
         return
 
-    if active_agents and await agent_parser.is_agent_stop_request(text):
+    if intent == "agent_stop":
+        if not active_agents:
+            await message.reply_text("Du hast keine aktiven Agenten.")
+            return
         target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
         if target_agent:
             await memory.deactivate_agent(pool, target_agent["id"])
@@ -107,7 +122,10 @@ async def _reply(
             await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
         return
 
-    if active_agents and await agent_parser.is_agent_talk(text):
+    if intent == "agent_talk":
+        if not active_agents:
+            await message.reply_text("Du hast keine aktiven Agenten.")
+            return
         target_agent = await agent_parser.resolve_agent_by_text(text, active_agents)
         if target_agent:
             state = await memory.get_agent_state(pool, target_agent["id"])
@@ -123,7 +141,7 @@ async def _reply(
             await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
         return
 
-    if await agent_parser.is_agent_creation(text):
+    if intent == "agent_create":
         parsed_agent = await agent_parser.parse_agent_creation(text, user.id, chat.id, pool)
         if parsed_agent:
             suggested = parsed_agent.get("suggested_name")
@@ -147,8 +165,7 @@ async def _reply(
             await message.reply_text("Ich konnte keinen sinnvollen Beobachtungsauftrag erkennen. Versuch's konkreter.")
         return
 
-    if await task_parser.is_task_list_request(text):
-        active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+    if intent == "task_list":
         if not active_tasks:
             await message.reply_text("Du hast keine aktiven Aufgaben.")
         else:
@@ -156,8 +173,7 @@ async def _reply(
             await message.reply_text("Deine aktiven Aufgaben:\n" + "\n".join(lines))
         return
 
-    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
-    if await task_parser.is_task_stop_request(text):
+    if intent == "task_stop":
         quoted_text = (
             message.reply_to_message.text
             if message.reply_to_message and message.reply_to_message.text
@@ -179,7 +195,7 @@ async def _reply(
                 await message.reply_text("Du hast keine aktiven Aufgaben.")
         return
 
-    if await task_parser.is_task_creation(text):
+    if intent == "task_create":
         parsed = await task_parser.parse_task(text, user.id, chat.id, pool)
         if parsed:
             await memory.create_task(
@@ -229,7 +245,13 @@ async def _reply(
     llm_messages.append({"role": "user", "content": user_turn})
 
     try:
-        response = await brain.chat(system=system, messages=llm_messages, use_web_search=True)
+        response = await brain.chat(
+            system=system,
+            messages=llm_messages,
+            use_web_search=True,
+            caller="handler",
+            pool=pool,
+        )
     except anthropic.RateLimitError:
         if triggered_by_mention:
             await message.reply_text(ratelimit.rate_limit_message())

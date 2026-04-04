@@ -32,63 +32,6 @@ Kein anderer Text, keine Markdown-Backticks.
 
 Beispiel: [3, 7]"""
 
-_STOP_TRIGGER_SYSTEM = """Entscheide ob der Nutzer eine wiederkehrende Aufgabe beenden, stoppen oder löschen möchte.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Beispiele: "Beende die Aufgabe" → ja, "Stopp den Task" → ja, "Lösch den piep-Job" → ja, "Erstelle eine Aufgabe" → nein."""
-
-_LIST_TRIGGER_SYSTEM = """Entscheide ob der Nutzer seine aktiven Aufgaben oder Tasks sehen möchte.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Beispiele: "Zeig meine Aufgaben" → ja, "Was läuft gerade" → ja, "Beende einen Task" → nein."""
-
-_CREATE_TRIGGER_SYSTEM = """Entscheide ob der Nutzer eine neue wiederkehrende Aufgabe erstellen möchte.
-Eine Aufgabe ist stateless — jeder Lauf ist unabhängig vom vorherigen, kein Vergleich mit früheren Ergebnissen nötig.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Beispiele: "Such täglich nach GPU-Preisen" → ja, "Erinnere mich jeden Montag" → ja, "Schreib täglich um 9 piep" → ja, "Zeig mir täglich den Bitcoin-Kurs" → ja.
-Kein Task wenn der Auftrag explizit Vergleich mit früheren Ergebnissen oder Lernen über Zeit verlangt: "beobachte und melde Änderungen", "lerne was ein Schnäppchen ist", "melde wenn sich etwas ändert", "überwache".
-Beispiele für kein Task: "Beobachte GPU-Preise und lerne was günstig ist" → nein, "Überwache meine Docker Container und melde Ausfälle" → nein, "Verfolge Bitcoin und sag mir wenn der Trend kippt" → nein."""
-
-
-async def is_task_stop_request(text: str) -> bool:
-    try:
-        result = await brain.chat(
-            system=_STOP_TRIGGER_SYSTEM,
-            messages=[{"role": "user", "content": text}],
-            max_tokens=5,
-        )
-        logger.debug("is_task_stop_request(%r) -> %r", text[:50], result.strip())
-        return result.strip().lower().startswith("ja")
-    except Exception as e:
-        logger.warning("Task stop detection failed: %s", e)
-        return False
-
-
-async def is_task_creation(text: str) -> bool:
-    try:
-        result = await brain.chat(
-            system=_CREATE_TRIGGER_SYSTEM,
-            messages=[{"role": "user", "content": text}],
-            max_tokens=5,
-        )
-        logger.debug("is_task_creation(%r) -> %r", text[:50], result.strip())
-        return result.strip().lower().startswith("ja")
-    except Exception as e:
-        logger.warning("Task creation detection failed: %s", e)
-        return False
-
-
-async def is_task_list_request(text: str) -> bool:
-    try:
-        result = await brain.chat(
-            system=_LIST_TRIGGER_SYSTEM,
-            messages=[{"role": "user", "content": text}],
-            max_tokens=5,
-        )
-        logger.debug("is_task_list_request(%r) -> %r", text[:50], result.strip())
-        return result.strip().lower().startswith("ja")
-    except Exception as e:
-        logger.warning("Task list detection failed: %s", e)
-        return False
-
 
 async def parse_task(
     text: str,

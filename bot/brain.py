@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import anthropic
+import asyncpg
 from bot import config, ratelimit
 from bot.soul import SOUL
 from bot.utils import parse_agent_config
@@ -34,7 +35,10 @@ async def _call_anthropic(
     max_tokens: int = 1024,
     use_web_search: bool = False,
     web_search_max_uses: int | None = None,
+    caller: str = "unknown",
+    pool: asyncpg.Pool | None = None,
 ) -> str:
+    from bot import memory as mem
     client = _get_anthropic_client()
     kwargs: dict = dict(
         model=config.LLM_MODEL,
@@ -47,6 +51,18 @@ async def _call_anthropic(
 
     try:
         response = await client.messages.create(**kwargs)
+
+        if pool is not None:
+            try:
+                await mem.log_llm_usage(
+                    pool,
+                    caller,
+                    response.usage.input_tokens,
+                    response.usage.output_tokens,
+                )
+            except Exception as log_err:
+                logger.warning("Token logging failed for caller %s: %s", caller, log_err)
+
         return "".join(
             block.text for block in response.content if block.type == "text"
         )
@@ -72,9 +88,19 @@ async def chat(
     max_tokens: int = 1024,
     use_web_search: bool = False,
     web_search_max_uses: int | None = None,
+    caller: str = "unknown",
+    pool: asyncpg.Pool | None = None,
 ) -> str:
     if config.LLM_PROVIDER == "anthropic":
-        return await _call_anthropic(system, messages, max_tokens, use_web_search, web_search_max_uses)
+        return await _call_anthropic(
+            system,
+            messages,
+            max_tokens,
+            use_web_search,
+            web_search_max_uses,
+            caller,
+            pool,
+        )
     raise NotImplementedError(f"LLM provider '{config.LLM_PROVIDER}' is not implemented yet.")
 
 

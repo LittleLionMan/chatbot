@@ -49,30 +49,6 @@ Output: {"instruction": "Erstelle oder verbessere ein Python-Script das die 10 g
 Eingabe: "Beobachte RTX 4060 Ti Preise täglich unter 220€, nenn ihn Linus"
 Output: {"instruction": "Suche nach Angeboten für RTX 4060 Ti unter 220€ auf deutschen Sekundärmarkt-Plattformen. Vergleiche mit bekannten Fundstücken. Melde nur neue Treffer oder relevante Preisänderungen.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "type": "research", "schedule": "0 9 * * *", "target": "same", "wants_name": true, "suggested_name": "Linus"}"""
 
-_CREATE_TRIGGER_SYSTEM = """Entscheide ob der Nutzer einen neuen persistenten Agenten erstellen möchte.
-Ein Agent läuft nach Plan, hat Gedächtnis zwischen den Läufen und handelt nur bei relevanten Änderungen oder wiederkehrenden Aufgaben.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Erkennungsmerkmale: "beobachte", "verfolge", "überwache", "halte mich auf dem Laufenden", "melde wenn", "analysiere laufend", "schreib mir regelmäßig", "halte X aktuell".
-Kein Agent: einmalige Aufgabe, stateless Task ohne Vergleichsbedarf, einfache Erinnerung.
-Beispiele: "Überwache meine Docker Container" → ja, "Verfolge GPU-Preise" → ja, "Halte mein Deployment-Script aktuell" → ja, "Erinnere mich jeden Montag" → nein, "Such mir jetzt nach RTX" → nein."""
-
-_STOP_TRIGGER_SYSTEM = """Entscheide ob der Nutzer einen laufenden Agenten stoppen oder deaktivieren möchte.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Beispiele: "Stopp Linus" → ja, "Deaktiviere den GPU-Agenten" → ja, "Argus soll aufhören" → ja, "Erstelle einen Agenten" → nein."""
-
-_LIST_TRIGGER_SYSTEM = """Entscheide ob der Nutzer seine bereits existierenden Agenten auflisten möchte.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Nur 'ja' wenn der Nutzer explizit nach einer Liste oder einem Überblick seiner laufenden Agenten fragt.
-Beispiele: "Zeig meine Agenten" → ja, "Welche Agenten laufen" → ja, "Was für Agenten habe ich" → ja.
-Beispiele für nein: "Was macht Linus" → nein, "Stopp Gordon" → nein, "Beobachte täglich den Markt" → nein, "Erstelle einen Agenten" → nein."""
-
-_TALK_TRIGGER_SYSTEM = """Entscheide ob der Nutzer mit einem bereits existierenden, namentlich bekannten Agenten spricht oder nach ihm fragt.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Voraussetzung für 'ja': Der Nutzer nennt einen konkreten Agenten-Namen oder referenziert eindeutig einen laufenden Agenten ("dein Agent", "der GPU-Agent").
-Kein Talk wenn: Der Nutzer eine neue Aufgabe oder Beobachtung beschreibt ohne einen bestehenden Agenten zu nennen.
-Beispiele: "Wie läuft Linus?" → ja, "Linus, konzentriere dich auf RTX 4090" → ja, "Was hat Gordon bisher beobachtet?" → ja, "Wie läuft dein GPU-Agent?" → ja.
-Beispiele für nein: "Beobachte täglich den Markt nach GPUs" → nein, "Überwache meine Docker Container" → nein, "Verfolge Bitcoin und melde Trendwechsel" → nein."""
-
 _NAME_RESOLUTION_SYSTEM = """Identifiziere welcher Agent aus der Liste gemeint ist.
 Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.
 Wenn kein Agent eindeutig zuzuordnen ist, antworte mit 0.
@@ -96,43 +72,6 @@ Das config-Objekt hat die Felder: instruction, state_keys, type."""
 def _pick_name_for_topic(topic_type: str) -> str:
     candidates = _NAMES_BY_TOPIC.get(topic_type.lower(), _NAMES_BY_TOPIC["default"])
     return random.choice(candidates)
-
-
-async def _binary(system: str, text: str) -> bool:
-    try:
-        result = await brain.chat(
-            system=system,
-            messages=[{"role": "user", "content": text}],
-            max_tokens=5,
-        )
-        return result.strip().lower().startswith("ja")
-    except Exception as e:
-        logger.warning("Agent binary check failed: %s", e)
-        return False
-
-
-async def is_agent_creation(text: str) -> bool:
-    result = await _binary(_CREATE_TRIGGER_SYSTEM, text)
-    logger.warning("is_agent_creation(%r) -> %s", text[:50], result)
-    return result
-
-
-async def is_agent_stop_request(text: str) -> bool:
-    result = await _binary(_STOP_TRIGGER_SYSTEM, text)
-    logger.warning("is_agent_stop_request(%r) -> %s", text[:50], result)
-    return result
-
-
-async def is_agent_list_request(text: str) -> bool:
-    result = await _binary(_LIST_TRIGGER_SYSTEM, text)
-    logger.warning("is_agent_list_request(%r) -> %s", text[:50], result)
-    return result
-
-
-async def is_agent_talk(text: str) -> bool:
-    result = await _binary(_TALK_TRIGGER_SYSTEM, text)
-    logger.warning("is_agent_talk(%r) -> %s", text[:50], result)
-    return result
 
 
 async def resolve_agent_by_text(
@@ -230,7 +169,7 @@ async def handle_agent_talk(
     agent: dict,
     state: dict[str, str],
     agent_memories: list[str],
-) -> tuple[str, dict | None]:
+) -> tuple[str, dict | None, str | None]:
     config_data = parse_agent_config(agent["config"])
     state_summary = "\n".join(f"{k}: {v}" for k, v in state.items()) if state else "noch kein State"
     memories_summary = "\n- ".join(agent_memories) if agent_memories else "noch keine Beobachtungen"
@@ -252,7 +191,7 @@ async def handle_agent_talk(
         )
     except Exception as e:
         logger.warning("Agent talk LLM call failed: %s", e)
-        return "Konnte den Agenten nicht befragen.", None
+        return "Konnte den Agenten nicht befragen.", None, None
 
     new_config: dict | None = None
     new_name: str | None = None
