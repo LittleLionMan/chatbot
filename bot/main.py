@@ -47,7 +47,6 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.VOICE, handler.handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handler.handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handler.handle_document))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_rename_input))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_message))
 
     logging.info("Bot starting...")

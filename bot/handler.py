@@ -459,16 +459,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     pool: asyncpg.Pool = context.bot_data["pool"]
     message = update.effective_message
     chat = update.effective_chat
+    user = update.effective_user
 
-    if not message or not message.text:
+    if not message or not message.text or not user:
         return
 
     bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
     text = message.text.strip()
 
-    if is_group and greeter.is_greeting(text):
-        await message.reply_text(greeter.introduction_text())
+    pending_rename: int | None = context.user_data.get("awaiting_rename_agent_id")
+    if pending_rename is not None:
+        del context.user_data["awaiting_rename_agent_id"]
+        active_agents = await memory.get_active_agents_for_user(pool, user.id)
+        agent = next((a for a in active_agents if a["id"] == pending_rename), None)
+        if not agent:
+            await message.reply_text("Dieser Agent existiert nicht mehr.")
+        else:
+            old_name = agent["name"]
+            await memory.rename_agent(pool, pending_rename, text)
+            await message.reply_text(f"{old_name} heißt jetzt {text}.")
         return
 
     is_mention = (
@@ -622,31 +632,33 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     if not query or not user:
         return
 
-    await query.answer()
-
     data = query.data or ""
     parts = data.split(":")
     if len(parts) != 3 or parts[0] != "agent":
+        await query.answer()
         return
 
     action = parts[1]
     try:
         agent_id = int(parts[2])
     except ValueError:
+        await query.answer()
         return
 
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
     agent = next((a for a in active_agents if a["id"] == agent_id), None)
 
     if not agent:
-        await query.edit_message_text("Dieser Agent existiert nicht mehr.")
+        await query.answer("Dieser Agent existiert nicht mehr.")
         return
 
     if action == "stop":
         await memory.deactivate_agent(pool, agent_id)
+        await query.answer("Gestoppt.")
         await query.edit_message_text(f"{agent['name']} wurde gestoppt.")
 
     elif action == "status":
+        await query.answer("Einen Moment…")
         state = await memory.get_agent_state(pool, agent_id)
         agent_memories = await memory.get_agent_memories(pool, agent_id)
         status_text, _, _ = await agent_parser.handle_agent_talk(
@@ -655,46 +667,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             state,
             agent_memories,
         )
-        await query.edit_message_text(
+        await query.message.reply_text(
             f"{agent['name']} — Status:\n\n{status_text}",
             reply_markup=_agent_keyboard(agent_id),
         )
 
     elif action == "rename":
+        await query.answer()
         context.user_data["awaiting_rename_agent_id"] = agent_id
-        await query.edit_message_text(
+        await query.message.reply_text(
             f"Wie soll {agent['name']} heißen? Schreib einfach den neuen Namen."
         )
-
-
-async def handle_rename_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    pool: asyncpg.Pool = context.bot_data["pool"]
-    message = update.effective_message
-    user = update.effective_user
-
-    if not message or not user:
-        return
-
-    agent_id: int | None = context.user_data.get("awaiting_rename_agent_id")
-    if agent_id is None:
-        return
-
-    new_name = (message.text or "").strip()
-    if not new_name:
-        return
-
-    del context.user_data["awaiting_rename_agent_id"]
-
-    active_agents = await memory.get_active_agents_for_user(pool, user.id)
-    agent = next((a for a in active_agents if a["id"] == agent_id), None)
-
-    if not agent:
-        await message.reply_text("Dieser Agent existiert nicht mehr.")
-        return
-
-    old_name = agent["name"]
-    await memory.rename_agent(pool, agent_id, new_name)
-    await message.reply_text(f"{old_name} heißt jetzt {new_name}.")
 
 
 async def handle_command_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
