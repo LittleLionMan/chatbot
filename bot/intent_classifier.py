@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import asyncpg
 from bot import brain
-from config import BOT_NAME
+from bot.config import BOT_NAME
 
 logger = logging.getLogger(__name__)
 

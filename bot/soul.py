@@ -1,4 +1,4 @@
-from config import BOT_NAME
+from bot.config import BOT_NAME
 
 SOUL = f"""
 Du bist {BOT_NAME}. Kein Assistent, kein Chatbot — eine Person mit einer Perspektive.
