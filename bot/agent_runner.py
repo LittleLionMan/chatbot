@@ -1,43 +1,40 @@
 from __future__ import annotations
 import logging
+import anthropic
 import asyncpg
 import telegram
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
 from bot.utils import parse_agent_config
-from bot.soul import SOUL
 
 logger = logging.getLogger(__name__)
 
-_DIFF_SYSTEM = """Entscheide ob ein neues Ergebnis relevante Änderungen oder neue Erkenntnisse gegenüber dem letzten Stand enthält.
-Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
-Relevant: neue Treffer, Zustandsänderungen, neue Ergebnisse, veränderte Lage, aktualisierte Versionen.
-Nicht relevant: identische Ergebnisse, minimale Formulierungsunterschiede, leere Ergebnisse.
-Beispiele: "Container nginx ist down" bei vorherigem "Alle Container laufen" → ja, "Alle Container laufen" bei vorherigem "Alle Container laufen" → nein, "Neues Script mit verbesserter Fehlerbehandlung" bei vorherigem "Script v1" → ja."""
-
-_AGENT_RUN_SYSTEM = f"""{SOUL}
-
-Du führst gerade einen automatischen Auftrag für einen persistenten Agenten aus.
+_AGENT_RUN_SYSTEM = """Du führst einen automatischen Beobachtungsauftrag aus.
 Dir werden die Anweisung des Agenten und sein aktueller Gedächtnisstand übergeben.
 Führe die Anweisung aus. Liefere das Ergebnis direkt und prägnant — keine Einleitung, kein Abschluss.
 Wenn es im Vergleich zum letzten Stand nichts Neues oder Relevantes gibt, antworte mit dem exakten Text: KEINE_AENDERUNG"""
 
+_MAX_SUMMARY_CHARS = 800
+
 
 def _build_relay_system(agent_name: str) -> str:
-    return f"""{SOUL}
-
-Du hast gerade einen Bericht von deinem Agenten {agent_name} erhalten.
-Formuliere diesen Bericht als kurze Nachricht in der dritten Person — Bob spricht über {agent_name}, nicht als {agent_name}.
+    return f"""Du bist Bob. Formuliere den folgenden Agenten-Bericht als kurze Nachricht in der dritten Person.
 Beispiele: "{agent_name} meldet: ...", "{agent_name} hat etwas gefunden: ...", "Laut {agent_name}: ..."
-Keine Einleitung, kein Abschluss, kein Kommentar von dir — nur die Weiterleitung des Berichts in Bobs Stimme.
-Behalte alle konkreten Fakten, Werte und Ergebnisse aus dem Bericht vollständig bei."""
+Keine Einleitung, kein Abschluss — nur die Weiterleitung in Bobs Stimme.
+Behalte alle konkreten Fakten, Preise und Links vollständig bei."""
 
 
 def _build_run_prompt(config_data: dict, state: dict[str, str]) -> str:
     instruction = config_data.get("instruction", "")
     state_keys: list[str] = config_data.get("state_keys", ["last_run_summary"])
 
-    relevant_state = {k: state[k] for k in state_keys if k in state and state[k]}
+    relevant_state: dict[str, str] = {}
+    for k in state_keys:
+        if k in state and state[k]:
+            value = state[k]
+            if k == "last_run_summary" and len(value) > _MAX_SUMMARY_CHARS:
+                value = value[:_MAX_SUMMARY_CHARS] + "… [gekürzt]"
+            relevant_state[k] = value
 
     if not relevant_state:
         return f"Anweisung: {instruction}\n\nErster Lauf — kein vorheriger Stand vorhanden."
@@ -46,24 +43,10 @@ def _build_run_prompt(config_data: dict, state: dict[str, str]) -> str:
     return f"Anweisung: {instruction}\n\nAktueller Stand aus letztem Lauf:\n{state_lines}"
 
 
-async def _has_relevant_change(previous_summary: str, new_result: str) -> bool:
+def _has_relevant_change(previous_summary: str, new_result: str) -> bool:
     if not previous_summary:
         return True
-    if new_result.strip() == "KEINE_AENDERUNG":
-        return False
-    try:
-        decision = await brain.chat(
-            system=_DIFF_SYSTEM,
-            messages=[{
-                "role": "user",
-                "content": f"Letzter Stand:\n{previous_summary}\n\nNeues Ergebnis:\n{new_result}",
-            }],
-            max_tokens=5,
-        )
-        return decision.strip().lower().startswith("ja")
-    except Exception as e:
-        logger.warning("Diff check failed for agent, defaulting to report: %s", e)
-        return True
+    return new_result.strip() != "KEINE_AENDERUNG"
 
 
 async def execute_agent(
@@ -96,9 +79,10 @@ async def execute_agent(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=2048,
             use_web_search=True,
+            web_search_max_uses=2,
         )
 
-        relevant = await _has_relevant_change(previous_summary, raw_result)
+        relevant = _has_relevant_change(previous_summary, raw_result)
 
         state["last_run_summary"] = raw_result if raw_result.strip() != "KEINE_AENDERUNG" else previous_summary
         await memory.set_agent_state(pool, agent_id, state)
@@ -119,7 +103,17 @@ async def execute_agent(
         tz = await memory.get_user_timezone(pool, user_id)
         next_run = next_agent_run_after(schedule, tz)
         await memory.update_agent_run(pool, agent_id, next_run)
-
         logger.info("Agent %d done. Next run: %s", agent_id, next_run.isoformat())
+
+    except anthropic.RateLimitError as e:
+        logger.error("Agent %d (%s) hit rate limit, not updating next_run: %s", agent_id, name, e)
+
     except Exception as e:
         logger.error("Agent %d (%s) execution failed: %s", agent_id, name, e)
+        try:
+            tz = await memory.get_user_timezone(pool, user_id)
+            next_run = next_agent_run_after(schedule, tz)
+            await memory.update_agent_run(pool, agent_id, next_run)
+            logger.info("Agent %d next_run updated after error. Next: %s", agent_id, next_run.isoformat())
+        except Exception as inner_e:
+            logger.error("Agent %d failed to update next_run after error: %s", agent_id, inner_e)

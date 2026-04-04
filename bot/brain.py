@@ -9,10 +9,16 @@ logger = logging.getLogger(__name__)
 
 _anthropic_client: anthropic.AsyncAnthropic | None = None
 
-_WEB_SEARCH_TOOL = {
+_WEB_SEARCH_TOOL_BASE = {
     "type": "web_search_20250305",
     "name": "web_search",
 }
+
+
+def _web_search_tool(max_uses: int | None = None) -> dict:
+    if max_uses is not None:
+        return {**_WEB_SEARCH_TOOL_BASE, "max_uses": max_uses}
+    return _WEB_SEARCH_TOOL_BASE
 
 
 def _get_anthropic_client() -> anthropic.AsyncAnthropic:
@@ -27,6 +33,7 @@ async def _call_anthropic(
     messages: list[dict],
     max_tokens: int = 1024,
     use_web_search: bool = False,
+    web_search_max_uses: int | None = None,
 ) -> str:
     client = _get_anthropic_client()
     kwargs: dict = dict(
@@ -36,7 +43,7 @@ async def _call_anthropic(
         messages=messages,
     )
     if use_web_search:
-        kwargs["tools"] = [_WEB_SEARCH_TOOL]
+        kwargs["tools"] = [_web_search_tool(web_search_max_uses)]
 
     try:
         response = await client.messages.create(**kwargs)
@@ -64,9 +71,10 @@ async def chat(
     messages: list[dict],
     max_tokens: int = 1024,
     use_web_search: bool = False,
+    web_search_max_uses: int | None = None,
 ) -> str:
     if config.LLM_PROVIDER == "anthropic":
-        return await _call_anthropic(system, messages, max_tokens, use_web_search)
+        return await _call_anthropic(system, messages, max_tokens, use_web_search, web_search_max_uses)
     raise NotImplementedError(f"LLM provider '{config.LLM_PROVIDER}' is not implemented yet.")
 
 

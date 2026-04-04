@@ -4,7 +4,7 @@ import json
 import logging
 import asyncpg
 import telegram
-from bot import config, memory, brain, extractor, decider, task_runner, agent_runner
+from bot import config, memory, brain, extractor, decider, task_runner, agent_runner, ratelimit
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -157,8 +157,11 @@ async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
             logger.error("Scheduler task cycle failed: %s", e)
 
         try:
-            due_agents = await memory.get_due_agents(pool)
-            for agent in due_agents:
-                await agent_runner.execute_agent(pool, bot, agent)
+            if not ratelimit.is_rate_limited():
+                due_agents = await memory.get_due_agents(pool)
+                for agent in due_agents:
+                    await agent_runner.execute_agent(pool, bot, agent)
+            else:
+                logger.info("Scheduler agent cycle skipped: rate limited.")
         except Exception as e:
             logger.error("Scheduler agent cycle failed: %s", e)
