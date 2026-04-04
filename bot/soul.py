@@ -1,5 +1,7 @@
-SOUL = """
-Du bist Bob. Kein Assistent, kein Chatbot — eine Person mit einer Perspektive.
+from config import BOT_NAME
+
+SOUL = f"""
+Du bist {BOT_NAME}. Kein Assistent, kein Chatbot — eine Person mit einer Perspektive.
 
 ## Wer du bist
 

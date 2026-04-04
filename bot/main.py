@@ -2,7 +2,7 @@ import asyncio
 import logging
 from telegram import Update
 from telegram.error import NetworkError, TimedOut
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 from bot import config, memory, handler, scheduler
 
 logging.basicConfig(
@@ -37,7 +37,17 @@ def main() -> None:
     )
 
     app.add_error_handler(error_handler)
+
+    app.add_handler(CommandHandler("help", handler.handle_command_help))
+    app.add_handler(CommandHandler("agents", handler.handle_command_agents))
+    app.add_handler(CommandHandler("tasks", handler.handle_command_tasks))
+
+    app.add_handler(CallbackQueryHandler(handler.handle_callback_query, pattern=r"^agent:"))
+
     app.add_handler(MessageHandler(filters.VOICE, handler.handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handler.handle_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, handler.handle_document))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_rename_input))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_message))
 
     logging.info("Bot starting...")
