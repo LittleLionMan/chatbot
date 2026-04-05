@@ -11,9 +11,9 @@ from bot.utils import clean_llm_json, parse_agent_config
 logger = logging.getLogger(__name__)
 
 _AGENT_RUN_SYSTEM = """Du führst einen automatischen Beobachtungsauftrag aus.
-Dir werden die Anweisung des Agenten, sein aktueller Gedächtnisstand und verfügbare Daten übergeben.
+Dir werden die Anweisung des Agenten, sein aktueller Gedächtnisstand und alle relevanten Daten aus der Datenbank übergeben.
 
-Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
+Antworte ausschließlich mit rohem JSON. Kein Text davor, kein Text danach, keine Markdown-Backticks, kein Codeblock. Der erste Charakter deiner Antwort muss { sein, der letzte }.
 
 Felder:
 - "report": Dein Bericht in natürlicher Sprache. Wenn es nichts Neues gibt: "KEINE_AENDERUNG".
@@ -21,23 +21,68 @@ Felder:
 - "tool_calls": Liste von Tool-Aufrufen die nach diesem Lauf ausgeführt werden sollen. Leer wenn keine nötig.
 
 Verfügbare Tools in tool_calls:
-- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — speichert einen Wert
-- {"tool": "db_read", "namespace": "...", "key": "..."} — liest einen Wert (wird im nächsten Lauf als Kontext übergeben)
-- {"tool": "db_query", "namespace": "..."} — liest alle Einträge eines Namespaces
+- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — speichert einen Wert persistent
 - {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus, optional zeitverzögert
-- {"tool": "notify_user", "message": "..."} — sendet eine direkte Nachricht (alternative zu notify_user: true)
+- {"tool": "notify_user", "message": "..."} — sendet eine direkte Nachricht
+
+Wichtig: Daten werden ausschließlich durch tool_calls persistent gespeichert. Was nur im report steht, ist nach diesem Lauf verloren. Wenn du Daten speichern willst, muss ein db_write-Tool-Call im tool_calls-Array stehen — eine Erwähnung im report reicht nicht.
+Daten aus der Datenbank werden dir automatisch vor dem Lauf übergeben — du musst sie nicht selbst lesen.
 
 Beispiel-Output:
-{"report": "AAPL hat heute Quartalszahlen veröffentlicht. KGV jetzt bei 28.", "notify_user": true, "tool_calls": [{"tool": "db_write", "namespace": "companies", "key": "AAPL:last_check", "value": "2025-04-04"}, {"tool": "trigger_agent", "target_agent_name": "Analyst", "payload": {"ticker": "AAPL"}}]}"""
+{"report": "AAPL hat heute Quartalszahlen veröffentlicht. KGV jetzt bei 28.", "notify_user": true, "tool_calls": [{"tool": "db_write", "namespace": "companies", "key": "AAPL:last_check", "value": "2025-04-04"}, {"tool": "trigger_agent", "target_agent_name": "Analyst", "payload": {"ticker": "AAPL"}, "delay_minutes": 0}]}"""
 
 _MAX_SUMMARY_CHARS = 800
 
 
 def _build_relay_system(agent_name: str) -> str:
     return f"""Du bist Bob. Formuliere den folgenden Agenten-Bericht als kurze Nachricht in der dritten Person.
+Beginne die Nachricht immer mit dem Namen des Agenten.
 Beispiele: "{agent_name} meldet: ...", "{agent_name} hat etwas gefunden: ...", "Laut {agent_name}: ..."
 Keine Einleitung, kein Abschluss — nur die Weiterleitung in Bobs Stimme.
 Behalte alle konkreten Fakten, Preise und Links vollständig bei."""
+
+
+def _resolve_template(template: str, trigger_payload: dict[str, str]) -> str:
+    for k, v in trigger_payload.items():
+        template = template.replace(f"{{{{{k}}}}}", v)
+    return template
+
+
+async def _load_data_reads(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    data_reads: list[dict],
+    trigger_payload: dict[str, str],
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for read in data_reads:
+        namespace = _resolve_template(read.get("namespace", ""), trigger_payload)
+        key = read.get("key", "")
+        agent_name = read.get("agent_name")
+
+        target_agent_id: int = agent_id
+        if agent_name:
+            resolved = await memory.get_agent_id_by_name(pool, agent_name)
+            if resolved is None:
+                logger.warning("Agent %d data_read: agent_name '%s' not found, skipping", agent_id, agent_name)
+                continue
+            target_agent_id = resolved
+
+        if not key:
+            rows = await memory.query_agent_data(pool, namespace, agent_id=target_agent_id)
+            if rows:
+                combined = "\n".join(f"{r['key']}: {r['value']}" for r in rows)
+                label = f"db:{agent_name or 'self'}:{namespace}"
+                result[label] = combined
+                logger.info("Agent %d pre-loaded namespace %s from agent_id %d (%d entries)", agent_id, namespace, target_agent_id, len(rows))
+        else:
+            key = _resolve_template(key, trigger_payload)
+            value = await memory.read_agent_data(pool, target_agent_id, namespace, key)
+            if value is not None:
+                label = f"db:{agent_name or 'self'}:{namespace}:{key}"
+                result[label] = value
+                logger.info("Agent %d pre-loaded %s/%s from agent_id %d", agent_id, namespace, key, target_agent_id)
+    return result
 
 
 def _build_run_prompt(
@@ -66,7 +111,7 @@ def _build_run_prompt(
 
     if injected_data:
         data_lines = "\n".join(f"{k}: {v}" for k, v in injected_data.items())
-        parts.append(f"Zusätzliche Daten aus DB:\n{data_lines}")
+        parts.append(f"Daten aus der Datenbank:\n{data_lines}")
 
     return "\n\n".join(parts)
 
@@ -91,19 +136,13 @@ async def _execute_tool_calls(
                 )
                 logger.info("Agent %d db_write: %s/%s", agent_id, call["namespace"], call["key"])
 
-            elif tool == "db_read":
-                pass
-
-            elif tool == "db_query":
-                pass
-
             elif tool == "trigger_agent":
                 target_name: str = call.get("target_agent_name", "")
                 payload: dict = call.get("payload", {})
                 delay: int = int(call.get("delay_minutes", 0))
                 if target_name:
                     await memory.enqueue_agent_trigger(pool, agent_id, target_name, payload, delay)
-                    logger.info("Agent %d queued trigger for: %s", agent_id, target_name)
+                    logger.info("Agent %d queued trigger for: %s (delay: %dm)", agent_id, target_name, delay)
 
             elif tool == "notify_user":
                 msg = call.get("message", "")
@@ -116,16 +155,6 @@ async def _execute_tool_calls(
 
         except Exception as e:
             logger.error("Agent %d tool %s failed: %s", agent_id, tool, e)
-
-
-async def _load_trigger_payload_data(
-    pool: asyncpg.Pool,
-    payload: dict,
-) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for k, v in payload.items():
-        result[f"trigger_payload.{k}"] = str(v)
-    return result
 
 
 async def execute_agent(
@@ -151,11 +180,17 @@ async def execute_agent(
             if key not in state:
                 state[key] = ""
 
-        injected_data: dict[str, str] = {}
-        if trigger_payload:
-            injected_data = await _load_trigger_payload_data(pool, trigger_payload)
+        flat_payload: dict[str, str] = {k: str(v) for k, v in (trigger_payload or {}).items()}
 
-        previous_summary = state.get("last_run_summary", "")
+        injected_data: dict[str, str] = {}
+        for k, v in flat_payload.items():
+            injected_data[f"trigger_payload.{k}"] = v
+
+        data_reads: list[dict] = config_data.get("data_reads", [])
+        if data_reads:
+            db_data = await _load_data_reads(pool, agent_id, data_reads, flat_payload)
+            injected_data.update(db_data)
+
         prompt = _build_run_prompt(config_data, state, injected_data)
 
         raw_result = await brain.chat(
@@ -171,6 +206,7 @@ async def execute_agent(
         try:
             parsed_output = json.loads(clean_llm_json(raw_result))
         except Exception:
+            logger.warning("Agent %d (%s): JSON parse failed, raw output: %r", agent_id, name, raw_result[:300])
             parsed_output = {"report": raw_result, "notify_user": True, "tool_calls": []}
 
         report: str = parsed_output.get("report", "")
@@ -179,7 +215,7 @@ async def execute_agent(
 
         if report and report.strip() != "KEINE_AENDERUNG":
             state["last_run_summary"] = report
-        elif not report or report.strip() == "KEINE_AENDERUNG":
+        else:
             notify_user = False
 
         await memory.set_agent_state(pool, agent_id, state)

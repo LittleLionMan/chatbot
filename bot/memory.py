@@ -427,18 +427,31 @@ async def read_agent_data(
 async def query_agent_data(
     pool: asyncpg.Pool,
     namespace: str,
+    agent_id: int | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    rows = await pool.fetch(
-        """
-        SELECT agent_id, key, value, updated_at
-        FROM agent_data
-        WHERE namespace = $1
-        ORDER BY updated_at DESC
-        LIMIT $2
-        """,
-        namespace, limit,
-    )
+    if agent_id is not None:
+        rows = await pool.fetch(
+            """
+            SELECT agent_id, key, value, updated_at
+            FROM agent_data
+            WHERE namespace = $1 AND agent_id = $2
+            ORDER BY updated_at DESC
+            LIMIT $3
+            """,
+            namespace, agent_id, limit,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT agent_id, key, value, updated_at
+            FROM agent_data
+            WHERE namespace = $1
+            ORDER BY updated_at DESC
+            LIMIT $2
+            """,
+            namespace, limit,
+        )
     return [dict(r) for r in rows]
 
 
@@ -447,15 +460,14 @@ async def enqueue_agent_trigger(
     source_agent_id: int,
     target_agent_name: str,
     payload: dict,
-    delay_minutes: int = 0,
 ) -> None:
     import json
     await pool.execute(
         """
-        INSERT INTO agent_trigger_queue (source_agent_id, target_agent_name, payload, scheduled_for)
-        VALUES ($1, $2, $3, NOW() + ($4 * INTERVAL '1 minute'))
+        INSERT INTO agent_trigger_queue (source_agent_id, target_agent_name, payload)
+        VALUES ($1, $2, $3)
         """,
-        source_agent_id, target_agent_name, json.dumps(payload), delay_minutes,
+        source_agent_id, target_agent_name, json.dumps(payload),
     )
 
 
@@ -464,8 +476,8 @@ async def get_pending_triggers(pool: asyncpg.Pool) -> list[dict]:
         """
         SELECT id, source_agent_id, target_agent_name, payload
         FROM agent_trigger_queue
-        WHERE processed_at IS NULL AND scheduled_for <= NOW()
-        ORDER BY scheduled_for ASC
+        WHERE processed_at IS NULL
+        ORDER BY created_at ASC
         """,
     )
     return [dict(r) for r in rows]
@@ -489,6 +501,18 @@ async def get_agent_by_name_global(pool: asyncpg.Pool, name: str) -> dict | None
         name,
     )
     return dict(row) if row else None
+
+
+async def get_agent_id_by_name(pool: asyncpg.Pool, name: str) -> int | None:
+    row = await pool.fetchrow(
+        """
+        SELECT id FROM agents
+        WHERE LOWER(name) = LOWER($1) AND is_active = TRUE
+        LIMIT 1
+        """,
+        name,
+    )
+    return row["id"] if row else None
 
 
 async def log_llm_usage(
