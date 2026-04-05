@@ -503,9 +503,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await message.reply_text(f"{old_name} heißt jetzt {text}.")
         return
 
+    agent_names_for_mention: list[str] = []
+    if is_group:
+        pool_for_mention: asyncpg.Pool = context.bot_data["pool"]
+        agents_for_mention = await memory.get_active_agents_for_user(pool_for_mention, user.id)
+        agent_names_for_mention = [a["name"].lower() for a in agents_for_mention]
+
     is_mention = (
         (bot_username and f"@{bot_username}".lower() in text.lower())
         or config.BOT_NAME.lower() in text.lower()
+        or any(name in text.lower() for name in agent_names_for_mention)
     )
     is_reply_to_bot = (
         message.reply_to_message is not None
