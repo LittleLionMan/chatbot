@@ -365,6 +365,20 @@ async def get_agent_state(pool: asyncpg.Pool, agent_id: int) -> dict[str, str]:
     return {r["key"]: r["value"] for r in rows}
 
 
+async def get_agent_state_by_name(pool: asyncpg.Pool, name: str) -> dict[str, str] | None:
+    row = await pool.fetchrow(
+        "SELECT id FROM agents WHERE LOWER(name) = LOWER($1) AND is_active = TRUE LIMIT 1",
+        name,
+    )
+    if not row:
+        return None
+    rows = await pool.fetch(
+        "SELECT key, value FROM agent_state WHERE agent_id = $1",
+        row["id"],
+    )
+    return {r["key"]: r["value"] for r in rows}
+
+
 async def set_agent_state(pool: asyncpg.Pool, agent_id: int, state: dict[str, str]) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():

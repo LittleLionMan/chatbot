@@ -29,8 +29,12 @@ Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
 Felder:
 - "instruction": Was soll der Agent tun? Vollständige, eigenständige Anweisung in natürlicher Sprache. So formulieren dass der Agent sie ohne weiteren Kontext ausführen kann. Maximal 400 Zeichen.
-- "state_keys": Liste von Schlüsseln die der Agent zwischen Läufen im Gedächtnis behalten soll. Immer enthalten: "last_run_summary". Weitere nach Bedarf — was muss der Agent wissen um beim nächsten Lauf sinnvoll weiterzumachen? Beispiele: "known_container_states", "last_script_version", "price_baseline", "open_issues".
-- "type": Kurzes Schlagwort für den Bereich. Beispiele: "monitoring", "research", "coding", "finance", "news", "market". Dient nur der Namenswahl.
+- "state_keys": Liste von Schlüsseln die der Agent zwischen Läufen im Gedächtnis behalten soll. Immer enthalten: "last_run_summary". Weitere nach Bedarf.
+- "data_reads": Liste von Datenbank-Lesevorgängen die vor jedem Lauf automatisch ausgeführt werden. Zwei Typen:
+  - {"type": "state", "agent_name": "..."} — liest den kompletten State eines anderen Agenten. Nutze das wenn dieser Agent die primäre Datenquelle ist.
+  - {"type": "namespace", "namespace": "...", "agent_name": "..."} — liest einen DB-Namespace eines anderen Agenten. Optional "key" für einzelne Einträge, Template-Variablen wie {{trigger_payload.ticker}} möglich.
+  Leer wenn der Agent keine fremden Daten braucht.
+- "type": Kurzes Schlagwort für den Bereich. Beispiele: "monitoring", "research", "coding", "finance", "news", "market".
 - "schedule": Cron-Expression (5 Felder). Beispiele: stündlich = "0 * * * *", täglich um 9 = "0 9 * * *", montags = "0 9 * * 1".
 - "target": "same" für denselben Chat, "dm" für Privatnachricht.
 - "wants_name": true wenn der User einen Namen erwähnt oder explizit fragt, false sonst.
@@ -41,13 +45,16 @@ Wenn kein sinnvoller Zeitplan erkennbar ist, setze schedule auf null.
 Beispiele:
 
 Eingabe: "Überwache meine Docker Container stündlich und sag mir wenn einer down ist"
-Output: {"instruction": "Prüfe den Status der laufenden Docker Container. Vergleiche mit dem letzten bekannten Zustand. Melde nur wenn sich etwas verändert hat — Container die neu down oder up sind.", "state_keys": ["last_run_summary", "known_container_states"], "type": "monitoring", "schedule": "0 * * * *", "target": "same", "wants_name": false, "suggested_name": null}
+Output: {"instruction": "Prüfe den Status der laufenden Docker Container. Vergleiche mit dem letzten bekannten Zustand. Melde nur wenn sich etwas verändert hat.", "state_keys": ["last_run_summary", "known_container_states"], "data_reads": [], "type": "monitoring", "schedule": "0 * * * *", "target": "same", "wants_name": false, "suggested_name": null}
 
-Eingabe: "Schreib mir jeden Montag ein kleines Python-Script das die größten Dateien in /var/log auflistet, und verbessere es wenn du Verbesserungspotenzial siehst"
-Output: {"instruction": "Erstelle oder verbessere ein Python-Script das die 10 größten Dateien in /var/log auflistet und ihre Größe leserlich formatiert. Wenn bereits eine Version existiert, prüfe ob Verbesserungen sinnvoll sind und liefere nur eine neue Version wenn ja.", "state_keys": ["last_run_summary", "current_script"], "type": "coding", "schedule": "0 9 * * 1", "target": "same", "wants_name": false, "suggested_name": null}
+Eingabe: "Erstelle täglich um 9 für jeweils ein Unternehmen aus Gordons Liste eine Fundamentalanalyse"
+Output: {"instruction": "Lies Gordons Unternehmensliste. Wähle ein Unternehmen ohne Fundamentalanalyse und erstelle eine vollständige Analyse.", "state_keys": ["last_run_summary", "analyzed_tickers"], "data_reads": [{"type": "state", "agent_name": "Gordon"}], "type": "finance", "schedule": "0 9 * * *", "target": "same", "wants_name": false, "suggested_name": null}
+
+Eingabe: "Analysiere täglich um 10 das Unternehmen das per Trigger-Payload als ticker übergeben wird"
+Output: {"instruction": "Erstelle eine Fundamentalanalyse für den per trigger_payload.ticker übergebenen Ticker.", "state_keys": ["last_run_summary"], "data_reads": [{"namespace": "companies", "key": "{{trigger_payload.ticker}}:criteria_match"}], "type": "finance", "schedule": "0 10 * * *", "target": "same", "wants_name": false, "suggested_name": null}
 
 Eingabe: "Beobachte RTX 4060 Ti Preise täglich unter 220€, nenn ihn Linus"
-Output: {"instruction": "Suche nach Angeboten für RTX 4060 Ti unter 220€ auf deutschen Sekundärmarkt-Plattformen. Vergleiche mit bekannten Fundstücken. Melde nur neue Treffer oder relevante Preisänderungen.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "type": "research", "schedule": "0 9 * * *", "target": "same", "wants_name": true, "suggested_name": "Linus"}"""
+Output: {"instruction": "Suche nach Angeboten für RTX 4060 Ti unter 220€ auf deutschen Sekundärmarkt-Plattformen. Vergleiche mit bekannten Fundstücken. Melde nur neue Treffer oder relevante Preisänderungen.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 9 * * *", "target": "same", "wants_name": true, "suggested_name": "Linus"}"""
 
 _NAME_RESOLUTION_SYSTEM = """Identifiziere welcher Agent aus der Liste gemeint ist.
 Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.
@@ -66,7 +73,7 @@ Mögliche Anfragen:
 - Allgemeine Ansprache → antworte im Stil von Bob
 
 Wenn du die Konfiguration änderst, gib immer das vollständige neue config-Objekt zurück — alle Felder, nicht nur die geänderten.
-Das config-Objekt hat die Felder: instruction, state_keys, type."""
+Das config-Objekt hat die Felder: instruction, state_keys, data_reads, type."""
 
 
 def _pick_name_for_topic(topic_type: str) -> str:
@@ -143,6 +150,7 @@ async def parse_agent_creation(
         agent_config = {
             "instruction": instruction,
             "state_keys": parsed.get("state_keys", ["last_run_summary"]),
+            "data_reads": parsed.get("data_reads", []),
             "type": parsed.get("type", "default"),
         }
 

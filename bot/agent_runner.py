@@ -56,32 +56,49 @@ async def _load_data_reads(
 ) -> dict[str, str]:
     result: dict[str, str] = {}
     for read in data_reads:
-        namespace = _resolve_template(read.get("namespace", ""), trigger_payload)
-        key = read.get("key", "")
+        read_type = read.get("type", "namespace")
         agent_name = read.get("agent_name")
 
-        target_agent_id: int = agent_id
-        if agent_name:
-            resolved = await memory.get_agent_id_by_name(pool, agent_name)
-            if resolved is None:
-                logger.warning("Agent %d data_read: agent_name '%s' not found, skipping", agent_id, agent_name)
+        if read_type == "state":
+            if not agent_name:
+                logger.warning("Agent %d data_read type=state missing agent_name, skipping", agent_id)
                 continue
-            target_agent_id = resolved
+            state = await memory.get_agent_state_by_name(pool, agent_name)
+            if state is None:
+                logger.warning("Agent %d data_read: agent '%s' not found or has no state", agent_id, agent_name)
+                continue
+            combined = "\n".join(f"{k}: {v}" for k, v in state.items() if k != "last_run_summary")
+            if combined:
+                result[f"state:{agent_name}"] = combined
+                logger.info("Agent %d pre-loaded state from '%s' (%d keys)", agent_id, agent_name, len(state))
 
-        if not key:
-            rows = await memory.query_agent_data(pool, namespace, agent_id=target_agent_id)
-            if rows:
-                combined = "\n".join(f"{r['key']}: {r['value']}" for r in rows)
-                label = f"db:{agent_name or 'self'}:{namespace}"
-                result[label] = combined
-                logger.info("Agent %d pre-loaded namespace %s from agent_id %d (%d entries)", agent_id, namespace, target_agent_id, len(rows))
         else:
-            key = _resolve_template(key, trigger_payload)
-            value = await memory.read_agent_data(pool, target_agent_id, namespace, key)
-            if value is not None:
-                label = f"db:{agent_name or 'self'}:{namespace}:{key}"
-                result[label] = value
-                logger.info("Agent %d pre-loaded %s/%s from agent_id %d", agent_id, namespace, key, target_agent_id)
+            namespace = _resolve_template(read.get("namespace", ""), trigger_payload)
+            key = read.get("key", "")
+
+            target_agent_id: int = agent_id
+            if agent_name:
+                resolved = await memory.get_agent_id_by_name(pool, agent_name)
+                if resolved is None:
+                    logger.warning("Agent %d data_read: agent_name '%s' not found, skipping", agent_id, agent_name)
+                    continue
+                target_agent_id = resolved
+
+            if not key:
+                rows = await memory.query_agent_data(pool, namespace, agent_id=target_agent_id)
+                if rows:
+                    combined = "\n".join(f"{r['key']}: {r['value']}" for r in rows)
+                    label = f"db:{agent_name or 'self'}:{namespace}"
+                    result[label] = combined
+                    logger.info("Agent %d pre-loaded namespace %s from agent_id %d (%d entries)", agent_id, namespace, target_agent_id, len(rows))
+            else:
+                key = _resolve_template(key, trigger_payload)
+                value = await memory.read_agent_data(pool, target_agent_id, namespace, key)
+                if value is not None:
+                    label = f"db:{agent_name or 'self'}:{namespace}:{key}"
+                    result[label] = value
+                    logger.info("Agent %d pre-loaded %s/%s from agent_id %d", agent_id, namespace, key, target_agent_id)
+
     return result
 
 
