@@ -76,6 +76,7 @@ async def _load_data_reads(
                 logger.warning("Agent %d data_read type=state missing agent_name, skipping", agent_id)
                 continue
             state = await memory.get_agent_state_by_name(pool, agent_name)
+            logger.warning("Agent %d data_read state from '%s': %r", agent_id, agent_name, state)
             if state is None:
                 logger.warning("Agent %d data_read: agent '%s' not found or has no state", agent_id, agent_name)
                 continue
@@ -83,6 +84,8 @@ async def _load_data_reads(
             if combined:
                 result[f"state:{agent_name}"] = combined
                 logger.info("Agent %d pre-loaded state from '%s' (%d keys)", agent_id, agent_name, len(state))
+            else:
+                logger.warning("Agent %d data_read state from '%s' was empty after filtering", agent_id, agent_name)
 
         else:
             namespace = _resolve_template(read.get("namespace", ""), trigger_payload)
