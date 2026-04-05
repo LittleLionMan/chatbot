@@ -10,26 +10,36 @@ from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
 
-_AGENT_RUN_SYSTEM = """Du führst einen automatischen Beobachtungsauftrag aus.
+_AGENT_WORK_SYSTEM = """Du führst einen automatischen Beobachtungsauftrag aus.
 Dir werden die Anweisung des Agenten, sein aktueller Gedächtnisstand und alle relevanten Daten aus der Datenbank übergeben.
 
-Antworte ausschließlich mit rohem JSON. Kein Text davor, kein Text danach, keine Markdown-Backticks, kein Codeblock. Der erste Charakter deiner Antwort muss { sein, der letzte }.
+Führe die Anweisung vollständig aus. Denke laut nach, recherchiere, analysiere.
+Schreibe dein Ergebnis als klaren Fließtext — was du gefunden hast, was sich geändert hat, was gespeichert werden soll und warum.
+Wichtig: Beschreibe explizit welche Daten du speichern möchtest und unter welchem Key."""
+
+_AGENT_STRUCTURE_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
+
+Dir wird das Arbeits-Ergebnis des Agenten übergeben. Extrahiere daraus die strukturierten Ausgaben.
+
+Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der letzte }.
 
 Felder:
-- "report": Dein Bericht in natürlicher Sprache. Wenn es nichts Neues gibt: "KEINE_AENDERUNG".
+- "report": Zusammenfassung des Laufs in 1-3 Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
 - "notify_user": true wenn der User benachrichtigt werden soll, false sonst.
-- "tool_calls": Liste von Tool-Aufrufen die nach diesem Lauf ausgeführt werden sollen. Leer wenn keine nötig.
+- "tool_calls": Liste aller Tool-Aufrufe die ausgeführt werden sollen.
 
-Verfügbare Tools in tool_calls:
-- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — speichert einen Wert persistent
-- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus, optional zeitverzögert
-- {"tool": "notify_user", "message": "..."} — sendet eine direkte Nachricht
+Verfügbare Tools:
+- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — speichert einen Wert persistent. Strings only, kein JSON als value.
+- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus.
+- {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
 
-Wichtig: Daten werden ausschließlich durch tool_calls persistent gespeichert. Was nur im report steht, ist nach diesem Lauf verloren. Wenn du Daten speichern willst, muss ein db_write-Tool-Call im tool_calls-Array stehen — eine Erwähnung im report reicht nicht.
-Daten aus der Datenbank werden dir automatisch vor dem Lauf übergeben — du musst sie nicht selbst lesen.
+Regeln:
+- Alles was der Agent speichern wollte muss als db_write erscheinen — sonst geht es verloren.
+- Wenn der Agent eine Liste pflegt, muss die vollständige aktualisierte Liste als ein db_write gespeichert werden.
+- notify_user nur true wenn der Agent explizit etwas Berichtenswertes gefunden hat.
 
-Beispiel-Output:
-{"report": "AAPL hat heute Quartalszahlen veröffentlicht. KGV jetzt bei 28.", "notify_user": true, "tool_calls": [{"tool": "db_write", "namespace": "companies", "key": "AAPL:last_check", "value": "2025-04-04"}, {"tool": "trigger_agent", "target_agent_name": "Analyst", "payload": {"ticker": "AAPL"}, "delay_minutes": 0}]}"""
+Beispiel:
+{"report": "3 neue Unternehmen gefunden und gespeichert.", "notify_user": true, "tool_calls": [{"tool": "db_write", "namespace": "watchlist", "key": "companies", "value": "ENPH, BE, FSLR"}, {"tool": "notify_user", "message": "3 neue Unternehmen in der Watchlist."}]}"""
 
 _MAX_SUMMARY_CHARS = 800
 
@@ -210,21 +220,32 @@ async def execute_agent(
 
         prompt = _build_run_prompt(config_data, state, injected_data)
 
-        raw_result = await brain.chat(
-            system=_AGENT_RUN_SYSTEM,
+        work_result = await brain.chat(
+            system=_AGENT_WORK_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=2048,
             use_web_search=True,
             web_search_max_uses=1,
-            caller=f"agent:{name}",
+            caller=f"agent_work:{name}",
+            pool=pool,
+        )
+
+        logger.debug("Agent %d (%s) work result: %r", agent_id, name, work_result[:200])
+
+        raw_structured = await brain.chat(
+            system=_AGENT_STRUCTURE_SYSTEM,
+            messages=[{"role": "user", "content": work_result}],
+            max_tokens=2048,
+            use_web_search=False,
+            caller=f"agent_structure:{name}",
             pool=pool,
         )
 
         try:
-            parsed_output = json.loads(clean_llm_json(raw_result))
+            parsed_output = json.loads(clean_llm_json(raw_structured))
         except Exception:
-            logger.warning("Agent %d (%s): JSON parse failed, raw output: %r", agent_id, name, raw_result[:300])
-            parsed_output = {"report": raw_result, "notify_user": True, "tool_calls": []}
+            logger.warning("Agent %d (%s): structure JSON parse failed: %r", agent_id, name, raw_structured[:300])
+            parsed_output = {"report": work_result, "notify_user": True, "tool_calls": []}
 
         report: str = parsed_output.get("report", "")
         notify_user: bool = parsed_output.get("notify_user", False)
