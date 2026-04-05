@@ -1,10 +1,10 @@
 from __future__ import annotations
 import asyncio
-import json
+import base64
 import logging
 import anthropic
 import asyncpg
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner, intent_classifier, agent_system_parser
 from bot.utils import parse_agent_config
@@ -36,6 +36,18 @@ def _last_bot_response(history: list[dict]) -> str | None:
     return None
 
 
+def _agent_keyboard(agent_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Status", callback_data=f"agent:status:{agent_id}"),
+            InlineKeyboardButton("Stoppen", callback_data=f"agent:stop:{agent_id}"),
+        ],
+        [
+            InlineKeyboardButton("Umbenennen", callback_data=f"agent:rename:{agent_id}"),
+        ],
+    ])
+
+
 async def _send_response(
     update: Update,
     response_text: str,
@@ -52,6 +64,81 @@ async def _send_response(
     except Exception as e:
         logger.warning("TTS failed, falling back to text: %s", e)
         await message.reply_text(response_text)
+
+
+async def _handle_file_content(
+    update: Update,
+    pool: asyncpg.Pool,
+    file_bytes: bytes,
+    media_type: str,
+    caption: str | None,
+    triggered_by_mention: bool,
+    detected_language: str = "de",
+) -> None:
+    message = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+    if not message or not user:
+        return
+    is_group = chat.type in ("group", "supergroup")
+    display = _display_name(user)
+    group_title = chat.title if is_group else None
+    await memory.upsert_user(pool, user.id, user.username, user.first_name, user.last_name)
+    if is_group:
+        await memory.upsert_group(pool, chat.id, group_title)
+    user_memories = await memory.get_memories(pool, "user", user.id)
+    group_memories = await memory.get_memories(pool, "group", chat.id) if is_group else []
+    bot_memories = await memory.get_memories(pool, "bot", chat.id) if is_group else []
+    reflection_memories = await memory.get_reflection_memories(pool, chat.id, user.id)
+    active_agents = await memory.get_active_agents_for_user(pool, user.id)
+    history = await memory.get_recent_messages(pool, chat.id)
+    system = brain.build_system_prompt(
+        user_memories,
+        group_memories,
+        bot_memories,
+        reflection_memories,
+        display,
+        group_title,
+        active_agents=active_agents,
+    )
+    llm_messages = brain.history_to_llm_messages(history)
+    user_text = caption if caption else "Was siehst du hier?"
+    b64 = base64.standard_b64encode(file_bytes).decode("utf-8")
+    content: list[dict] = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": b64,
+            },
+        },
+        {"type": "text", "text": user_text},
+    ]
+    llm_messages.append({"role": "user", "content": content})
+    try:
+        response = await brain.chat(
+            system=system,
+            messages=llm_messages,
+            caller="handler_file",
+            pool=pool,
+        )
+    except anthropic.RateLimitError:
+        if triggered_by_mention:
+            await message.reply_text(ratelimit.rate_limit_message())
+        return
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
+        if triggered_by_mention:
+            await message.reply_text(ratelimit.rate_limit_message())
+        return
+    text_turn = f"{display}: [Datei] {user_text}"
+    await memory.save_message(pool, chat.id, user.id, "user", text_turn)
+    await memory.save_message(pool, chat.id, None, "assistant", response)
+    if is_group:
+        await memory.touch_session_message(pool, chat.id)
+    if not triggered_by_mention and is_group:
+        await memory.update_spontaneous_timestamp(pool, chat.id)
+    await message.reply_text(response)
 
 
 async def _reply(
@@ -137,11 +224,10 @@ async def _reply(
         if not active_agents:
             await message.reply_text("Du hast keine aktiven Agenten.")
         else:
-            lines = [
-                f"{a['name']} — {parse_agent_config(a['config']).get('instruction', '')[:60]}… ({a['schedule']})"
-                for a in active_agents
-            ]
-            await message.reply_text("Deine aktiven Agenten:\n" + "\n".join(lines))
+            for agent in active_agents:
+                instruction = parse_agent_config(agent["config"]).get("instruction", "")[:80]
+                line = f"{agent['name']} — {instruction}… ({agent['schedule']})"
+                await message.reply_text(line, reply_markup=_agent_keyboard(agent["id"]))
         return
 
     if intent == "agent_stop":
@@ -181,7 +267,7 @@ async def _reply(
         if parsed_agent:
             suggested = parsed_agent.get("suggested_name")
             name = suggested if suggested else agent_parser._pick_name_for_topic(parsed_agent["config"]["type"])
-            await memory.create_agent(
+            agent_id = await memory.create_agent(
                 pool,
                 user_id=user.id,
                 target_chat_id=parsed_agent["target_chat_id"],
@@ -194,7 +280,8 @@ async def _reply(
             next_display = parsed_agent["next_run_display"].strftime("%d.%m.%Y %H:%M")
             await message.reply_text(
                 f"Agent angelegt: {name} — {instruction_preview}… — ab {next_display}.\n"
-                f"Soll er einen anderen Namen bekommen?"
+                f"Soll er einen anderen Namen bekommen?",
+                reply_markup=_agent_keyboard(agent_id),
             )
         else:
             await message.reply_text("Ich konnte keinen sinnvollen Beobachtungsauftrag erkennen. Versuch's konkreter.")
@@ -394,16 +481,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     pool: asyncpg.Pool = context.bot_data["pool"]
     message = update.effective_message
     chat = update.effective_chat
+    user = update.effective_user
 
-    if not message or not message.text:
+    if not message or not message.text or not user:
         return
 
     bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
     text = message.text.strip()
 
-    if is_group and greeter.is_greeting(text):
-        await message.reply_text(greeter.introduction_text())
+    pending_rename: int | None = context.user_data.get("awaiting_rename_agent_id")
+    if pending_rename is not None:
+        del context.user_data["awaiting_rename_agent_id"]
+        active_agents = await memory.get_active_agents_for_user(pool, user.id)
+        agent = next((a for a in active_agents if a["id"] == pending_rename), None)
+        if not agent:
+            await message.reply_text("Dieser Agent existiert nicht mehr.")
+        else:
+            old_name = agent["name"]
+            await memory.rename_agent(pool, pending_rename, text)
+            await message.reply_text(f"{old_name} heißt jetzt {text}.")
         return
 
     is_mention = (
@@ -437,3 +534,202 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await message.reply_text(ratelimit.rate_limit_message())
             return
         await _reply(update, pool, triggered_by_mention=True)
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    pool: asyncpg.Pool = context.bot_data["pool"]
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not message or not message.photo or not user:
+        return
+
+    bot_username = context.bot.username
+    is_group = chat.type in ("group", "supergroup")
+    caption = (message.caption or "").strip() or None
+
+    is_mention = bool(
+        caption and (
+            (bot_username and f"@{bot_username}".lower() in caption.lower())
+            or config.BOT_NAME.lower() in caption.lower()
+        )
+    )
+    is_reply_to_bot = (
+        message.reply_to_message is not None
+        and message.reply_to_message.from_user is not None
+        and message.reply_to_message.from_user.id == context.bot.id
+    )
+
+    triggered = not is_group or is_mention or is_reply_to_bot
+    if is_group and not triggered:
+        return
+
+    if ratelimit.is_rate_limited():
+        if triggered:
+            await message.reply_text(ratelimit.rate_limit_message())
+        return
+
+    photo = message.photo[-1]
+    photo_file = await photo.get_file()
+    file_bytes = await photo_file.download_as_bytearray()
+
+    await _handle_file_content(
+        update, pool,
+        file_bytes=bytes(file_bytes),
+        media_type="image/jpeg",
+        caption=caption,
+        triggered_by_mention=triggered,
+    )
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    pool: asyncpg.Pool = context.bot_data["pool"]
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not message or not message.document or not user:
+        return
+
+    doc = message.document
+    mime = doc.mime_type or ""
+    caption = (message.caption or "").strip() or None
+
+    SUPPORTED_MIME: dict[str, str] = {
+        "image/jpeg": "image/jpeg",
+        "image/png": "image/png",
+        "image/gif": "image/gif",
+        "image/webp": "image/webp",
+        "application/pdf": "application/pdf",
+    }
+
+    if mime not in SUPPORTED_MIME:
+        await message.reply_text(f"Dieses Dateiformat ({mime or 'unbekannt'}) kann ich noch nicht lesen.")
+        return
+
+    bot_username = context.bot.username
+    is_group = chat.type in ("group", "supergroup")
+
+    is_mention = bool(
+        caption and (
+            (bot_username and f"@{bot_username}".lower() in caption.lower())
+            or config.BOT_NAME.lower() in caption.lower()
+        )
+    )
+    is_reply_to_bot = (
+        message.reply_to_message is not None
+        and message.reply_to_message.from_user is not None
+        and message.reply_to_message.from_user.id == context.bot.id
+    )
+
+    triggered = not is_group or is_mention or is_reply_to_bot
+    if is_group and not triggered:
+        return
+
+    if ratelimit.is_rate_limited():
+        if triggered:
+            await message.reply_text(ratelimit.rate_limit_message())
+        return
+
+    doc_file = await doc.get_file()
+    file_bytes = await doc_file.download_as_bytearray()
+
+    await _handle_file_content(
+        update, pool,
+        file_bytes=bytes(file_bytes),
+        media_type=SUPPORTED_MIME[mime],
+        caption=caption,
+        triggered_by_mention=triggered,
+    )
+
+
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    pool: asyncpg.Pool = context.bot_data["pool"]
+    query = update.callback_query
+    user = update.effective_user
+
+    if not query or not user:
+        return
+
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "agent":
+        await query.answer()
+        return
+
+    action = parts[1]
+    try:
+        agent_id = int(parts[2])
+    except ValueError:
+        await query.answer()
+        return
+
+    active_agents = await memory.get_active_agents_for_user(pool, user.id)
+    agent = next((a for a in active_agents if a["id"] == agent_id), None)
+
+    if not agent:
+        await query.answer("Dieser Agent existiert nicht mehr.")
+        return
+
+    if action == "stop":
+        await memory.deactivate_agent(pool, agent_id)
+        await query.answer("Gestoppt.")
+        await query.edit_message_text(f"{agent['name']} wurde gestoppt.")
+
+    elif action == "status":
+        await query.answer("Einen Moment…")
+        state = await memory.get_agent_state(pool, agent_id)
+        agent_memories = await memory.get_agent_memories(pool, agent_id)
+        status_text, _, _ = await agent_parser.handle_agent_talk(
+            "Was ist dein aktueller Status und was hast du bisher beobachtet?",
+            agent,
+            state,
+            agent_memories,
+        )
+        await query.message.reply_text(
+            f"{agent['name']} — Status:\n\n{status_text}",
+            reply_markup=_agent_keyboard(agent_id),
+        )
+
+    elif action == "rename":
+        await query.answer()
+        context.user_data["awaiting_rename_agent_id"] = agent_id
+        await query.message.reply_text(
+            f"Wie soll {agent['name']} heißen? Schreib einfach den neuen Namen."
+        )
+
+
+async def handle_command_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(greeter.introduction_text())
+
+
+async def handle_command_agents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    pool: asyncpg.Pool = context.bot_data["pool"]
+    user = update.effective_user
+    if not user:
+        return
+    active_agents = await memory.get_active_agents_for_user(pool, user.id)
+    if not active_agents:
+        await update.effective_message.reply_text("Du hast keine aktiven Agenten.")
+        return
+    for agent in active_agents:
+        instruction = parse_agent_config(agent["config"]).get("instruction", "")[:80]
+        line = f"{agent['name']} — {instruction}… ({agent['schedule']})"
+        await update.effective_message.reply_text(
+            line,
+            reply_markup=_agent_keyboard(agent["id"]),
+        )
+
+
+async def handle_command_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    pool: asyncpg.Pool = context.bot_data["pool"]
+    user = update.effective_user
+    if not user:
+        return
+    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+    if not active_tasks:
+        await update.effective_message.reply_text("Du hast keine aktiven Aufgaben.")
+        return
+    lines = [f"{t['id']}. {t['description']} — {t['schedule']}" for t in active_tasks]
+    await update.effective_message.reply_text("Deine aktiven Aufgaben:\n" + "\n".join(lines))
