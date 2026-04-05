@@ -35,11 +35,13 @@ Verfügbare Tools:
 - {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
 
 Wann state_updates, wann db_write:
-- state_updates: Watchlists, Ticker-Listen, Flags, kurze Statusinfos — alles was andere Agents via State lesen sollen
+- state_updates: Watchlists, Ticker-Listen, Flags, kurze Statusinfos — alles was andere Agents via State lesen sollen. Niemals last_run_summary in state_updates — der Runner setzt ihn automatisch aus report.
 - db_write: Fundamentalanalysen, lange Berichte, Dokumente — alles was zu groß für den State ist
 
+report ist die Zusammenfassung für den User und muss immer befüllt sein wenn etwas passiert ist — auch wenn state_updates gesetzt werden. Ohne report kein Telegram-Feedback.
+
 Beispiel:
-{"report": "3 neue Unternehmen gefunden.", "notify_user": true, "state_updates": {"known_companies": "ORA, ENPH, BE"}, "tool_calls": [{"tool": "notify_user", "message": "3 neue Unternehmen in der Watchlist."}]}"""
+{"report": "3 neue Unternehmen gefunden und zur Watchlist hinzugefügt.", "notify_user": true, "state_updates": {"known_companies": "ORA, ENPH, BE"}, "tool_calls": [{"tool": "notify_user", "message": "3 neue Unternehmen in der Watchlist."}]}"""
 
 _MAX_SUMMARY_CHARS = 800
 
@@ -258,6 +260,8 @@ async def execute_agent(
             notify_user = False
 
         for k, v in state_updates.items():
+            if k == "last_run_summary":
+                continue
             state[k] = str(v)
             logger.info("Agent %d state_update: %s = %r", agent_id, k, str(v)[:80])
 
