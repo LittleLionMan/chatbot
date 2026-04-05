@@ -26,20 +26,20 @@ Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der le
 Felder:
 - "report": Zusammenfassung des Laufs in 1-3 Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
 - "notify_user": true wenn der User benachrichtigt werden soll, false sonst.
-- "tool_calls": Liste aller Tool-Aufrufe die ausgeführt werden sollen.
+- "state_updates": Dict mit Key-Value-Paaren die im Agent-State gespeichert werden. Für kompakte persistente Daten: Listen, Flags, kurze Zusammenfassungen die andere Agents lesen sollen. Alle Werte müssen Strings sein.
+- "tool_calls": Liste aller Tool-Aufrufe für große Dokumente oder Koordination.
 
 Verfügbare Tools:
-- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — speichert einen Wert persistent. Strings only, kein JSON als value.
+- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — nur für große Dokumente: vollständige Analysen, lange Berichte. Nicht für kompakte Listen.
 - {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus.
 - {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
 
-Regeln:
-- Alles was der Agent speichern wollte muss als db_write erscheinen — sonst geht es verloren.
-- Wenn der Agent eine Liste pflegt, muss die vollständige aktualisierte Liste als ein db_write gespeichert werden.
-- notify_user nur true wenn der Agent explizit etwas Berichtenswertes gefunden hat.
+Wann state_updates, wann db_write:
+- state_updates: Watchlists, Ticker-Listen, Flags, kurze Statusinfos — alles was andere Agents via State lesen sollen
+- db_write: Fundamentalanalysen, lange Berichte, Dokumente — alles was zu groß für den State ist
 
 Beispiel:
-{"report": "3 neue Unternehmen gefunden und gespeichert.", "notify_user": true, "tool_calls": [{"tool": "db_write", "namespace": "watchlist", "key": "companies", "value": "ENPH, BE, FSLR"}, {"tool": "notify_user", "message": "3 neue Unternehmen in der Watchlist."}]}"""
+{"report": "3 neue Unternehmen gefunden.", "notify_user": true, "state_updates": {"known_companies": "ORA, ENPH, BE"}, "tool_calls": [{"tool": "notify_user", "message": "3 neue Unternehmen in der Watchlist."}]}"""
 
 _MAX_SUMMARY_CHARS = 800
 
@@ -250,11 +250,16 @@ async def execute_agent(
         report: str = parsed_output.get("report", "")
         notify_user: bool = parsed_output.get("notify_user", False)
         tool_calls: list[dict] = parsed_output.get("tool_calls", [])
+        state_updates: dict[str, str] = parsed_output.get("state_updates", {})
 
         if report and report.strip() != "KEINE_AENDERUNG":
             state["last_run_summary"] = report
         else:
             notify_user = False
+
+        for k, v in state_updates.items():
+            state[k] = str(v)
+            logger.info("Agent %d state_update: %s = %r", agent_id, k, str(v)[:80])
 
         await memory.set_agent_state(pool, agent_id, state)
 
