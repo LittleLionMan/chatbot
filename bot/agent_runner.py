@@ -235,7 +235,7 @@ async def execute_agent(
             pool=pool,
         )
 
-        logger.debug("Agent %d (%s) work result: %r", agent_id, name, work_result[:200])
+        logger.warning("Agent %d (%s) work result: %r", agent_id, name, work_result[:300])
 
         raw_structured = await brain.chat(
             system=_AGENT_STRUCTURE_SYSTEM,
@@ -246,6 +246,7 @@ async def execute_agent(
             pool=pool,
         )
 
+        logger.warning("Agent %d (%s) structure result: %r", agent_id, name, raw_structured[:300])
         try:
             parsed_output = json.loads(clean_llm_json(raw_structured))
         except Exception:
