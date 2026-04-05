@@ -63,9 +63,8 @@ async def _call_anthropic(
             except Exception as log_err:
                 logger.warning("Token logging failed for caller %s: %s", caller, log_err)
 
-        return "".join(
-            block.text for block in response.content if block.type == "text"
-        )
+        text_blocks = [block.text for block in response.content if block.type == "text"]
+        return text_blocks[-1] if text_blocks else ""
     except anthropic.RateLimitError as e:
         retry_after = 3600
         if hasattr(e, "response") and e.response is not None:
