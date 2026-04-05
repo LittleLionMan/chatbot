@@ -15,7 +15,8 @@ Dir werden die Anweisung des Agenten, sein aktueller Gedächtnisstand und alle r
 
 Führe die Anweisung vollständig aus. Denke laut nach, recherchiere, analysiere.
 Schreibe dein Ergebnis als klaren Fließtext — was du gefunden hast, was sich geändert hat, was gespeichert werden soll und warum.
-Wichtig: Beschreibe explizit welche Daten du speichern möchtest und unter welchem Key."""
+Wichtig: Beschreibe explizit welche Daten du speichern möchtest und unter welchem Key.
+Halte den Gesamtoutput unter 1500 Wörtern. Präzision ist wichtiger als Vollständigkeit — lieber ein klares Fazit als eine erschöpfende Aufzählung."""
 
 _AGENT_STRUCTURE_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
 
@@ -24,7 +25,7 @@ Dir wird das Arbeits-Ergebnis des Agenten übergeben. Extrahiere daraus die stru
 Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der letzte }.
 
 Felder:
-- "report": Zusammenfassung des Laufs in 1-3 Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
+- "report": Zusammenfassung des Laufs in maximal 3 kurzen Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
 - "notify_user": true wenn der User benachrichtigt werden soll, false sonst.
 - "state_updates": Dict mit Key-Value-Paaren die im Agent-State gespeichert werden. Für kompakte persistente Daten: Listen, Flags, kurze Zusammenfassungen die andere Agents lesen sollen. Alle Werte müssen Strings sein.
 - "tool_calls": Liste aller Tool-Aufrufe für große Dokumente oder Koordination.
@@ -240,7 +241,7 @@ async def execute_agent(
         raw_structured = await brain.chat(
             system=_AGENT_STRUCTURE_SYSTEM,
             messages=[{"role": "user", "content": work_result}],
-            max_tokens=2048,
+            max_tokens=8192,
             use_web_search=False,
             caller=f"agent_structure:{name}",
             pool=pool,
@@ -281,7 +282,7 @@ async def execute_agent(
             message_text = await brain.chat(
                 system=relay_system,
                 messages=[{"role": "user", "content": report}],
-                max_tokens=1024,
+                max_tokens=2048,
                 caller=f"agent_relay:{name}",
                 pool=pool,
             )

@@ -195,7 +195,7 @@ async def handle_agent_talk(
             messages=[
                 {"role": "user", "content": f"{context}\n\nNutzeranfrage: {text}"},
             ],
-            max_tokens=1024,
+            max_tokens=2048,
         )
     except Exception as e:
         logger.warning("Agent talk LLM call failed: %s", e)

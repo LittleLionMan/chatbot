@@ -32,7 +32,7 @@ def _get_anthropic_client() -> anthropic.AsyncAnthropic:
 async def _call_anthropic(
     system: str,
     messages: list[dict],
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,
     use_web_search: bool = False,
     web_search_max_uses: int | None = None,
     caller: str = "unknown",
@@ -63,8 +63,9 @@ async def _call_anthropic(
             except Exception as log_err:
                 logger.warning("Token logging failed for caller %s: %s", caller, log_err)
 
-        text_blocks = [block.text for block in response.content if block.type == "text"]
-        return text_blocks[-1] if text_blocks else ""
+        return "".join(
+            block.text for block in response.content if block.type == "text"
+        )
     except anthropic.RateLimitError as e:
         retry_after = 3600
         if hasattr(e, "response") and e.response is not None:
@@ -84,7 +85,7 @@ async def _call_anthropic(
 async def chat(
     system: str,
     messages: list[dict],
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,
     use_web_search: bool = False,
     web_search_max_uses: int | None = None,
     caller: str = "unknown",

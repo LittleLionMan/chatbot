@@ -539,3 +539,52 @@ async def log_llm_usage(
         "INSERT INTO llm_usage (caller, input_tokens, output_tokens) VALUES ($1, $2, $3)",
         caller, input_tokens, output_tokens,
     )
+
+
+async def set_pending_agent_system(pool: asyncpg.Pool, user_id: int, plan_json: str) -> None:
+    await pool.execute(
+        """
+        INSERT INTO agent_state (agent_id, key, value, updated_at)
+        SELECT id, 'pending_system_plan', $2, NOW()
+        FROM agents WHERE user_id = $1 AND is_active = TRUE
+        LIMIT 1
+        ON CONFLICT (agent_id, key) DO NOTHING
+        """,
+        user_id, plan_json,
+    )
+    await pool.execute(
+        """
+        INSERT INTO users (telegram_id, username, first_name, last_name, timezone)
+        VALUES ($1, NULL, NULL, NULL, 'UTC')
+        ON CONFLICT (telegram_id) DO UPDATE SET last_seen_at = NOW()
+        """,
+        user_id,
+    )
+    await pool.execute(
+        "UPDATE users SET last_seen_at = NOW() WHERE telegram_id = $1",
+        user_id,
+    )
+
+
+async def get_pending_agent_system(pool: asyncpg.Pool, user_id: int) -> str | None:
+    row = await pool.fetchrow(
+        """
+        SELECT as2.value FROM agent_state as2
+        JOIN agents a ON a.id = as2.agent_id
+        WHERE a.user_id = $1 AND as2.key = 'pending_system_plan'
+        LIMIT 1
+        """,
+        user_id,
+    )
+    return row["value"] if row else None
+
+
+async def clear_pending_agent_system(pool: asyncpg.Pool, user_id: int) -> None:
+    await pool.execute(
+        """
+        DELETE FROM agent_state
+        WHERE key = 'pending_system_plan'
+          AND agent_id IN (SELECT id FROM agents WHERE user_id = $1)
+        """,
+        user_id,
+    )

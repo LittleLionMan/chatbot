@@ -65,7 +65,7 @@ async def _extract_reflections_for_session(
         raw = await brain.chat(
             system=extractor._REFLECTION_SYSTEM,
             messages=[{"role": "user", "content": f"Interaktion:\n{snippet}"}],
-            max_tokens=512,
+            max_tokens=1024,
         )
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):
