@@ -17,7 +17,6 @@
                 margin: 0;
                 padding: 0;
             }
-
             :root {
                 --bg: #0e0e0f;
                 --bg2: #161618;
@@ -41,7 +40,6 @@
                 --radius: 10px;
                 --radius-sm: 6px;
             }
-
             body {
                 font-family: var(--font);
                 background: var(--bg);
@@ -51,7 +49,6 @@
                 flex-direction: column;
                 overflow: hidden;
             }
-
             .topbar {
                 display: flex;
                 align-items: center;
@@ -78,22 +75,6 @@
                 background: var(--accent);
                 box-shadow: 0 0 6px var(--accent);
             }
-            .api-input {
-                font-family: var(--mono);
-                font-size: 11px;
-                background: var(--bg3);
-                border: 0.5px solid var(--border);
-                border-radius: var(--radius-sm);
-                padding: 4px 10px;
-                color: var(--text2);
-                width: 220px;
-            }
-            .api-input:focus {
-                outline: none;
-                border-color: var(--border2);
-                color: var(--text);
-            }
-
             nav {
                 display: flex;
                 gap: 2px;
@@ -120,22 +101,20 @@
                 background: var(--bg3);
                 color: var(--text);
             }
-
             .layout {
                 display: flex;
                 flex: 1;
                 overflow: hidden;
             }
-
             .sidebar {
-                width: 260px;
+                width: 240px;
                 flex-shrink: 0;
                 border-right: 0.5px solid var(--border);
                 overflow-y: auto;
                 padding: 1rem;
                 display: flex;
                 flex-direction: column;
-                gap: 6px;
+                gap: 4px;
             }
             .sidebar-search {
                 font-family: var(--font);
@@ -180,7 +159,6 @@
                 margin-top: 2px;
                 font-family: var(--mono);
             }
-
             .detail {
                 flex: 1;
                 overflow-y: auto;
@@ -190,11 +168,10 @@
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                height: 100%;
+                height: 200px;
                 font-size: 13px;
                 color: var(--text3);
             }
-
             .section {
                 display: none;
             }
@@ -203,7 +180,6 @@
                 height: 100%;
                 overflow: hidden;
             }
-
             .badge {
                 font-size: 10px;
                 font-family: var(--mono);
@@ -243,7 +219,6 @@
                 background: var(--accent-dim);
                 color: var(--accent);
             }
-
             .detail-block {
                 margin-bottom: 1.5rem;
             }
@@ -254,6 +229,9 @@
                 text-transform: uppercase;
                 letter-spacing: 0.08em;
                 margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
             }
             .detail-text {
                 font-size: 13px;
@@ -264,8 +242,50 @@
                 font-family: var(--mono);
                 font-size: 12px;
                 color: var(--text2);
+                margin-bottom: 2px;
             }
-
+            .action-bar {
+                display: flex;
+                gap: 8px;
+                margin-bottom: 1.25rem;
+                flex-wrap: wrap;
+            }
+            .btn {
+                font-family: var(--font);
+                font-size: 12px;
+                font-weight: 500;
+                padding: 5px 12px;
+                border-radius: var(--radius-sm);
+                border: 0.5px solid var(--border2);
+                background: transparent;
+                color: var(--text2);
+                cursor: pointer;
+                transition:
+                    background 0.1s,
+                    color 0.1s;
+            }
+            .btn:hover {
+                background: var(--bg3);
+                color: var(--text);
+            }
+            .btn-danger {
+                border-color: var(--red);
+                color: var(--red);
+            }
+            .btn-danger:hover {
+                background: var(--red-dim);
+            }
+            .btn-accent {
+                border-color: var(--accent);
+                color: var(--accent);
+            }
+            .btn-accent:hover {
+                background: var(--accent-dim);
+            }
+            .btn-sm {
+                font-size: 11px;
+                padding: 3px 8px;
+            }
             .state-grid {
                 display: grid;
                 gap: 6px;
@@ -276,32 +296,42 @@
                 border-radius: var(--radius-sm);
                 padding: 10px 12px;
             }
+            .state-card-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 4px;
+            }
             .state-key {
                 font-family: var(--mono);
                 font-size: 10px;
                 color: var(--text3);
-                margin-bottom: 4px;
             }
             .state-val {
                 font-size: 12px;
                 color: var(--text2);
                 line-height: 1.5;
                 word-break: break-word;
-                max-height: 120px;
-                overflow-y: auto;
                 white-space: pre-wrap;
             }
-
+            .state-actions {
+                display: flex;
+                gap: 4px;
+                opacity: 0;
+                transition: opacity 0.1s;
+            }
+            .state-card:hover .state-actions {
+                opacity: 1;
+            }
             .mem-list {
                 display: flex;
                 flex-direction: column;
-                gap: 0;
             }
             .mem-row {
                 display: flex;
                 align-items: flex-start;
                 gap: 10px;
-                padding: 9px 0;
+                padding: 8px 0;
                 border-bottom: 0.5px solid var(--border);
             }
             .mem-row:last-child {
@@ -320,7 +350,16 @@
                 flex-shrink: 0;
                 padding-top: 2px;
             }
-
+            .mem-actions {
+                display: flex;
+                gap: 4px;
+                opacity: 0;
+                transition: opacity 0.1s;
+                flex-shrink: 0;
+            }
+            .mem-row:hover .mem-actions {
+                opacity: 1;
+            }
             .metrics-grid {
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
@@ -345,11 +384,9 @@
                 color: var(--text);
                 letter-spacing: -0.02em;
             }
-
             .caller-list {
                 display: flex;
                 flex-direction: column;
-                gap: 0;
             }
             .caller-row {
                 display: flex;
@@ -389,7 +426,6 @@
                 width: 80px;
                 text-align: right;
             }
-
             .trigger-item {
                 background: var(--bg3);
                 border: 0.5px solid var(--border);
@@ -412,21 +448,108 @@
                 font-family: var(--mono);
                 color: var(--text3);
             }
-
-            .info-panel {
-                background: var(--bg2);
-                border-right: 0.5px solid var(--border);
-                width: 260px;
-                flex-shrink: 0;
-                overflow-y: auto;
-                padding: 1rem;
+            .modal-overlay {
+                display: none;
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.6);
+                z-index: 100;
+                align-items: center;
+                justify-content: center;
             }
-
-            .error-msg {
+            .modal-overlay.open {
+                display: flex;
+            }
+            .modal {
+                background: var(--bg2);
+                border: 0.5px solid var(--border2);
+                border-radius: var(--radius);
+                padding: 1.5rem;
+                width: 480px;
+                max-width: 90vw;
+            }
+            .modal-title {
+                font-size: 14px;
+                font-weight: 600;
+                margin-bottom: 1rem;
+            }
+            .modal-field {
+                margin-bottom: 12px;
+            }
+            .modal-label {
+                font-size: 11px;
+                font-family: var(--mono);
+                color: var(--text3);
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                margin-bottom: 4px;
+            }
+            .modal-input {
+                font-family: var(--font);
                 font-size: 13px;
+                width: 100%;
+                padding: 7px 10px;
+                background: var(--bg3);
+                border: 0.5px solid var(--border);
+                border-radius: var(--radius-sm);
+                color: var(--text);
+            }
+            .modal-input:focus {
+                outline: none;
+                border-color: var(--border2);
+            }
+            textarea.modal-input {
+                resize: vertical;
+                min-height: 80px;
+                font-family: var(--font);
+                line-height: 1.5;
+            }
+            .modal-select {
+                font-family: var(--font);
+                font-size: 13px;
+                width: 100%;
+                padding: 7px 10px;
+                background: var(--bg3);
+                border: 0.5px solid var(--border);
+                border-radius: var(--radius-sm);
+                color: var(--text);
+            }
+            .modal-actions {
+                display: flex;
+                gap: 8px;
+                justify-content: flex-end;
+                margin-top: 1rem;
+            }
+            .toast {
+                position: fixed;
+                bottom: 1.5rem;
+                right: 1.5rem;
+                background: var(--bg3);
+                border: 0.5px solid var(--border2);
+                border-radius: var(--radius-sm);
+                padding: 10px 16px;
+                font-size: 13px;
+                color: var(--text);
+                z-index: 200;
+                opacity: 0;
+                transform: translateY(8px);
+                transition:
+                    opacity 0.2s,
+                    transform 0.2s;
+                pointer-events: none;
+            }
+            .toast.show {
+                opacity: 1;
+                transform: translateY(0);
+            }
+            .toast.error {
+                border-color: var(--red);
                 color: var(--red);
-                padding: 1rem;
-                text-align: center;
+            }
+            .sub-tabs {
+                display: flex;
+                gap: 6px;
+                margin-bottom: 12px;
             }
         </style>
     </head>
@@ -446,12 +569,7 @@
                     Triggers
                 </button>
             </nav>
-            <input
-                class="api-input"
-                id="api-url"
-                value="http://localhost:8080"
-                placeholder="http://localhost:8080"
-            />
+            <div style="width: 180px"></div>
         </div>
 
         <div class="layout">
@@ -481,7 +599,7 @@
 
             <div class="section" id="section-memory">
                 <div class="sidebar" id="memory-sidebar">
-                    <div style="display: flex; gap: 6px; margin-bottom: 8px">
+                    <div class="sub-tabs">
                         <button
                             class="nav-btn active"
                             id="mem-users-btn"
@@ -532,14 +650,29 @@
             </div>
         </div>
 
+        <div
+            class="modal-overlay"
+            id="modal-overlay"
+            onclick="closeModal(event)"
+        >
+            <div class="modal" id="modal">
+                <div class="modal-title" id="modal-title"></div>
+                <div id="modal-body"></div>
+                <div class="modal-actions" id="modal-actions"></div>
+            </div>
+        </div>
+
+        <div class="toast" id="toast"></div>
+
         <script>
-            let BASE = "http://localhost:8080";
+            const BASE = "__API_URL__";
             let memMode = "users";
             let memData = { users: [], groups: [] };
             let agentsData = [];
+            let currentMemSubjectId = null;
 
-            function api(path) {
-                return fetch(BASE + path).then((r) => {
+            function api(path, opts) {
+                return fetch(BASE + path, opts).then((r) => {
                     if (!r.ok) throw new Error(r.status);
                     return r.json();
                 });
@@ -566,12 +699,30 @@
                 return Number(n).toLocaleString("de-DE");
             }
 
-            document
-                .getElementById("api-url")
-                .addEventListener("change", function () {
-                    BASE = this.value.replace(/\/$/, "");
-                    loadAll();
-                });
+            function toast(msg, isError) {
+                const el = document.getElementById("toast");
+                el.textContent = msg;
+                el.className = "toast show" + (isError ? " error" : "");
+                setTimeout(() => (el.className = "toast"), 2500);
+            }
+
+            function openModal(title, bodyHtml, actions) {
+                document.getElementById("modal-title").textContent = title;
+                document.getElementById("modal-body").innerHTML = bodyHtml;
+                document.getElementById("modal-actions").innerHTML = actions;
+                document.getElementById("modal-overlay").classList.add("open");
+            }
+
+            function closeModal(e) {
+                if (
+                    !e ||
+                    e.target === document.getElementById("modal-overlay")
+                ) {
+                    document
+                        .getElementById("modal-overlay")
+                        .classList.remove("open");
+                }
+            }
 
             document
                 .querySelectorAll(".nav-btn[data-section]")
@@ -595,7 +746,6 @@
                 .addEventListener("input", function () {
                     renderAgentsList(this.value);
                 });
-
             document
                 .getElementById("memory-search")
                 .addEventListener("input", function () {
@@ -608,7 +758,7 @@
                     renderAgentsList();
                 } catch (e) {
                     document.getElementById("agents-list").innerHTML =
-                        '<div class="error-msg">Backend nicht erreichbar.</div>';
+                        '<div style="font-size:13px;color:var(--red);padding:8px;">Backend nicht erreichbar.</div>';
                 }
             }
 
@@ -630,10 +780,7 @@
                     .map(
                         (a) => `
     <div class="sidebar-item" data-id="${a.id}" onclick="selectAgent(${a.id})">
-      <div class="si-name">
-        ${a.name}
-        <span class="badge ${a.is_active ? "badge-active" : "badge-inactive"}">${a.is_active ? "aktiv" : "inaktiv"}</span>
-      </div>
+      <div class="si-name">${a.name}<span class="badge ${a.is_active ? "badge-active" : "badge-inactive"}">${a.is_active ? "aktiv" : "inaktiv"}</span></div>
       <div class="si-meta">${a.type || "—"} · ${a.schedule}</div>
     </div>
   `,
@@ -658,8 +805,12 @@
                         api("/api/agents/" + id + "/state"),
                         api("/api/agents/" + id + "/memories"),
                     ]);
-                    const stateEntries = Object.entries(state);
                     detail.innerHTML = `
+      <div class="action-bar">
+        <button class="btn btn-accent" onclick="triggerAgent(${id})">Jetzt ausführen</button>
+        <button class="btn" onclick="editAgent(${id})">Bearbeiten</button>
+        ${a.is_active ? `<button class="btn btn-danger" onclick="stopAgent(${id})">Stoppen</button>` : ""}
+      </div>
       <div class="detail-block">
         <div class="detail-block-title">Anweisung</div>
         <div class="detail-text">${a.instruction || "—"}</div>
@@ -670,54 +821,268 @@
         <div class="detail-mono">Letzter Lauf: ${fmt(a.last_run_at)}</div>
         <div class="detail-mono">Nächster Lauf: ${fmt(a.next_run_at)}</div>
         <div class="detail-mono">Typ: ${a.type || "—"}</div>
-        ${a.data_reads && a.data_reads.length ? `<div class="detail-mono" style="margin-top:6px;">data_reads: ${JSON.stringify(a.data_reads)}</div>` : ""}
+        ${a.data_reads && a.data_reads.length ? `<div class="detail-mono" style="margin-top:4px;">data_reads: ${JSON.stringify(a.data_reads)}</div>` : ""}
       </div>
-      ${
-          stateEntries.length
-              ? `
-        <div class="detail-block">
-          <div class="detail-block-title">State (${stateEntries.length})</div>
-          <div class="state-grid">
-            ${stateEntries
-                .map(
-                    ([k, v]) => `
-              <div class="state-card">
-                <div class="state-key">${k}</div>
-                <div class="state-val">${v}</div>
-              </div>
-            `,
-                )
-                .join("")}
-          </div>
+      <div class="detail-block">
+        <div class="detail-block-title">
+          <span>State (${state.length})</span>
         </div>
-      `
-              : ""
-      }
-      ${
-          memories.length
-              ? `
-        <div class="detail-block">
-          <div class="detail-block-title">Memories (${memories.length})</div>
-          <div class="mem-list">
-            ${memories
-                .map(
-                    (m) => `
-              <div class="mem-row">
-                <div class="mem-text">${m.content}</div>
-                <div class="mem-date">${fmt(m.created_at)}</div>
-              </div>
-            `,
-                )
-                .join("")}
-          </div>
+        <div class="state-grid" id="state-grid-${id}">
+          ${state.map((s) => stateCardHtml(id, s)).join("")}
         </div>
-      `
-              : ""
-      }
+      </div>
+      <div class="detail-block">
+        <div class="detail-block-title">
+          <span>Memories (${memories.length})</span>
+          <button class="btn btn-sm" onclick="addAgentMemory(${id})">+ Neu</button>
+        </div>
+        <div class="mem-list" id="agent-mem-list-${id}">
+          ${memories.map((m) => agentMemRowHtml(id, m)).join("")}
+          ${!memories.length ? '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Keine Memories.</div>' : ""}
+        </div>
+      </div>
     `;
                 } catch (e) {
                     detail.innerHTML =
-                        '<div class="error-msg">Fehler beim Laden.</div>';
+                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
+                }
+            }
+
+            function stateCardHtml(agentId, s) {
+                const safeKey = encodeURIComponent(s.key);
+                return `<div class="state-card">
+    <div class="state-card-header">
+      <div class="state-key">${s.key}</div>
+      <div class="state-actions">
+        <button class="btn btn-sm" onclick="editStateEntry(${agentId}, '${s.key}', this)">Bearbeiten</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteStateEntry(${agentId}, '${s.key}', this)">Löschen</button>
+      </div>
+    </div>
+    <div class="state-val">${s.value}</div>
+  </div>`;
+            }
+
+            function agentMemRowHtml(agentId, m) {
+                return `<div class="mem-row">
+    <div class="mem-text">${m.content}</div>
+    <div class="mem-date">${fmt(m.created_at)}</div>
+    <div class="mem-actions">
+      <button class="btn btn-sm" onclick="editAgentMemory(${agentId}, '${escStr(m.content)}', this)">Edit</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteAgentMemory(${agentId}, '${escStr(m.content)}', this)">Del</button>
+    </div>
+  </div>`;
+            }
+
+            function escStr(s) {
+                return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+            }
+
+            async function triggerAgent(id) {
+                try {
+                    await api("/api/agents/" + id + "/trigger", {
+                        method: "POST",
+                    });
+                    toast(
+                        "Trigger gesetzt — läuft beim nächsten Scheduler-Durchlauf.",
+                    );
+                } catch (e) {
+                    toast("Fehler beim Triggern.", true);
+                }
+            }
+
+            async function stopAgent(id) {
+                if (!confirm("Agent wirklich stoppen?")) return;
+                try {
+                    await api("/api/agents/" + id, { method: "DELETE" });
+                    toast("Agent gestoppt.");
+                    await loadAgents();
+                    document.getElementById("agents-detail").innerHTML =
+                        '<div class="empty-state">Agent gestoppt.</div>';
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            function editAgent(id) {
+                const a = agentsData.find((x) => x.id === id);
+                openModal(
+                    "Agent bearbeiten",
+                    `
+    <div class="modal-field"><div class="modal-label">Name</div><input class="modal-input" id="edit-name" value="${a.name}" /></div>
+    <div class="modal-field"><div class="modal-label">Zeitplan (Cron)</div><input class="modal-input" id="edit-schedule" value="${a.schedule}" /></div>
+    <div class="modal-field"><div class="modal-label">Anweisung</div><textarea class="modal-input" id="edit-instruction">${a.instruction}</textarea></div>
+  `,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-accent" onclick="saveAgent(${id})">Speichern</button>
+  `,
+                );
+            }
+
+            async function saveAgent(id) {
+                const name = document.getElementById("edit-name").value.trim();
+                const schedule = document
+                    .getElementById("edit-schedule")
+                    .value.trim();
+                const instruction = document
+                    .getElementById("edit-instruction")
+                    .value.trim();
+                try {
+                    await api("/api/agents/" + id, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name, schedule, instruction }),
+                    });
+                    closeModal();
+                    toast("Agent gespeichert.");
+                    await loadAgents();
+                    selectAgent(id);
+                } catch (e) {
+                    toast("Fehler beim Speichern.", true);
+                }
+            }
+
+            function editStateEntry(agentId, key, btn) {
+                const card = btn.closest(".state-card");
+                const currentVal = card.querySelector(".state-val").textContent;
+                openModal(
+                    "State bearbeiten",
+                    `
+    <div class="modal-field"><div class="modal-label">Key</div><input class="modal-input" value="${key}" disabled /></div>
+    <div class="modal-field"><div class="modal-label">Value</div><textarea class="modal-input" id="edit-state-val" style="min-height:120px;">${currentVal}</textarea></div>
+  `,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-accent" onclick="saveStateEntry(${agentId}, '${key}')">Speichern</button>
+  `,
+                );
+            }
+
+            async function saveStateEntry(agentId, key) {
+                const value = document.getElementById("edit-state-val").value;
+                try {
+                    await api(
+                        "/api/agents/" +
+                            agentId +
+                            "/state/" +
+                            encodeURIComponent(key),
+                        {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ value }),
+                        },
+                    );
+                    closeModal();
+                    toast("State gespeichert.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            async function deleteStateEntry(agentId, key, btn) {
+                if (!confirm('State-Eintrag "' + key + '" wirklich löschen?'))
+                    return;
+                try {
+                    await api(
+                        "/api/agents/" +
+                            agentId +
+                            "/state/" +
+                            encodeURIComponent(key),
+                        { method: "DELETE" },
+                    );
+                    toast("State-Eintrag gelöscht.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            function addAgentMemory(agentId) {
+                openModal(
+                    "Memory hinzufügen",
+                    `
+    <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="new-mem-content" placeholder="Neue Beobachtung…"></textarea></div>
+  `,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-accent" onclick="saveNewAgentMemory(${agentId})">Speichern</button>
+  `,
+                );
+            }
+
+            async function saveNewAgentMemory(agentId) {
+                const content = document
+                    .getElementById("new-mem-content")
+                    .value.trim();
+                if (!content) return;
+                try {
+                    await api("/api/agents/" + agentId + "/memories", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            content,
+                            subject_type: "agent",
+                        }),
+                    });
+                    closeModal();
+                    toast("Memory gespeichert.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            function editAgentMemory(agentId, content, btn) {
+                openModal(
+                    "Memory bearbeiten",
+                    `
+    <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="edit-mem-content">${content}</textarea></div>
+  `,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-accent" onclick="saveAgentMemory(${agentId}, '${escStr(content)}')">Speichern</button>
+  `,
+                );
+            }
+
+            async function saveAgentMemory(agentId, oldContent) {
+                const newContent = document
+                    .getElementById("edit-mem-content")
+                    .value.trim();
+                try {
+                    await api("/api/agents/" + agentId + "/memories", {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            old_content: oldContent,
+                            new_content: newContent,
+                            subject_type: "agent",
+                        }),
+                    });
+                    closeModal();
+                    toast("Memory gespeichert.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            async function deleteAgentMemory(agentId, content, btn) {
+                if (!confirm("Memory wirklich löschen?")) return;
+                try {
+                    await api("/api/agents/" + agentId + "/memories", {
+                        method: "DELETE",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            content,
+                            subject_type: "agent",
+                        }),
+                    });
+                    toast("Memory gelöscht.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
                 }
             }
 
@@ -732,12 +1097,13 @@
                     renderMemoryList();
                 } catch (e) {
                     document.getElementById("memory-list").innerHTML =
-                        '<div class="error-msg">Fehler beim Laden.</div>';
+                        '<div style="font-size:13px;color:var(--red);padding:8px;">Fehler.</div>';
                 }
             }
 
             function switchMemMode(mode) {
                 memMode = mode;
+                currentMemSubjectId = null;
                 document
                     .getElementById("mem-users-btn")
                     .classList.toggle("active", mode === "users");
@@ -788,18 +1154,20 @@
                                 : i.title || String(i.id);
                         const sub =
                             memMode === "users"
-                                ? (i.username ? "@" + i.username + " · " : "") +
-                                  (i.timezone || "")
+                                ? i.username
+                                    ? "@" + i.username
+                                    : i.timezone
                                 : fmt(i.first_seen_at);
                         return `<div class="sidebar-item" data-id="${i.id}" onclick="selectMemItem(${i.id})">
       <div class="si-name">${name}</div>
-      <div class="si-meta">${sub}</div>
+      <div class="si-meta">${sub || ""}</div>
     </div>`;
                     })
                     .join("");
             }
 
             async function selectMemItem(id) {
+                currentMemSubjectId = id;
                 document
                     .querySelectorAll("#memory-list .sidebar-item")
                     .forEach((el) =>
@@ -808,6 +1176,10 @@
                             Number(el.dataset.id) === id,
                         ),
                     );
+                await renderMemDetail(id);
+            }
+
+            async function renderMemDetail(id) {
                 const detail = document.getElementById("memory-detail");
                 detail.innerHTML = '<div class="empty-state">Lade…</div>';
                 try {
@@ -816,41 +1188,154 @@
                             ? "/api/users/" + id + "/memories"
                             : "/api/groups/" + id + "/memories";
                     const mems = await api(endpoint);
-                    if (!mems.length) {
-                        detail.innerHTML =
-                            '<div class="empty-state">Keine Memories.</div>';
-                        return;
-                    }
+                    const availableTypes =
+                        memMode === "users"
+                            ? ["user", "reflection"]
+                            : ["group", "bot", "reflection"];
                     const byType = {};
+                    availableTypes.forEach((t) => (byType[t] = []));
                     mems.forEach((m) => {
-                        if (!byType[m.type]) byType[m.type] = [];
-                        byType[m.type].push(m);
+                        if (byType[m.type]) byType[m.type].push(m);
                     });
-                    detail.innerHTML = Object.entries(byType)
-                        .map(
-                            ([type, entries]) => `
-      <div class="detail-block">
-        <div class="detail-block-title">${type} (${entries.length})</div>
-        <div class="mem-list">
-          ${entries
-              .map(
-                  (m) => `
-            <div class="mem-row">
-              <span class="badge badge-${type}" style="flex-shrink:0;margin-top:2px;">${type}</span>
-              <div class="mem-text">${m.content}</div>
-              <div class="mem-date">${fmt(m.created_at)}</div>
-            </div>
-          `,
-              )
-              .join("")}
-        </div>
+
+                    detail.innerHTML = `
+      <div class="action-bar">
+        <button class="btn btn-accent" onclick="addMemory(${id})">+ Neue Memory</button>
       </div>
-    `,
-                        )
-                        .join("");
+      ${availableTypes
+          .map(
+              (type) => `
+        <div class="detail-block">
+          <div class="detail-block-title"><span>${type} (${byType[type].length})</span></div>
+          <div class="mem-list">
+            ${byType[type].map((m) => memRowHtml(id, m)).join("")}
+            ${!byType[type].length ? '<div style="font-size:13px;color:var(--text3);padding:6px 0;">Keine Einträge.</div>' : ""}
+          </div>
+        </div>
+      `,
+          )
+          .join("")}
+    `;
                 } catch (e) {
                     detail.innerHTML =
-                        '<div class="error-msg">Fehler beim Laden.</div>';
+                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
+                }
+            }
+
+            function memRowHtml(subjectId, m) {
+                return `<div class="mem-row">
+    <span class="badge badge-${m.type}" style="flex-shrink:0;margin-top:2px;">${m.type}</span>
+    <div class="mem-text">${m.content}</div>
+    <div class="mem-date">${fmt(m.created_at)}</div>
+    <div class="mem-actions">
+      <button class="btn btn-sm" onclick="editMemory(${subjectId}, '${escStr(m.content)}', '${m.type}')">Edit</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteMemory(${subjectId}, '${escStr(m.content)}', '${m.type}')">Del</button>
+    </div>
+  </div>`;
+            }
+
+            function addMemory(subjectId) {
+                const types =
+                    memMode === "users"
+                        ? ["user", "reflection"]
+                        : ["group", "bot", "reflection"];
+                openModal(
+                    "Memory hinzufügen",
+                    `
+    <div class="modal-field">
+      <div class="modal-label">Typ</div>
+      <select class="modal-select" id="new-mem-type">${types.map((t) => `<option value="${t}">${t}</option>`).join("")}</select>
+    </div>
+    <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="new-mem-content" placeholder="Inhalt…"></textarea></div>
+  `,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-accent" onclick="saveNewMemory(${subjectId})">Speichern</button>
+  `,
+                );
+            }
+
+            async function saveNewMemory(subjectId) {
+                const content = document
+                    .getElementById("new-mem-content")
+                    .value.trim();
+                const subject_type =
+                    document.getElementById("new-mem-type").value;
+                if (!content) return;
+                const endpoint =
+                    memMode === "users"
+                        ? "/api/users/" + subjectId + "/memories"
+                        : "/api/groups/" + subjectId + "/memories";
+                try {
+                    await api(endpoint, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ content, subject_type }),
+                    });
+                    closeModal();
+                    toast("Memory gespeichert.");
+                    renderMemDetail(subjectId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            function editMemory(subjectId, content, type) {
+                openModal(
+                    "Memory bearbeiten",
+                    `
+    <div class="modal-field"><div class="modal-label">Typ</div><input class="modal-input" value="${type}" disabled /></div>
+    <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="edit-mem-content">${content}</textarea></div>
+  `,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-accent" onclick="saveMemory(${subjectId}, '${escStr(content)}', '${type}')">Speichern</button>
+  `,
+                );
+            }
+
+            async function saveMemory(subjectId, oldContent, type) {
+                const newContent = document
+                    .getElementById("edit-mem-content")
+                    .value.trim();
+                const endpoint =
+                    memMode === "users"
+                        ? "/api/users/" + subjectId + "/memories"
+                        : "/api/groups/" + subjectId + "/memories";
+                try {
+                    await api(endpoint, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            old_content: oldContent,
+                            new_content: newContent,
+                            subject_type: type,
+                        }),
+                    });
+                    closeModal();
+                    toast("Memory gespeichert.");
+                    renderMemDetail(subjectId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            async function deleteMemory(subjectId, content, type) {
+                if (!confirm("Memory wirklich löschen?")) return;
+                const endpoint =
+                    memMode === "users"
+                        ? "/api/users/" + subjectId + "/memories"
+                        : "/api/groups/" + subjectId + "/memories";
+                try {
+                    await api(endpoint, {
+                        method: "DELETE",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ content, subject_type: type }),
+                    });
+                    toast("Memory gelöscht.");
+                    renderMemDetail(subjectId);
+                } catch (e) {
+                    toast("Fehler.", true);
                 }
             }
 
@@ -870,7 +1355,7 @@
         <div class="metric-card"><div class="metric-label">gesamt</div><div class="metric-value">${fmtNum(total)}</div></div>
       </div>
       <div class="detail-block">
-        <div class="detail-block-title">Nach Caller</div>
+        <div class="detail-block-title"><span>Nach Caller</span></div>
         <div class="caller-list">
           ${u.by_caller
               .map((c) => {
@@ -888,7 +1373,7 @@
     `;
                 } catch (e) {
                     el.innerHTML =
-                        '<div class="error-msg">Fehler beim Laden.</div>';
+                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
                 }
             }
 
@@ -917,7 +1402,7 @@
                         .join("");
                 } catch (e) {
                     el.innerHTML =
-                        '<div class="error-msg">Fehler beim Laden.</div>';
+                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
                 }
             }
 
@@ -927,7 +1412,6 @@
                 loadUsage();
                 loadTriggers();
             }
-
             loadAll();
         </script>
     </body>
