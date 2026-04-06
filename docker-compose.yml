@@ -58,7 +58,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "127.0.0.1:{DASHBOARD_PORT:-8080}:8080"
+      - "127.0.0.1:${DASHBOARD_PORT:-8080}:8080"
     depends_on:
       db:
         condition: service_healthy
