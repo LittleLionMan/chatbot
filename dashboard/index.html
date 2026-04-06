@@ -286,6 +286,46 @@
                 font-size: 11px;
                 padding: 3px 8px;
             }
+            .agent-tabs {
+                display: flex;
+                gap: 2px;
+                border-bottom: 0.5px solid var(--border);
+                margin-bottom: 1.25rem;
+            }
+            .agent-tab {
+                font-family: var(--font);
+                font-size: 12px;
+                font-weight: 500;
+                padding: 6px 14px;
+                border: none;
+                background: transparent;
+                color: var(--text3);
+                cursor: pointer;
+                border-bottom: 2px solid transparent;
+                margin-bottom: -0.5px;
+                transition: color 0.1s;
+            }
+            .agent-tab:hover {
+                color: var(--text2);
+            }
+            .agent-tab.active {
+                color: var(--text);
+                border-bottom-color: var(--accent);
+            }
+            .agent-tab-count {
+                font-size: 10px;
+                font-family: var(--mono);
+                background: var(--bg4);
+                border-radius: 99px;
+                padding: 1px 5px;
+                margin-left: 4px;
+            }
+            .tab-panel {
+                display: none;
+            }
+            .tab-panel.active {
+                display: block;
+            }
             .state-grid {
                 display: grid;
                 gap: 6px;
@@ -321,6 +361,55 @@
                 transition: opacity 0.1s;
             }
             .state-card:hover .state-actions {
+                opacity: 1;
+            }
+            .ns-block {
+                margin-bottom: 1.25rem;
+            }
+            .ns-label {
+                font-size: 10px;
+                font-family: var(--mono);
+                color: var(--text3);
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                margin-bottom: 6px;
+                padding-bottom: 4px;
+                border-bottom: 0.5px solid var(--border);
+            }
+            .data-card {
+                background: var(--bg3);
+                border: 0.5px solid var(--border);
+                border-radius: var(--radius-sm);
+                padding: 10px 12px;
+                margin-bottom: 6px;
+            }
+            .data-card-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 4px;
+            }
+            .data-key {
+                font-family: var(--mono);
+                font-size: 10px;
+                color: var(--text3);
+            }
+            .data-val {
+                font-size: 12px;
+                color: var(--text2);
+                line-height: 1.5;
+                word-break: break-word;
+                white-space: pre-wrap;
+                max-height: 140px;
+                overflow-y: auto;
+            }
+            .data-actions {
+                display: flex;
+                gap: 4px;
+                opacity: 0;
+                transition: opacity 0.1s;
+            }
+            .data-card:hover .data-actions {
                 opacity: 1;
             }
             .mem-list {
@@ -465,8 +554,10 @@
                 border: 0.5px solid var(--border2);
                 border-radius: var(--radius);
                 padding: 1.5rem;
-                width: 480px;
+                width: 520px;
                 max-width: 90vw;
+                max-height: 85vh;
+                overflow-y: auto;
             }
             .modal-title {
                 font-size: 14px;
@@ -501,7 +592,8 @@
             textarea.modal-input {
                 resize: vertical;
                 min-height: 80px;
-                font-family: var(--font);
+                font-family: var(--mono);
+                font-size: 12px;
                 line-height: 1.5;
             }
             .modal-select {
@@ -551,6 +643,11 @@
                 gap: 6px;
                 margin-bottom: 12px;
             }
+            .divider {
+                border: none;
+                border-top: 0.5px solid var(--border);
+                margin: 1.25rem 0;
+            }
         </style>
     </head>
     <body>
@@ -574,7 +671,7 @@
 
         <div class="layout">
             <div class="section active" id="section-agents">
-                <div class="sidebar" id="agents-sidebar">
+                <div class="sidebar">
                     <input
                         class="sidebar-search"
                         id="agents-search"
@@ -598,7 +695,7 @@
             </div>
 
             <div class="section" id="section-memory">
-                <div class="sidebar" id="memory-sidebar">
+                <div class="sidebar">
                     <div class="sub-tabs">
                         <button
                             class="nav-btn active"
@@ -655,7 +752,7 @@
             id="modal-overlay"
             onclick="closeModal(event)"
         >
-            <div class="modal" id="modal">
+            <div class="modal">
                 <div class="modal-title" id="modal-title"></div>
                 <div id="modal-body"></div>
                 <div class="modal-actions" id="modal-actions"></div>
@@ -669,7 +766,11 @@
             let memMode = "users";
             let memData = { users: [], groups: [] };
             let agentsData = [];
+            let currentAgentId = null;
             let currentMemSubjectId = null;
+            let _agentMemCache = {};
+            let _agentDataCache = {};
+            let _memCache = {};
 
             function api(path, opts) {
                 return fetch(BASE + path, opts).then((r) => {
@@ -789,6 +890,7 @@
             }
 
             async function selectAgent(id) {
+                currentAgentId = id;
                 document
                     .querySelectorAll("#agents-list .sidebar-item")
                     .forEach((el) =>
@@ -801,20 +903,32 @@
                 const detail = document.getElementById("agents-detail");
                 detail.innerHTML = '<div class="empty-state">Lade…</div>';
                 try {
-                    const [state, memories] = await Promise.all([
+                    const [state, data, memories] = await Promise.all([
                         api("/api/agents/" + id + "/state"),
+                        api("/api/agents/" + id + "/data"),
                         api("/api/agents/" + id + "/memories"),
                     ]);
+                    _agentMemCache[id] = memories;
+                    _agentDataCache[id] = data;
+
+                    const nsMap = {};
+                    data.forEach((d, i) => {
+                        if (!nsMap[d.namespace]) nsMap[d.namespace] = [];
+                        nsMap[d.namespace].push({ ...d, _idx: i });
+                    });
+
                     detail.innerHTML = `
       <div class="action-bar">
         <button class="btn btn-accent" onclick="triggerAgent(${id})">Jetzt ausführen</button>
         <button class="btn" onclick="editAgent(${id})">Bearbeiten</button>
         ${a.is_active ? `<button class="btn btn-danger" onclick="stopAgent(${id})">Stoppen</button>` : ""}
       </div>
+
       <div class="detail-block">
         <div class="detail-block-title">Anweisung</div>
         <div class="detail-text">${a.instruction || "—"}</div>
       </div>
+
       <div class="detail-block">
         <div class="detail-block-title">Meta</div>
         <div class="detail-mono">Zeitplan: ${a.schedule}</div>
@@ -823,58 +937,358 @@
         <div class="detail-mono">Typ: ${a.type || "—"}</div>
         ${a.data_reads && a.data_reads.length ? `<div class="detail-mono" style="margin-top:4px;">data_reads: ${JSON.stringify(a.data_reads)}</div>` : ""}
       </div>
-      <div class="detail-block">
-        <div class="detail-block-title">
-          <span>State (${state.length})</span>
+
+      <hr class="divider">
+
+      <div class="agent-tabs">
+        <button class="agent-tab active" data-tab="state">State <span class="agent-tab-count">${state.length}</span></button>
+        <button class="agent-tab" data-tab="data">Data <span class="agent-tab-count">${data.length}</span></button>
+        <button class="agent-tab" data-tab="memory">Memory <span class="agent-tab-count">${memories.length}</span></button>
+      </div>
+
+      <div class="tab-panel active" id="tab-state-${id}">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
         </div>
-        <div class="state-grid" id="state-grid-${id}">
-          ${state.map((s) => stateCardHtml(id, s)).join("")}
+        <div class="state-grid">
+          ${state
+              .map(
+                  (s) => `
+            <div class="state-card">
+              <div class="state-card-header">
+                <div class="state-key">${s.key}</div>
+                <div class="state-actions">
+                  <button class="btn btn-sm" data-agent="${id}" data-key="${s.key}" data-action="edit-state">Bearbeiten</button>
+                  <button class="btn btn-sm btn-danger" data-agent="${id}" data-key="${s.key}" data-action="delete-state">Löschen</button>
+                </div>
+              </div>
+              <div class="state-val">${s.value}</div>
+            </div>
+          `,
+              )
+              .join("")}
+          ${!state.length ? '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Kein State.</div>' : ""}
         </div>
       </div>
-      <div class="detail-block">
-        <div class="detail-block-title">
-          <span>Memories (${memories.length})</span>
-          <button class="btn btn-sm" onclick="addAgentMemory(${id})">+ Neu</button>
+
+      <div class="tab-panel" id="tab-data-${id}">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+          <button class="btn btn-sm btn-accent" onclick="addAgentData(${id})">+ Neu</button>
         </div>
-        <div class="mem-list" id="agent-mem-list-${id}">
-          ${memories.map((m) => agentMemRowHtml(id, m)).join("")}
+        ${
+            Object.keys(nsMap).length
+                ? Object.entries(nsMap)
+                      .map(
+                          ([ns, entries]) => `
+          <div class="ns-block">
+            <div class="ns-label">${ns}</div>
+            ${entries
+                .map(
+                    (d) => `
+              <div class="data-card">
+                <div class="data-card-header">
+                  <div class="data-key">${d.key} <span style="color:var(--text3);margin-left:6px;">${fmt(d.updated_at)}</span></div>
+                  <div class="data-actions">
+                    <button class="btn btn-sm" data-agent="${id}" data-idx="${d._idx}" data-action="edit-data">Bearbeiten</button>
+                    <button class="btn btn-sm btn-danger" data-agent="${id}" data-idx="${d._idx}" data-action="delete-data">Löschen</button>
+                  </div>
+                </div>
+                <div class="data-val">${d.value}</div>
+              </div>
+            `,
+                )
+                .join("")}
+          </div>
+        `,
+                      )
+                      .join("")
+                : '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Keine Data-Einträge.</div>'
+        }
+      </div>
+
+      <div class="tab-panel" id="tab-memory-${id}">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+          <button class="btn btn-sm btn-accent" onclick="addAgentMemory(${id})">+ Neu</button>
+        </div>
+        <div class="mem-list">
+          ${memories
+              .map(
+                  (m, i) => `
+            <div class="mem-row">
+              <div class="mem-text">${m.content}</div>
+              <div class="mem-date">${fmt(m.created_at)}</div>
+              <div class="mem-actions">
+                <button class="btn btn-sm" data-agent="${id}" data-idx="${i}" data-action="edit-agent-mem">Edit</button>
+                <button class="btn btn-sm btn-danger" data-agent="${id}" data-idx="${i}" data-action="delete-agent-mem">Del</button>
+              </div>
+            </div>
+          `,
+              )
+              .join("")}
           ${!memories.length ? '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Keine Memories.</div>' : ""}
         </div>
       </div>
     `;
+
+                    detail.querySelectorAll(".agent-tab").forEach((tab) => {
+                        tab.addEventListener("click", function () {
+                            detail
+                                .querySelectorAll(".agent-tab")
+                                .forEach((t) => t.classList.remove("active"));
+                            detail
+                                .querySelectorAll(".tab-panel")
+                                .forEach((p) => p.classList.remove("active"));
+                            this.classList.add("active");
+                            detail
+                                .querySelector(
+                                    "#tab-" + this.dataset.tab + "-" + id,
+                                )
+                                .classList.add("active");
+                        });
+                    });
+
+                    detail.addEventListener("click", handleAgentDetailClick);
                 } catch (e) {
                     detail.innerHTML =
                         '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
                 }
             }
 
-            function stateCardHtml(agentId, s) {
-                const safeKey = encodeURIComponent(s.key);
-                return `<div class="state-card">
-    <div class="state-card-header">
-      <div class="state-key">${s.key}</div>
-      <div class="state-actions">
-        <button class="btn btn-sm" onclick="editStateEntry(${agentId}, '${s.key}', this)">Bearbeiten</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteStateEntry(${agentId}, '${s.key}', this)">Löschen</button>
-      </div>
-    </div>
-    <div class="state-val">${s.value}</div>
-  </div>`;
+            function handleAgentDetailClick(e) {
+                const btn = e.target.closest("[data-action]");
+                if (!btn) return;
+                const action = btn.dataset.action;
+                const agentId = Number(btn.dataset.agent);
+
+                if (action === "edit-state") {
+                    const key = btn.dataset.key;
+                    const card = btn.closest(".state-card");
+                    const currentVal =
+                        card.querySelector(".state-val").textContent;
+                    openModal(
+                        "State bearbeiten",
+                        `
+      <div class="modal-field"><div class="modal-label">Key</div><input class="modal-input" value="${key}" disabled /></div>
+      <div class="modal-field"><div class="modal-label">Value</div><textarea class="modal-input" id="edit-state-val" style="min-height:140px;">${currentVal}</textarea></div>
+    `,
+                        `
+      <button class="btn" onclick="closeModal()">Abbrechen</button>
+      <button class="btn btn-accent" onclick="saveStateEntry(${agentId}, '${key}')">Speichern</button>
+    `,
+                    );
+                } else if (action === "delete-state") {
+                    const key = btn.dataset.key;
+                    if (
+                        !confirm(
+                            'State-Eintrag "' + key + '" wirklich löschen?',
+                        )
+                    )
+                        return;
+                    api(
+                        "/api/agents/" +
+                            agentId +
+                            "/state/" +
+                            encodeURIComponent(key),
+                        { method: "DELETE" },
+                    )
+                        .then(() => {
+                            toast("State-Eintrag gelöscht.");
+                            selectAgent(agentId);
+                        })
+                        .catch(() => toast("Fehler.", true));
+                } else if (action === "edit-data") {
+                    const idx = Number(btn.dataset.idx);
+                    const d = _agentDataCache[agentId][idx];
+                    openModal(
+                        "Data bearbeiten",
+                        `
+      <div class="modal-field"><div class="modal-label">Namespace</div><input class="modal-input" value="${d.namespace}" disabled /></div>
+      <div class="modal-field"><div class="modal-label">Key</div><input class="modal-input" value="${d.key}" disabled /></div>
+      <div class="modal-field"><div class="modal-label">Value</div><textarea class="modal-input" id="edit-data-val" style="min-height:200px;">${d.value}</textarea></div>
+    `,
+                        `
+      <button class="btn" onclick="closeModal()">Abbrechen</button>
+      <button class="btn btn-accent" onclick="saveAgentData(${agentId}, ${idx})">Speichern</button>
+    `,
+                    );
+                } else if (action === "delete-data") {
+                    const idx = Number(btn.dataset.idx);
+                    const d = _agentDataCache[agentId][idx];
+                    if (
+                        !confirm(
+                            'Data-Eintrag "' +
+                                d.namespace +
+                                "/" +
+                                d.key +
+                                '" wirklich löschen?',
+                        )
+                    )
+                        return;
+                    api(
+                        "/api/agents/" +
+                            agentId +
+                            "/data/" +
+                            encodeURIComponent(d.namespace) +
+                            "/" +
+                            encodeURIComponent(d.key),
+                        { method: "DELETE" },
+                    )
+                        .then(() => {
+                            toast("Eintrag gelöscht.");
+                            selectAgent(agentId);
+                        })
+                        .catch(() => toast("Fehler.", true));
+                } else if (action === "edit-agent-mem") {
+                    const idx = Number(btn.dataset.idx);
+                    const mem = _agentMemCache[agentId][idx];
+                    openModal(
+                        "Memory bearbeiten",
+                        `
+      <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="edit-mem-content" style="min-height:100px;">${mem.content}</textarea></div>
+    `,
+                        `
+      <button class="btn" onclick="closeModal()">Abbrechen</button>
+      <button class="btn btn-accent" onclick="saveAgentMemory(${agentId}, ${idx})">Speichern</button>
+    `,
+                    );
+                } else if (action === "delete-agent-mem") {
+                    const idx = Number(btn.dataset.idx);
+                    const mem = _agentMemCache[agentId][idx];
+                    if (!confirm("Memory wirklich löschen?")) return;
+                    api("/api/agents/" + agentId + "/memories", {
+                        method: "DELETE",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            content: mem.content,
+                            subject_type: "agent",
+                        }),
+                    })
+                        .then(() => {
+                            toast("Memory gelöscht.");
+                            selectAgent(agentId);
+                        })
+                        .catch(() => toast("Fehler.", true));
+                }
             }
 
-            function agentMemRowHtml(agentId, m) {
-                return `<div class="mem-row">
-    <div class="mem-text">${m.content}</div>
-    <div class="mem-date">${fmt(m.created_at)}</div>
-    <div class="mem-actions">
-      <button class="btn btn-sm" onclick="editAgentMemory(${agentId}, '${escStr(m.content)}', this)">Edit</button>
-      <button class="btn btn-sm btn-danger" onclick="deleteAgentMemory(${agentId}, '${escStr(m.content)}', this)">Del</button>
-    </div>
-  </div>`;
+            async function saveStateEntry(agentId, key) {
+                const value = document.getElementById("edit-state-val").value;
+                try {
+                    await api(
+                        "/api/agents/" +
+                            agentId +
+                            "/state/" +
+                            encodeURIComponent(key),
+                        {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ value }),
+                        },
+                    );
+                    closeModal();
+                    toast("State gespeichert.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
             }
 
-            function escStr(s) {
-                return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+            async function saveAgentData(agentId, idx) {
+                const d = _agentDataCache[agentId][idx];
+                const value = document.getElementById("edit-data-val").value;
+                try {
+                    await api(
+                        "/api/agents/" +
+                            agentId +
+                            "/data/" +
+                            encodeURIComponent(d.namespace) +
+                            "/" +
+                            encodeURIComponent(d.key),
+                        {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ value }),
+                        },
+                    );
+                    closeModal();
+                    toast("Gespeichert.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            function addAgentData(agentId) {
+                const existing = _agentDataCache[agentId] || [];
+                const namespaces = [
+                    ...new Set(existing.map((d) => d.namespace)),
+                ];
+                openModal(
+                    "Data-Eintrag hinzufügen",
+                    `
+    <div class="modal-field">
+      <div class="modal-label">Namespace</div>
+      <input class="modal-input" id="new-data-ns" list="ns-suggestions" placeholder="z.B. analyses" />
+      <datalist id="ns-suggestions">${namespaces.map((ns) => `<option value="${ns}">`).join("")}</datalist>
+    </div>
+    <div class="modal-field"><div class="modal-label">Key</div><input class="modal-input" id="new-data-key" placeholder="z.B. EOSE" /></div>
+    <div class="modal-field"><div class="modal-label">Value</div><textarea class="modal-input" id="new-data-val" style="min-height:120px;" placeholder="Inhalt…"></textarea></div>
+  `,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-accent" onclick="saveNewAgentData(${agentId})">Speichern</button>
+  `,
+                );
+            }
+
+            async function saveNewAgentData(agentId) {
+                const namespace = document
+                    .getElementById("new-data-ns")
+                    .value.trim();
+                const key = document
+                    .getElementById("new-data-key")
+                    .value.trim();
+                const value = document
+                    .getElementById("new-data-val")
+                    .value.trim();
+                if (!namespace || !key || !value) {
+                    toast("Namespace, Key und Value sind pflicht.", true);
+                    return;
+                }
+                try {
+                    await api("/api/agents/" + agentId + "/data", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ namespace, key, value }),
+                    });
+                    closeModal();
+                    toast("Eintrag gespeichert.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            async function saveAgentMemory(agentId, idx) {
+                const mem = _agentMemCache[agentId][idx];
+                const newContent = document
+                    .getElementById("edit-mem-content")
+                    .value.trim();
+                try {
+                    await api("/api/agents/" + agentId + "/memories", {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            old_content: mem.content,
+                            new_content: newContent,
+                            subject_type: "agent",
+                        }),
+                    });
+                    closeModal();
+                    toast("Memory gespeichert.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
             }
 
             async function triggerAgent(id) {
@@ -910,7 +1324,7 @@
                     `
     <div class="modal-field"><div class="modal-label">Name</div><input class="modal-input" id="edit-name" value="${a.name}" /></div>
     <div class="modal-field"><div class="modal-label">Zeitplan (Cron)</div><input class="modal-input" id="edit-schedule" value="${a.schedule}" /></div>
-    <div class="modal-field"><div class="modal-label">Anweisung</div><textarea class="modal-input" id="edit-instruction">${a.instruction}</textarea></div>
+    <div class="modal-field"><div class="modal-label">Anweisung</div><textarea class="modal-input" id="edit-instruction" style="min-height:140px;">${a.instruction}</textarea></div>
   `,
                     `
     <button class="btn" onclick="closeModal()">Abbrechen</button>
@@ -939,62 +1353,6 @@
                     selectAgent(id);
                 } catch (e) {
                     toast("Fehler beim Speichern.", true);
-                }
-            }
-
-            function editStateEntry(agentId, key, btn) {
-                const card = btn.closest(".state-card");
-                const currentVal = card.querySelector(".state-val").textContent;
-                openModal(
-                    "State bearbeiten",
-                    `
-    <div class="modal-field"><div class="modal-label">Key</div><input class="modal-input" value="${key}" disabled /></div>
-    <div class="modal-field"><div class="modal-label">Value</div><textarea class="modal-input" id="edit-state-val" style="min-height:120px;">${currentVal}</textarea></div>
-  `,
-                    `
-    <button class="btn" onclick="closeModal()">Abbrechen</button>
-    <button class="btn btn-accent" onclick="saveStateEntry(${agentId}, '${key}')">Speichern</button>
-  `,
-                );
-            }
-
-            async function saveStateEntry(agentId, key) {
-                const value = document.getElementById("edit-state-val").value;
-                try {
-                    await api(
-                        "/api/agents/" +
-                            agentId +
-                            "/state/" +
-                            encodeURIComponent(key),
-                        {
-                            method: "PATCH",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ value }),
-                        },
-                    );
-                    closeModal();
-                    toast("State gespeichert.");
-                    selectAgent(agentId);
-                } catch (e) {
-                    toast("Fehler.", true);
-                }
-            }
-
-            async function deleteStateEntry(agentId, key, btn) {
-                if (!confirm('State-Eintrag "' + key + '" wirklich löschen?'))
-                    return;
-                try {
-                    await api(
-                        "/api/agents/" +
-                            agentId +
-                            "/state/" +
-                            encodeURIComponent(key),
-                        { method: "DELETE" },
-                    );
-                    toast("State-Eintrag gelöscht.");
-                    selectAgent(agentId);
-                } catch (e) {
-                    toast("Fehler.", true);
                 }
             }
 
@@ -1027,59 +1385,6 @@
                     });
                     closeModal();
                     toast("Memory gespeichert.");
-                    selectAgent(agentId);
-                } catch (e) {
-                    toast("Fehler.", true);
-                }
-            }
-
-            function editAgentMemory(agentId, content, btn) {
-                openModal(
-                    "Memory bearbeiten",
-                    `
-    <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="edit-mem-content">${content}</textarea></div>
-  `,
-                    `
-    <button class="btn" onclick="closeModal()">Abbrechen</button>
-    <button class="btn btn-accent" onclick="saveAgentMemory(${agentId}, '${escStr(content)}')">Speichern</button>
-  `,
-                );
-            }
-
-            async function saveAgentMemory(agentId, oldContent) {
-                const newContent = document
-                    .getElementById("edit-mem-content")
-                    .value.trim();
-                try {
-                    await api("/api/agents/" + agentId + "/memories", {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            old_content: oldContent,
-                            new_content: newContent,
-                            subject_type: "agent",
-                        }),
-                    });
-                    closeModal();
-                    toast("Memory gespeichert.");
-                    selectAgent(agentId);
-                } catch (e) {
-                    toast("Fehler.", true);
-                }
-            }
-
-            async function deleteAgentMemory(agentId, content, btn) {
-                if (!confirm("Memory wirklich löschen?")) return;
-                try {
-                    await api("/api/agents/" + agentId + "/memories", {
-                        method: "DELETE",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            content,
-                            subject_type: "agent",
-                        }),
-                    });
-                    toast("Memory gelöscht.");
                     selectAgent(agentId);
                 } catch (e) {
                     toast("Fehler.", true);
@@ -1188,14 +1493,16 @@
                             ? "/api/users/" + id + "/memories"
                             : "/api/groups/" + id + "/memories";
                     const mems = await api(endpoint);
+                    _memCache[id] = mems;
                     const availableTypes =
                         memMode === "users"
                             ? ["user", "reflection"]
                             : ["group", "bot", "reflection"];
                     const byType = {};
                     availableTypes.forEach((t) => (byType[t] = []));
-                    mems.forEach((m) => {
-                        if (byType[m.type]) byType[m.type].push(m);
+                    mems.forEach((m, i) => {
+                        if (byType[m.type])
+                            byType[m.type].push({ ...m, _globalIdx: i });
                     });
 
                     detail.innerHTML = `
@@ -1208,7 +1515,21 @@
         <div class="detail-block">
           <div class="detail-block-title"><span>${type} (${byType[type].length})</span></div>
           <div class="mem-list">
-            ${byType[type].map((m) => memRowHtml(id, m)).join("")}
+            ${byType[type]
+                .map(
+                    (m) => `
+              <div class="mem-row">
+                <span class="badge badge-${m.type}" style="flex-shrink:0;margin-top:2px;">${m.type}</span>
+                <div class="mem-text">${m.content}</div>
+                <div class="mem-date">${fmt(m.created_at)}</div>
+                <div class="mem-actions">
+                  <button class="btn btn-sm" data-subject="${id}" data-idx="${m._globalIdx}" data-action="edit-mem">Edit</button>
+                  <button class="btn btn-sm btn-danger" data-subject="${id}" data-idx="${m._globalIdx}" data-action="delete-mem">Del</button>
+                </div>
+              </div>
+            `,
+                )
+                .join("")}
             ${!byType[type].length ? '<div style="font-size:13px;color:var(--text3);padding:6px 0;">Keine Einträge.</div>' : ""}
           </div>
         </div>
@@ -1216,22 +1537,80 @@
           )
           .join("")}
     `;
+                    detail.addEventListener("click", handleMemDetailClick);
                 } catch (e) {
                     detail.innerHTML =
                         '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
                 }
             }
 
-            function memRowHtml(subjectId, m) {
-                return `<div class="mem-row">
-    <span class="badge badge-${m.type}" style="flex-shrink:0;margin-top:2px;">${m.type}</span>
-    <div class="mem-text">${m.content}</div>
-    <div class="mem-date">${fmt(m.created_at)}</div>
-    <div class="mem-actions">
-      <button class="btn btn-sm" onclick="editMemory(${subjectId}, '${escStr(m.content)}', '${m.type}')">Edit</button>
-      <button class="btn btn-sm btn-danger" onclick="deleteMemory(${subjectId}, '${escStr(m.content)}', '${m.type}')">Del</button>
-    </div>
-  </div>`;
+            function handleMemDetailClick(e) {
+                const btn = e.target.closest("[data-action]");
+                if (!btn) return;
+                const action = btn.dataset.action;
+                const subjectId = Number(btn.dataset.subject);
+                const idx = Number(btn.dataset.idx);
+                const mem = _memCache[subjectId][idx];
+                if (!mem) return;
+                if (action === "edit-mem") {
+                    openModal(
+                        "Memory bearbeiten",
+                        `
+      <div class="modal-field"><div class="modal-label">Typ</div><input class="modal-input" value="${mem.type}" disabled /></div>
+      <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="edit-mem-content" style="min-height:100px;">${mem.content}</textarea></div>
+    `,
+                        `
+      <button class="btn" onclick="closeModal()">Abbrechen</button>
+      <button class="btn btn-accent" onclick="saveMemory(${subjectId}, ${idx})">Speichern</button>
+    `,
+                    );
+                } else if (action === "delete-mem") {
+                    if (!confirm("Memory wirklich löschen?")) return;
+                    const endpoint =
+                        memMode === "users"
+                            ? "/api/users/" + subjectId + "/memories"
+                            : "/api/groups/" + subjectId + "/memories";
+                    api(endpoint, {
+                        method: "DELETE",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            content: mem.content,
+                            subject_type: mem.type,
+                        }),
+                    })
+                        .then(() => {
+                            toast("Memory gelöscht.");
+                            renderMemDetail(subjectId);
+                        })
+                        .catch(() => toast("Fehler.", true));
+                }
+            }
+
+            async function saveMemory(subjectId, idx) {
+                const mem = _memCache[subjectId][idx];
+                const newContent = document
+                    .getElementById("edit-mem-content")
+                    .value.trim();
+                const endpoint =
+                    memMode === "users"
+                        ? "/api/users/" + subjectId + "/memories"
+                        : "/api/groups/" + subjectId + "/memories";
+                try {
+                    await api(endpoint, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            old_content: mem.content,
+                            new_content: newContent,
+                            subject_type: mem.type,
+                        }),
+                    });
+                    closeModal();
+                    toast("Memory gespeichert.");
+                    renderMemDetail(subjectId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
             }
 
             function addMemory(subjectId) {
@@ -1274,65 +1653,6 @@
                     });
                     closeModal();
                     toast("Memory gespeichert.");
-                    renderMemDetail(subjectId);
-                } catch (e) {
-                    toast("Fehler.", true);
-                }
-            }
-
-            function editMemory(subjectId, content, type) {
-                openModal(
-                    "Memory bearbeiten",
-                    `
-    <div class="modal-field"><div class="modal-label">Typ</div><input class="modal-input" value="${type}" disabled /></div>
-    <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="edit-mem-content">${content}</textarea></div>
-  `,
-                    `
-    <button class="btn" onclick="closeModal()">Abbrechen</button>
-    <button class="btn btn-accent" onclick="saveMemory(${subjectId}, '${escStr(content)}', '${type}')">Speichern</button>
-  `,
-                );
-            }
-
-            async function saveMemory(subjectId, oldContent, type) {
-                const newContent = document
-                    .getElementById("edit-mem-content")
-                    .value.trim();
-                const endpoint =
-                    memMode === "users"
-                        ? "/api/users/" + subjectId + "/memories"
-                        : "/api/groups/" + subjectId + "/memories";
-                try {
-                    await api(endpoint, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            old_content: oldContent,
-                            new_content: newContent,
-                            subject_type: type,
-                        }),
-                    });
-                    closeModal();
-                    toast("Memory gespeichert.");
-                    renderMemDetail(subjectId);
-                } catch (e) {
-                    toast("Fehler.", true);
-                }
-            }
-
-            async function deleteMemory(subjectId, content, type) {
-                if (!confirm("Memory wirklich löschen?")) return;
-                const endpoint =
-                    memMode === "users"
-                        ? "/api/users/" + subjectId + "/memories"
-                        : "/api/groups/" + subjectId + "/memories";
-                try {
-                    await api(endpoint, {
-                        method: "DELETE",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ content, subject_type: type }),
-                    });
-                    toast("Memory gelöscht.");
                     renderMemDetail(subjectId);
                 } catch (e) {
                     toast("Fehler.", true);
@@ -1402,7 +1722,7 @@
                         .join("");
                 } catch (e) {
                     el.innerHTML =
-                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
+                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
                 }
             }
 

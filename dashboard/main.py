@@ -232,6 +232,59 @@ async def delete_agent_memory(agent_id: int, body: MemoryBody) -> dict:
     return {"ok": True}
 
 
+class AgentDataBody(BaseModel):
+    namespace: str
+    key: str
+    value: str
+
+
+class AgentDataPatch(BaseModel):
+    value: str
+
+
+@app.get("/api/agents/{agent_id}/data")
+async def get_agent_data(agent_id: int) -> list[dict]:
+    rows = await pool().fetch(
+        "SELECT namespace, key, value, updated_at FROM agent_data WHERE agent_id = $1 ORDER BY namespace, key",
+        agent_id,
+    )
+    return [{"namespace": r["namespace"], "key": r["key"], "value": r["value"], "updated_at": r["updated_at"].isoformat()} for r in rows]
+
+
+@app.post("/api/agents/{agent_id}/data")
+async def add_agent_data(agent_id: int, body: AgentDataBody) -> dict:
+    await pool().execute(
+        """
+        INSERT INTO agent_data (agent_id, namespace, key, value, updated_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (agent_id, namespace, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        """,
+        agent_id, body.namespace, body.key, body.value,
+    )
+    return {"ok": True}
+
+
+@app.patch("/api/agents/{agent_id}/data/{namespace}/{key}")
+async def patch_agent_data(agent_id: int, namespace: str, key: str, body: AgentDataPatch) -> dict:
+    await pool().execute(
+        """
+        UPDATE agent_data SET value = $1, updated_at = NOW()
+        WHERE agent_id = $2 AND namespace = $3 AND key = $4
+        """,
+        body.value, agent_id, namespace, key,
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/agents/{agent_id}/data/{namespace}/{key}")
+async def delete_agent_data(agent_id: int, namespace: str, key: str) -> dict:
+    await pool().execute(
+        "DELETE FROM agent_data WHERE agent_id = $1 AND namespace = $2 AND key = $3",
+        agent_id, namespace, key,
+    )
+    return {"ok": True}
+
+
 @app.get("/api/users")
 async def get_users() -> list[dict]:
     rows = await pool().fetch(
