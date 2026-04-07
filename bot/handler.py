@@ -35,6 +35,16 @@ def _last_bot_response(history: list[dict]) -> str | None:
             return entry["content"]
     return None
 
+def _quoted_text(message) -> str | None:
+    if message.reply_to_message is None:
+        return None
+    quoted = message.reply_to_message
+    if quoted.text:
+        return quoted.text
+    if quoted.caption:
+        return quoted.caption
+    return None
+
 
 def _agent_keyboard(agent_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -359,10 +369,15 @@ async def _reply(
     )
     llm_messages = brain.history_to_llm_messages(history)
 
+    quoted = _quoted_text(message)
+
     if is_group and not triggered_by_mention:
         user_turn = f"{display}: {text}"
     else:
         user_turn = text
+
+    if quoted:
+        user_turn = f"[Zitiert: {quoted}]\n{user_turn}"
 
     llm_messages.append({"role": "user", "content": user_turn})
 
