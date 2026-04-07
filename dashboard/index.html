@@ -943,7 +943,20 @@
                         width: 100%;
                     "
                 >
-                    <div class="empty-state">Lade…</div>
+                    <div class="agent-tabs" id="usage-tabs">
+                        <button class="agent-tab active" data-tab="caller">
+                            Caller
+                        </button>
+                        <button class="agent-tab" data-tab="history">
+                            History
+                        </button>
+                    </div>
+                    <div class="tab-panel active" id="usage-tab-caller">
+                        <div class="empty-state">Lade…</div>
+                    </div>
+                    <div class="tab-panel" id="usage-tab-history">
+                        <div class="empty-state">Lade…</div>
+                    </div>
                 </div>
             </div>
 
@@ -1982,8 +1995,31 @@
                 }
             }
 
+            let _usagePage = 0;
+            const _usageLimit = 10;
+
+            document
+                .getElementById("usage-tabs")
+                .querySelectorAll(".agent-tab")
+                .forEach((tab) => {
+                    tab.addEventListener("click", function () {
+                        document
+                            .querySelectorAll("#usage-tabs .agent-tab")
+                            .forEach((t) => t.classList.remove("active"));
+                        document
+                            .getElementById("usage-tab-caller")
+                            .classList.remove("active");
+                        document
+                            .getElementById("usage-tab-history")
+                            .classList.remove("active");
+                        this.classList.add("active");
+                        document
+                            .getElementById("usage-tab-" + this.dataset.tab)
+                            .classList.add("active");
+                    });
+                });
+
             async function loadUsage() {
-                const el = document.getElementById("usage-detail");
                 try {
                     const u = await api("/api/usage");
                     const total = u.total_input + u.total_output;
@@ -1991,7 +2027,7 @@
                         (m, c) => Math.max(m, c.input + c.output),
                         1,
                     );
-                    el.innerHTML = `
+                    document.getElementById("usage-tab-caller").innerHTML = `
       <div class="metrics-grid">
         <div class="metric-card"><div class="metric-label">input tokens</div><div class="metric-value">${fmtNum(u.total_input)}</div></div>
         <div class="metric-card"><div class="metric-label">output tokens</div><div class="metric-value">${fmtNum(u.total_output)}</div></div>
@@ -2011,6 +2047,51 @@
             </div>`;
               })
               .join("")}
+        </div>
+      </div>
+    `;
+                } catch (e) {
+                    document.getElementById("usage-tab-caller").innerHTML =
+                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
+                }
+                await loadUsageHistory(0);
+            }
+
+            async function loadUsageHistory(page) {
+                _usagePage = page;
+                const el = document.getElementById("usage-tab-history");
+                el.innerHTML = '<div class="empty-state">Lade…</div>';
+                try {
+                    const h = await api(
+                        "/api/usage/history?page=" +
+                            page +
+                            "&limit=" +
+                            _usageLimit,
+                    );
+                    const totalPages = Math.ceil(h.total / _usageLimit);
+                    el.innerHTML = `
+      <div class="detail-block">
+        <div class="detail-block-title">
+          <span>Calls (${fmtNum(h.total)})</span>
+          <span style="font-size:11px;color:var(--text3);">Seite ${page + 1} / ${totalPages}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          ${h.items
+              .map(
+                  (item) => `
+            <div style="display:flex;align-items:baseline;gap:10px;padding:7px 0;border-bottom:0.5px solid var(--border);">
+              <div style="font-family:var(--mono);font-size:11px;color:var(--text2);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.caller}</div>
+              <div style="font-family:var(--mono);font-size:11px;color:var(--accent);flex-shrink:0;">↑${fmtNum(item.input_tokens)}</div>
+              <div style="font-family:var(--mono);font-size:11px;color:var(--blue);flex-shrink:0;">↓${fmtNum(item.output_tokens)}</div>
+              <div style="font-family:var(--mono);font-size:10px;color:var(--text3);flex-shrink:0;">${fmt(item.created_at)}</div>
+            </div>
+          `,
+              )
+              .join("")}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;">
+          <button class="btn btn-sm" onclick="loadUsageHistory(${page - 1})" ${page === 0 ? 'disabled style="opacity:0.3;"' : ""}>← Zurück</button>
+          <button class="btn btn-sm" onclick="loadUsageHistory(${page + 1})" ${page >= totalPages - 1 ? 'disabled style="opacity:0.3;"' : ""}>Weiter →</button>
         </div>
       </div>
     `;

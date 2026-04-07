@@ -61,7 +61,7 @@ def _parse_config(raw: object) -> dict:
 @app.get("/")
 async def serve_dashboard() -> HTMLResponse:
     host = os.environ.get("DASHBOARD_HOST", "localhost")
-    port = os.environ.get("DASHBOARD_PORT", "8080")
+    port = os.environ.get("DASHBOARD_PORT", "8001")
     with open(os.path.join(os.path.dirname(__file__), "index.html")) as f:
         html = f.read().replace("__API_URL__", f"http://{host}:{port}")
     return HTMLResponse(html)
@@ -424,6 +424,35 @@ async def get_usage() -> dict:
         "total_output": total["output"] or 0,
         "by_caller": [{"caller": r["caller"], "input": r["input"], "output": r["output"], "calls": r["calls"]} for r in by_caller],
         "daily": [{"day": str(r["day"]), "input": r["input"], "output": r["output"]} for r in daily],
+    }
+
+
+@app.get("/api/usage/history")
+async def get_usage_history(page: int = 0, limit: int = 10) -> dict:
+    offset = page * limit
+    rows = await pool().fetch(
+        """
+        SELECT caller, input_tokens, output_tokens, created_at
+        FROM llm_usage
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+        """,
+        limit, offset,
+    )
+    total = await pool().fetchval("SELECT COUNT(*) FROM llm_usage")
+    return {
+        "items": [
+            {
+                "caller": r["caller"],
+                "input_tokens": r["input_tokens"],
+                "output_tokens": r["output_tokens"],
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in rows
+        ],
+        "total": total,
+        "page": page,
+        "limit": limit,
     }
 
 
