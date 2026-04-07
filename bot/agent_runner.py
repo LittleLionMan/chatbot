@@ -252,7 +252,7 @@ async def execute_agent(
         work_result = await brain.chat(
             system=_AGENT_WORK_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2048,
+            max_tokens=8192,
             use_web_search=True,
             web_search_max_uses=1,
             caller=f"agent_work:{name}",
