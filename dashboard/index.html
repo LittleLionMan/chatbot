@@ -1365,6 +1365,20 @@
                 }
             }
 
+            let _confirmCallback = null;
+
+            function confirmModal(message, onConfirm) {
+                _confirmCallback = onConfirm;
+                openModal(
+                    "Bestätigen",
+                    `<div style="font-size:13px;color:var(--text);line-height:1.6;">${message}</div>`,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-danger" onclick="closeModal();_confirmCallback()">Löschen</button>
+  `,
+                );
+            }
+
             function handleAgentDetailClick(e) {
                 const btn = e.target.closest("[data-action]");
                 if (!btn) return;
@@ -1389,24 +1403,23 @@
                     );
                 } else if (action === "delete-state") {
                     const key = btn.dataset.key;
-                    if (
-                        !confirm(
-                            'State-Eintrag "' + key + '" wirklich löschen?',
-                        )
-                    )
-                        return;
-                    api(
-                        "/api/agents/" +
-                            agentId +
-                            "/state/" +
-                            encodeURIComponent(key),
-                        { method: "DELETE" },
-                    )
-                        .then(() => {
-                            toast("Gelöscht.");
-                            selectAgent(agentId);
-                        })
-                        .catch(() => toast("Fehler.", true));
+                    confirmModal(
+                        'State-Eintrag "' + key + '" wirklich löschen?',
+                        () => {
+                            api(
+                                "/api/agents/" +
+                                    agentId +
+                                    "/state/" +
+                                    encodeURIComponent(key),
+                                { method: "DELETE" },
+                            )
+                                .then(() => {
+                                    toast("Gelöscht.");
+                                    selectAgent(agentId);
+                                })
+                                .catch(() => toast("Fehler.", true));
+                        },
+                    );
                 } else if (action === "edit-data") {
                     const idx = Number(btn.dataset.idx);
                     const d = _agentDataCache[agentId][idx];
@@ -1425,30 +1438,25 @@
                 } else if (action === "delete-data") {
                     const idx = Number(btn.dataset.idx);
                     const d = _agentDataCache[agentId][idx];
-                    if (
-                        !confirm(
-                            'Eintrag "' +
-                                d.namespace +
-                                "/" +
-                                d.key +
-                                '" löschen?',
-                        )
-                    )
-                        return;
-                    api(
-                        "/api/agents/" +
-                            agentId +
-                            "/data/" +
-                            encodeURIComponent(d.namespace) +
-                            "/" +
-                            encodeURIComponent(d.key),
-                        { method: "DELETE" },
-                    )
-                        .then(() => {
-                            toast("Gelöscht.");
-                            selectAgent(agentId);
-                        })
-                        .catch(() => toast("Fehler.", true));
+                    confirmModal(
+                        'Eintrag "' + d.namespace + "/" + d.key + '" löschen?',
+                        () => {
+                            api(
+                                "/api/agents/" +
+                                    agentId +
+                                    "/data/" +
+                                    encodeURIComponent(d.namespace) +
+                                    "/" +
+                                    encodeURIComponent(d.key),
+                                { method: "DELETE" },
+                            )
+                                .then(() => {
+                                    toast("Gelöscht.");
+                                    selectAgent(agentId);
+                                })
+                                .catch(() => toast("Fehler.", true));
+                        },
+                    );
                 } else if (action === "edit-agent-mem") {
                     const idx = Number(btn.dataset.idx);
                     const mem = _agentMemCache[agentId][idx];
@@ -1465,20 +1473,21 @@
                 } else if (action === "delete-agent-mem") {
                     const idx = Number(btn.dataset.idx);
                     const mem = _agentMemCache[agentId][idx];
-                    if (!confirm("Memory löschen?")) return;
-                    api("/api/agents/" + agentId + "/memories", {
-                        method: "DELETE",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            content: mem.content,
-                            subject_type: "agent",
-                        }),
-                    })
-                        .then(() => {
-                            toast("Gelöscht.");
-                            selectAgent(agentId);
+                    confirmModal("Memory löschen?", () => {
+                        api("/api/agents/" + agentId + "/memories", {
+                            method: "DELETE",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                content: mem.content,
+                                subject_type: "agent",
+                            }),
                         })
-                        .catch(() => toast("Fehler.", true));
+                            .then(() => {
+                                toast("Gelöscht.");
+                                selectAgent(agentId);
+                            })
+                            .catch(() => toast("Fehler.", true));
+                    });
                 }
             }
 
@@ -1652,15 +1661,16 @@
             }
 
             async function stopAgent(id) {
-                if (!confirm("Agent wirklich stoppen?")) return;
-                try {
-                    await api("/api/agents/" + id, { method: "DELETE" });
-                    toast("Agent gestoppt.");
-                    goBack();
-                    await loadAgents();
-                } catch (e) {
-                    toast("Fehler.", true);
-                }
+                confirmModal("Agent wirklich stoppen?", async () => {
+                    try {
+                        await api("/api/agents/" + id, { method: "DELETE" });
+                        toast("Agent gestoppt.");
+                        goBack();
+                        await loadAgents();
+                    } catch (e) {
+                        toast("Fehler.", true);
+                    }
+                });
             }
 
             function editAgent(id) {
@@ -1903,24 +1913,25 @@
     `,
                     );
                 } else if (action === "delete-mem") {
-                    if (!confirm("Memory löschen?")) return;
                     const endpoint =
                         memMode === "users"
                             ? "/api/users/" + subjectId + "/memories"
                             : "/api/groups/" + subjectId + "/memories";
-                    api(endpoint, {
-                        method: "DELETE",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            content: mem.content,
-                            subject_type: mem.type,
-                        }),
-                    })
-                        .then(() => {
-                            toast("Gelöscht.");
-                            renderMemDetail(subjectId);
+                    confirmModal("Memory löschen?", () => {
+                        api(endpoint, {
+                            method: "DELETE",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                content: mem.content,
+                                subject_type: mem.type,
+                            }),
                         })
-                        .catch(() => toast("Fehler.", true));
+                            .then(() => {
+                                toast("Gelöscht.");
+                                renderMemDetail(subjectId);
+                            })
+                            .catch(() => toast("Fehler.", true));
+                    });
                 }
             }
 
