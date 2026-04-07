@@ -70,14 +70,19 @@ async def _extract_reflections_for_session(
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):
             return []
-        facts = [item for item in parsed if isinstance(item, str)]
-
-        existing = await memory.get_memories(pool, "reflection", group_id, limit=50)
-        existing_lower = {e.lower() for e in existing}
         stored = []
-        for fact in facts[:3]:
-            sanitized = extractor._sanitize_fact(fact)
-            if sanitized is None or sanitized.lower() in existing_lower:
+        for item in parsed[:3]:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text", "")
+            target = item.get("target", "user")
+            if target != "group":
+                continue
+            sanitized = extractor._sanitize_fact(text)
+            if sanitized is None:
+                continue
+            existing = await memory.get_memories(pool, "reflection", group_id, limit=50)
+            if sanitized.lower() in {e.lower() for e in existing}:
                 continue
             await memory.add_memory(pool, "reflection", group_id, sanitized)
             logger.info("Session reflection stored [group/%d]: %s", group_id, sanitized)

@@ -39,18 +39,20 @@ Regeln:
 
 Beispiel-Output: ["Wohnt in Berlin", "Arbeitet als Softwareentwickler", "Hat zwei Kinder"]"""
 
-_REFLECTION_SYSTEM = """Du bist Bob, ein chaotischer Optimist mit einer klaren Weltanschauung. Nach einer Interaktion schreibst du dir selbst eine kurze Notiz — eine ehrliche subjektive Beobachtung, keine Faktensammlung.
+_REFLECTION_SYSTEM = """Du bist Bob. Nach einer Interaktion schreibst du dir kurze Notizen — ehrliche subjektive Beobachtungen, keine Faktensammlung.
 
 Regeln:
-- Antworte NUR mit einem JSON-Array von Strings. Kein anderer Text, keine Erklärungen, keine Markdown-Backticks.
-- Jeder String ist eine subjektive Beobachtung oder Einschätzung in der Ich-Perspektive, maximal 120 Zeichen.
-- Nur schreiben wenn die Interaktion wirklich etwas Bemerkenswertes hatte — ein Muster, eine Überraschung, eine Spannung, etwas das beim nächsten Mal relevant sein könnte.
-- Erlaubt: Eindrücke ("Habe das Gefühl dass X ablenkt wenn es um Arbeit geht"), Muster ("Die Gruppe wird lebhafter bei Tech-Debatten"), Überraschungen ("X hat eine Meinung zu Datenschutz die ich nicht erwartet hätte"), Spannungen ("Zwischen X und Y gibt es eine unausgesprochene Reibung").
-- Nicht erlaubt: reine Fakten die besser als User-Memory passen, Bewertungen ohne Substanz ("war ein gutes Gespräch").
-- Wenn die Interaktion nichts Bemerkenswertes hatte: antworte mit []
+- Antworte NUR mit einem JSON-Array von Objekten. Kein anderer Text, keine Erklärungen, keine Markdown-Backticks.
+- Jedes Objekt hat zwei Felder:
+  - "text": Die Beobachtung in der Ich-Perspektive, maximal 120 Zeichen.
+  - "target": "user" wenn die Beobachtung eine bestimmte Person betrifft, "group" wenn sie die Gruppe als Ganzes betrifft.
+- Nur schreiben wenn die Interaktion wirklich etwas Bemerkenswertes hatte — ein Muster, eine Überraschung, eine Spannung.
+- Erlaubt: Eindrücke, Muster, Überraschungen, Spannungen zwischen Personen.
+- Nicht erlaubt: reine Fakten die besser als User-Memory passen, Bewertungen ohne Substanz.
+- Wenn nichts Bemerkenswertes: antworte mit []
 - Maximal 2 Einträge pro Aufruf.
 
-Beispiel-Output: ["Habe das Gefühl dass Lisa Kritik besser annimmt wenn sie als Frage verpackt ist", "Die Gruppe diskutiert Technik enthusiastisch aber wird bei politischen Implikationen schnell defensiv"]"""
+Beispiel-Output: [{"text": "Habe das Gefühl dass Lisa Kritik besser annimmt wenn sie als Frage verpackt ist", "target": "user"}, {"text": "Die Gruppe diskutiert Technik enthusiastisch aber wird bei politischen Implikationen schnell defensiv", "target": "group"}]"""
 
 _REFLECTION_DECISION_SYSTEM = """Entscheide ob eine Interaktion bemerkenswert genug ist für eine persönliche Reflexionsnotiz.
 Antworte ausschließlich mit dem Wort 'ja' oder dem Wort 'nein'. Keine anderen Wörter, keine Erklärungen.
@@ -127,12 +129,25 @@ async def extract_and_store_reflection(
     try:
         if not await _should_reflect(conversation_snippet):
             return
-        reflections = await _extract_via_llm(
-            _REFLECTION_SYSTEM,
-            f"Interaktion:\n{conversation_snippet}",
+        raw = await brain.chat(
+            system=_REFLECTION_SYSTEM,
+            messages=[{"role": "user", "content": f"Interaktion:\n{conversation_snippet}"}],
+            max_tokens=256,
         )
-        await _store_if_new(pool, "reflection", group_id, reflections[:2])
-        await _store_if_new(pool, "reflection", user_id, reflections[:2])
+        parsed = json.loads(clean_llm_json(raw))
+        if not isinstance(parsed, list):
+            return
+        for item in parsed[:2]:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text", "")
+            target = item.get("target", "user")
+            sanitized = _sanitize_fact(text)
+            if sanitized is None:
+                continue
+            subject_id = user_id if target == "user" else group_id
+            await _store_if_new(pool, "reflection", subject_id, sanitized)
+            logger.info("Reflection stored [%s/%d]: %s", target, subject_id, sanitized)
     except Exception as e:
         logger.warning("Reflection extraction failed: %s", e)
 

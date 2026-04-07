@@ -1357,6 +1357,7 @@
                         });
                     });
 
+                    detail.removeEventListener("click", handleAgentDetailClick);
                     detail.addEventListener("click", handleAgentDetailClick);
                 } catch (e) {
                     detail.innerHTML =
@@ -1873,6 +1874,7 @@
           )
           .join("")}
     `;
+                    detail.removeEventListener("click", handleMemDetailClick);
                     detail.addEventListener("click", handleMemDetailClick);
                 } catch (e) {
                     detail.innerHTML =
