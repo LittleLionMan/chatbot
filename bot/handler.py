@@ -221,6 +221,29 @@ async def _reply(
         has_active_tasks=bool(active_tasks),
     )
 
+    if intent == "agent_trigger":
+        if not active_agents:
+            await message.reply_text("Du hast keine aktiven Agenten.")
+            return
+        extracted = await intent_classifier.extract_trigger_payload(text, pool)
+        agent_name: str = extracted.get("agent_name", "")
+        payload: dict = extracted.get("payload", {})
+        target_agent = await agent_parser.resolve_agent_by_text(
+            agent_name or text, active_agents
+        )
+        if target_agent:
+            await memory.enqueue_agent_trigger(pool, None, target_agent["name"], payload)
+            payload_desc = f" mit Payload: {payload}" if payload else ""
+            await message.reply_text(
+                f"{target_agent['name']} wird beim nächsten Scheduler-Lauf ausgeführt{payload_desc}."
+            )
+        else:
+            names = ", ".join(a["name"] for a in active_agents)
+            await message.reply_text(
+                f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}"
+            )
+        return
+
     if intent == "agent_system":
         parsed_system = await agent_system_parser.parse_agent_system(text, user.id, chat.id, pool)
         if parsed_system:

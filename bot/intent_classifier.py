@@ -10,28 +10,46 @@ _CLASSIFIER_SYSTEM = """Klassifiziere die Nutzeranfrage in genau eine der folgen
 Kategorien:
 - agent_system: Nutzer beschreibt mehrere koordinierte Aufgaben die zusammen ein System bilden — Sammeln + Analysieren, Beobachten + Melden + Aktualisieren, mehrere abhängige Schritte. Erkennungsmerkmale: mehrere Verben mit impliziter Reihenfolge oder Abhängigkeit, "und dann", "falls", "für jedes gefundene", "lasse laufen".
 - agent_create: Nutzer möchte einen einzelnen persistenten Agenten erstellen. Erkennungsmerkmale: "beobachte", "verfolge", "überwache", "halte mich auf dem Laufenden", "melde wenn", "analysiere laufend". Nur wenn es klar eine einzelne Aufgabe ist.
+- agent_trigger: Nutzer möchte einen existierenden Agenten jetzt sofort oder einmalig außer der Reihe ausführen — mit oder ohne spezifischen Auftrag. Erkennungsmerkmale: Agentenname + einmalige Aufgabe oder direkter Befehl, "analysiere jetzt", "prüfe mal", "lauf einmal durch", "schau dir X an", "überprüfe Y für Z".
 - agent_stop: Nutzer möchte einen laufenden Agenten stoppen oder deaktivieren.
 - agent_list: Nutzer möchte explizit eine Liste seiner laufenden Agenten sehen.
-- agent_talk: Nutzer spricht direkt mit einem namentlich bekannten Agenten oder fragt nach ihm. Voraussetzung: konkreter Agentenname eines existierenden Agenten. Der Bot-Name selbst ist kein Agentenname.
+- agent_talk: Nutzer spricht direkt mit einem namentlich bekannten Agenten oder fragt nach ihm — Statusabfrage oder Konfigurationsänderung, aber kein einmaliger Ausführungsauftrag.
 - task_create: Nutzer möchte eine neue stateless wiederkehrende Aufgabe erstellen. Jeder Lauf ist unabhängig, kein Vergleich mit früheren Ergebnissen.
 - task_stop: Nutzer möchte eine wiederkehrende Aufgabe beenden oder löschen.
 - task_list: Nutzer möchte seine aktiven Aufgaben sehen.
 - none: Keine der obigen Kategorien — normale Unterhaltung, Frage, einmalige Anfrage.
 
-Wichtig: agent_system wenn mehrere abhängige Aufgaben beschrieben werden. agent_create nur wenn eindeutig eine einzelne Aufgabe gemeint ist.
+Wichtig: agent_trigger wenn der Nutzer einen Agent einmalig mit einer konkreten Aufgabe beauftragen will. agent_talk wenn er nur Status oder Konfiguration will.
 
 Beispiele:
+"Jordan, analysiere BE neu" → agent_trigger
+"Lass Gecko jetzt laufen" → agent_trigger
+"Jordan soll EOSE überprüfen, aktueller Kurs $5.70" → agent_trigger
+"Wie läuft Jordan?" → agent_talk
+"Jordan, ändere dein Suchkriterium" → agent_talk
 "Sammle Unternehmen nach Kriterien, analysiere jedes und beobachte News" → agent_system
-"Beobachte GPU-Preise, analysiere Funde und halte mich auf dem Laufenden" → agent_system
 "Überwache meine Docker Container stündlich" → agent_create
 "Erinnere mich jeden Montag an den Standup" → task_create
 "Stopp Linus" → agent_stop
 "Zeig meine Agenten" → agent_list
-"Wie läuft Gordon?" → agent_talk
 "Bob, erstelle einen Agenten der täglich..." → agent_create
 "Beende den Grafikkarten-Task" → task_stop
 "Was läuft gerade" → task_list
 "Was denkst du über KI?" → none"""
+
+_TRIGGER_PAYLOAD_SYSTEM = """Extrahiere aus einer Nutzeranfrage den Agentennamen und alle relevanten Parameter als JSON.
+
+Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
+
+Felder:
+- "agent_name": Name des Agenten der ausgeführt werden soll.
+- "payload": Dict mit allen relevanten Parametern aus dem Text. Leer wenn keine Parameter genannt werden.
+
+Beispiele:
+"Jordan, analysiere BE neu" → {"agent_name": "Jordan", "payload": {"ticker": "BE"}}
+"Lass Gecko jetzt laufen" → {"agent_name": "Gecko", "payload": {}}
+"Jordan soll EOSE überprüfen, aktueller Kurs $5.70" → {"agent_name": "Jordan", "payload": {"ticker": "EOSE", "reason": "aktueller Kurs $5.70"}}
+"Jim Cramer, prüf mal die News zu ORA" → {"agent_name": "Jim Cramer", "payload": {"ticker": "ORA"}}"""
 
 
 async def classify(
@@ -42,7 +60,7 @@ async def classify(
 ) -> str:
     context_hints: list[str] = []
     if not has_active_agents:
-        context_hints.append("Der Nutzer hat keine aktiven Agenten — agent_stop, agent_list und agent_talk sind daher unwahrscheinlich.")
+        context_hints.append("Der Nutzer hat keine aktiven Agenten — agent_stop, agent_list, agent_talk und agent_trigger sind daher unwahrscheinlich.")
     if not has_active_tasks:
         context_hints.append("Der Nutzer hat keine aktiven Aufgaben — task_stop und task_list sind daher unwahrscheinlich.")
 
@@ -59,7 +77,7 @@ async def classify(
             pool=pool,
         )
         intent = result.strip().lower()
-        valid = {"agent_system", "agent_create", "agent_stop", "agent_list", "agent_talk", "task_create", "task_stop", "task_list", "none"}
+        valid = {"agent_system", "agent_create", "agent_trigger", "agent_stop", "agent_list", "agent_talk", "task_create", "task_stop", "task_list", "none"}
         if intent not in valid:
             logger.warning("Classifier returned unknown intent %r, falling back to none", intent)
             return "none"
@@ -68,3 +86,23 @@ async def classify(
     except Exception as e:
         logger.warning("Intent classification failed: %s", e)
         return "none"
+
+
+async def extract_trigger_payload(text: str, pool: asyncpg.Pool) -> dict:
+    import json
+    from bot.utils import clean_llm_json
+    try:
+        raw = await brain.chat(
+            system=_TRIGGER_PAYLOAD_SYSTEM,
+            messages=[{"role": "user", "content": text}],
+            max_tokens=256,
+            caller="trigger_payload_extractor",
+            pool=pool,
+        )
+        parsed = json.loads(clean_llm_json(raw))
+        if not isinstance(parsed, dict):
+            return {"agent_name": "", "payload": {}}
+        return parsed
+    except Exception as e:
+        logger.warning("Trigger payload extraction failed: %s", e)
+        return {"agent_name": "", "payload": {}}

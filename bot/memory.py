@@ -471,7 +471,7 @@ async def query_agent_data(
 
 async def enqueue_agent_trigger(
     pool: asyncpg.Pool,
-    source_agent_id: int,
+    source_agent_id: int | None,
     target_agent_name: str,
     payload: dict,
     delay_minutes: int = 0,
@@ -491,8 +491,8 @@ async def get_pending_triggers(pool: asyncpg.Pool) -> list[dict]:
         """
         SELECT id, source_agent_id, target_agent_name, payload
         FROM agent_trigger_queue
-        WHERE processed_at IS NULL AND scheduled_for <= NOW()
-        ORDER BY scheduled_for ASC
+        WHERE processed_at IS NULL
+        ORDER BY created_at ASC
         """,
     )
     return [dict(r) for r in rows]
