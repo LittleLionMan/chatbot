@@ -31,13 +31,15 @@ Felder:
 - "tool_calls": Liste aller Tool-Aufrufe für große Dokumente oder Koordination.
 
 Verfügbare Tools:
-- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — nur für große Dokumente: vollständige Analysen, lange Berichte. Nicht für kompakte Listen.
+- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — für kurze Werte die sicher in JSON passen (URLs, Datum, kurze Statusmeldungen).
+- {"tool": "db_write_from_work", "namespace": "...", "key": "..."} — für lange Texte, Analysen, Berichte. Kein value-Feld nötig — der Runner speichert automatisch den vollständigen Work-Output als Text. Immer verwenden wenn der Inhalt länger als ein Satz ist.
 - {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus.
 - {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
 
-Wann state_updates, wann db_write:
+Wann state_updates, wann db_write, wann db_write_from_work:
 - state_updates: Watchlists, Ticker-Listen, Flags, kurze Statusinfos — alles was andere Agents via State lesen sollen. Niemals last_run_summary in state_updates — der Runner setzt ihn automatisch aus report.
-- db_write: Fundamentalanalysen, lange Berichte, Dokumente — alles was zu groß für den State ist
+- db_write: kurze Werte (URLs, Datum, kurze Statusmeldungen) — nur wenn der Wert in einem JSON-String sicher passt.
+- db_write_from_work: alle langen Texte — Analysen, Berichte, Markdown-Dokumente. Kein JSON-Escaping nötig.
 
 report ist die Zusammenfassung für den User und muss immer befüllt sein wenn etwas passiert ist — auch wenn state_updates gesetzt werden. Ohne report kein Telegram-Feedback.
 
@@ -155,6 +157,7 @@ async def _execute_tool_calls(
     agent_id: int,
     target_chat_id: int,
     tool_calls: list[dict],
+    work_result: str = "",
 ) -> None:
     for call in tool_calls:
         tool = call.get("tool")
@@ -176,6 +179,26 @@ async def _execute_tool_calls(
                 if target_name:
                     await memory.enqueue_agent_trigger(pool, agent_id, target_name, payload, delay)
                     logger.info("Agent %d queued trigger for: %s (delay: %dm)", agent_id, target_name, delay)
+
+            elif tool == "db_write_from_work":
+                await memory.write_agent_data(
+                    pool,
+                    agent_id,
+                    call["namespace"],
+                    call["key"],
+                    work_result,
+                )
+                logger.info("Agent %d db_write_from_work: %s/%s (%d chars)", agent_id, call["namespace"], call["key"], len(work_result))
+
+            elif tool == "db_write_from_work":
+                await memory.write_agent_data(
+                    pool,
+                    agent_id,
+                    call["namespace"],
+                    call["key"],
+                    work_result,
+                )
+                logger.info("Agent %d db_write_from_work: %s/%s (%d chars)", agent_id, call["namespace"], call["key"], len(work_result))
 
             elif tool == "notify_user":
                 msg = call.get("message", "")
@@ -273,7 +296,7 @@ async def execute_agent(
         await memory.set_agent_state(pool, agent_id, state)
 
         if tool_calls:
-            await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls)
+            await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls, work_result)
 
         has_notify_tool = any(c.get("tool") == "notify_user" for c in tool_calls)
 
