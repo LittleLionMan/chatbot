@@ -60,8 +60,10 @@ def _parse_config(raw: object) -> dict:
 
 @app.get("/")
 async def serve_dashboard() -> HTMLResponse:
+    host = os.environ.get("DASHBOARD_HOST", "localhost")
+    port = os.environ.get("DASHBOARD_PORT", "8080")
     with open(os.path.join(os.path.dirname(__file__), "index.html")) as f:
-        html = f.read().replace("__API_URL__", f"http://localhost:{os.environ.get('DASHBOARD_PORT', '8001')}")
+        html = f.read().replace("__API_URL__", f"http://{host}:{port}")
     return HTMLResponse(html)
 
 
