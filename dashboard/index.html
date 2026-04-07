@@ -2,7 +2,10 @@
 <html lang="de">
     <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+        />
         <title>Bob Dashboard</title>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
@@ -39,16 +42,20 @@
                 --mono: "IBM Plex Mono", monospace;
                 --radius: 10px;
                 --radius-sm: 6px;
+                --bottom-nav-height: 60px;
+                --safe-bottom: env(safe-area-inset-bottom, 0px);
             }
             body {
                 font-family: var(--font);
                 background: var(--bg);
                 color: var(--text);
                 height: 100vh;
+                height: 100dvh;
                 display: flex;
                 flex-direction: column;
                 overflow: hidden;
             }
+
             .topbar {
                 display: flex;
                 align-items: center;
@@ -61,7 +68,7 @@
             .topbar-left {
                 display: flex;
                 align-items: center;
-                gap: 12px;
+                gap: 10px;
             }
             .topbar-name {
                 font-size: 15px;
@@ -74,8 +81,28 @@
                 border-radius: 50%;
                 background: var(--accent);
                 box-shadow: 0 0 6px var(--accent);
+                flex-shrink: 0;
             }
-            nav {
+            .topbar-back {
+                display: none;
+                background: none;
+                border: none;
+                color: var(--text2);
+                cursor: pointer;
+                font-size: 20px;
+                padding: 4px;
+                line-height: 1;
+            }
+            .topbar-back.visible {
+                display: block;
+            }
+            .topbar-title {
+                font-size: 14px;
+                font-weight: 500;
+                color: var(--text2);
+            }
+
+            .desktop-nav {
                 display: flex;
                 gap: 2px;
             }
@@ -101,11 +128,13 @@
                 background: var(--bg3);
                 color: var(--text);
             }
+
             .layout {
                 display: flex;
                 flex: 1;
                 overflow: hidden;
             }
+
             .sidebar {
                 width: 240px;
                 flex-shrink: 0;
@@ -159,6 +188,7 @@
                 margin-top: 2px;
                 font-family: var(--mono);
             }
+
             .detail {
                 flex: 1;
                 overflow-y: auto;
@@ -172,6 +202,7 @@
                 font-size: 13px;
                 color: var(--text3);
             }
+
             .section {
                 display: none;
             }
@@ -180,6 +211,7 @@
                 height: 100%;
                 overflow: hidden;
             }
+
             .badge {
                 font-size: 10px;
                 font-family: var(--mono);
@@ -219,6 +251,7 @@
                 background: var(--accent-dim);
                 color: var(--accent);
             }
+
             .detail-block {
                 margin-bottom: 1.5rem;
             }
@@ -286,6 +319,7 @@
                 font-size: 11px;
                 padding: 3px 8px;
             }
+
             .agent-tabs {
                 display: flex;
                 gap: 2px;
@@ -326,6 +360,7 @@
             .tab-panel.active {
                 display: block;
             }
+
             .state-grid {
                 display: grid;
                 gap: 6px;
@@ -363,6 +398,7 @@
             .state-card:hover .state-actions {
                 opacity: 1;
             }
+
             .ns-block {
                 margin-bottom: 1.25rem;
             }
@@ -412,6 +448,7 @@
             .data-card:hover .data-actions {
                 opacity: 1;
             }
+
             .mem-list {
                 display: flex;
                 flex-direction: column;
@@ -449,6 +486,7 @@
             .mem-row:hover .mem-actions {
                 opacity: 1;
             }
+
             .metrics-grid {
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
@@ -537,13 +575,14 @@
                 font-family: var(--mono);
                 color: var(--text3);
             }
+
             .modal-overlay {
                 display: none;
                 position: fixed;
                 inset: 0;
                 background: rgba(0, 0, 0, 0.6);
                 z-index: 100;
-                align-items: center;
+                align-items: flex-end;
                 justify-content: center;
             }
             .modal-overlay.open {
@@ -552,10 +591,9 @@
             .modal {
                 background: var(--bg2);
                 border: 0.5px solid var(--border2);
-                border-radius: var(--radius);
+                border-radius: var(--radius) var(--radius) 0 0;
                 padding: 1.5rem;
-                width: 520px;
-                max-width: 90vw;
+                width: 100%;
                 max-height: 85vh;
                 overflow-y: auto;
             }
@@ -579,7 +617,7 @@
                 font-family: var(--font);
                 font-size: 13px;
                 width: 100%;
-                padding: 7px 10px;
+                padding: 10px;
                 background: var(--bg3);
                 border: 0.5px solid var(--border);
                 border-radius: var(--radius-sm);
@@ -600,7 +638,7 @@
                 font-family: var(--font);
                 font-size: 13px;
                 width: 100%;
-                padding: 7px 10px;
+                padding: 10px;
                 background: var(--bg3);
                 border: 0.5px solid var(--border);
                 border-radius: var(--radius-sm);
@@ -612,10 +650,14 @@
                 justify-content: flex-end;
                 margin-top: 1rem;
             }
+
             .toast {
                 position: fixed;
-                bottom: 1.5rem;
-                right: 1.5rem;
+                bottom: calc(
+                    var(--bottom-nav-height) + var(--safe-bottom) + 1rem
+                );
+                right: 1rem;
+                left: 1rem;
                 background: var(--bg3);
                 border: 0.5px solid var(--border2);
                 border-radius: var(--radius-sm);
@@ -629,6 +671,7 @@
                     opacity 0.2s,
                     transform 0.2s;
                 pointer-events: none;
+                text-align: center;
             }
             .toast.show {
                 opacity: 1;
@@ -637,6 +680,10 @@
             .toast.error {
                 border-color: var(--red);
                 color: var(--red);
+            }
+
+            .bottom-nav {
+                display: none;
             }
             .sub-tabs {
                 display: flex;
@@ -648,15 +695,166 @@
                 border-top: 0.5px solid var(--border);
                 margin: 1.25rem 0;
             }
+
+            @media (min-width: 769px) {
+                .modal-overlay {
+                    align-items: center;
+                }
+                .modal {
+                    border-radius: var(--radius);
+                    width: 520px;
+                }
+                .toast {
+                    left: auto;
+                    right: 1.5rem;
+                    bottom: 1.5rem;
+                    text-align: left;
+                }
+                .state-actions {
+                    opacity: 0;
+                }
+                .data-actions {
+                    opacity: 0;
+                }
+                .mem-actions {
+                    opacity: 0;
+                }
+            }
+
+            @media (max-width: 768px) {
+                .desktop-nav {
+                    display: none;
+                }
+                .topbar {
+                    padding: 0 1rem;
+                }
+
+                .layout {
+                    flex-direction: column;
+                    position: relative;
+                }
+
+                .section {
+                    flex-direction: column;
+                }
+                .section.active {
+                    display: flex;
+                }
+
+                .sidebar {
+                    width: 100%;
+                    border-right: none;
+                    border-bottom: none;
+                    overflow-y: auto;
+                    flex: 1;
+                    transition:
+                        transform 0.25s ease,
+                        opacity 0.25s ease;
+                }
+                .sidebar.hidden {
+                    display: none;
+                }
+
+                .detail {
+                    position: absolute;
+                    inset: 0;
+                    background: var(--bg);
+                    transform: translateX(100%);
+                    transition: transform 0.25s ease;
+                    padding: 1rem;
+                    overflow-y: auto;
+                    pointer-events: none;
+                }
+                .detail.visible {
+                    transform: translateX(0);
+                    pointer-events: all;
+                }
+
+                .section.active .sidebar {
+                    display: flex;
+                }
+
+                .bottom-nav {
+                    display: flex;
+                    background: var(--bg2);
+                    border-top: 0.5px solid var(--border);
+                    height: calc(var(--bottom-nav-height) + var(--safe-bottom));
+                    padding-bottom: var(--safe-bottom);
+                    flex-shrink: 0;
+                    z-index: 50;
+                }
+                .bottom-nav-item {
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 3px;
+                    background: none;
+                    border: none;
+                    color: var(--text3);
+                    cursor: pointer;
+                    padding: 8px 4px;
+                    transition: color 0.1s;
+                    font-family: var(--font);
+                }
+                .bottom-nav-item.active {
+                    color: var(--accent);
+                }
+                .bottom-nav-item svg {
+                    width: 22px;
+                    height: 22px;
+                    stroke: currentColor;
+                    fill: none;
+                    stroke-width: 1.5;
+                    stroke-linecap: round;
+                    stroke-linejoin: round;
+                }
+                .bottom-nav-label {
+                    font-size: 10px;
+                    font-weight: 500;
+                }
+
+                .sidebar-item {
+                    padding: 12px 10px;
+                }
+                .si-name {
+                    font-size: 14px;
+                }
+                .state-actions {
+                    opacity: 1;
+                }
+                .data-actions {
+                    opacity: 1;
+                }
+                .mem-actions {
+                    opacity: 1;
+                }
+
+                .metrics-grid {
+                    grid-template-columns: repeat(2, 1fr);
+                }
+                .caller-name {
+                    width: 120px;
+                }
+
+                .agent-tab {
+                    font-size: 11px;
+                    padding: 6px 10px;
+                }
+            }
         </style>
     </head>
     <body>
         <div class="topbar">
             <div class="topbar-left">
-                <div class="topbar-dot"></div>
-                <div class="topbar-name">Bob Dashboard</div>
+                <button class="topbar-back" id="topbar-back" onclick="goBack()">
+                    ←
+                </button>
+                <div class="topbar-dot" id="topbar-dot"></div>
+                <div class="topbar-name" id="topbar-name">Bob Dashboard</div>
             </div>
-            <nav>
+            <nav class="desktop-nav">
                 <button class="nav-btn active" data-section="agents">
                     Agenten
                 </button>
@@ -666,12 +864,12 @@
                     Triggers
                 </button>
             </nav>
-            <div style="width: 180px"></div>
+            <div style="width: 40px"></div>
         </div>
 
         <div class="layout">
             <div class="section active" id="section-agents">
-                <div class="sidebar">
+                <div class="sidebar" id="agents-sidebar">
                     <input
                         class="sidebar-search"
                         id="agents-search"
@@ -695,7 +893,7 @@
             </div>
 
             <div class="section" id="section-memory">
-                <div class="sidebar">
+                <div class="sidebar" id="memory-sidebar">
                     <div class="sub-tabs">
                         <button
                             class="nav-btn active"
@@ -735,17 +933,68 @@
             </div>
 
             <div class="section" id="section-usage">
-                <div class="detail" id="usage-detail" style="width: 100%">
+                <div
+                    class="detail visible"
+                    id="usage-detail"
+                    style="
+                        position: relative;
+                        transform: none;
+                        pointer-events: all;
+                        width: 100%;
+                    "
+                >
                     <div class="empty-state">Lade…</div>
                 </div>
             </div>
 
             <div class="section" id="section-triggers">
-                <div class="detail" id="triggers-detail" style="width: 100%">
+                <div
+                    class="detail visible"
+                    id="triggers-detail"
+                    style="
+                        position: relative;
+                        transform: none;
+                        pointer-events: all;
+                        width: 100%;
+                    "
+                >
                     <div class="empty-state">Lade…</div>
                 </div>
             </div>
         </div>
+
+        <nav class="bottom-nav">
+            <button class="bottom-nav-item active" data-section="agents">
+                <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="8" r="4" />
+                    <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
+                </svg>
+                <span class="bottom-nav-label">Agenten</span>
+            </button>
+            <button class="bottom-nav-item" data-section="memory">
+                <svg viewBox="0 0 24 24">
+                    <path
+                        d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7z"
+                    />
+                    <circle cx="12" cy="9" r="2.5" />
+                </svg>
+                <span class="bottom-nav-label">Memory</span>
+            </button>
+            <button class="bottom-nav-item" data-section="usage">
+                <svg viewBox="0 0 24 24">
+                    <rect x="3" y="12" width="4" height="9" rx="1" />
+                    <rect x="10" y="7" width="4" height="14" rx="1" />
+                    <rect x="17" y="3" width="4" height="18" rx="1" />
+                </svg>
+                <span class="bottom-nav-label">Usage</span>
+            </button>
+            <button class="bottom-nav-item" data-section="triggers">
+                <svg viewBox="0 0 24 24">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                </svg>
+                <span class="bottom-nav-label">Triggers</span>
+            </button>
+        </nav>
 
         <div
             class="modal-overlay"
@@ -771,6 +1020,7 @@
             let _agentMemCache = {};
             let _agentDataCache = {};
             let _memCache = {};
+            let _isMobile = () => window.innerWidth <= 768;
 
             function api(path, opts) {
                 return fetch(BASE + path, opts).then((r) => {
@@ -825,22 +1075,73 @@
                 }
             }
 
+            function showDetail(detailEl, sidebarEl, title) {
+                if (_isMobile()) {
+                    sidebarEl.classList.add("hidden");
+                    detailEl.classList.add("visible");
+                    document
+                        .getElementById("topbar-back")
+                        .classList.add("visible");
+                    document.getElementById("topbar-dot").style.display =
+                        "none";
+                    document.getElementById("topbar-name").textContent = title;
+                }
+            }
+
+            function goBack() {
+                const activeSection = document.querySelector(".section.active");
+                if (!activeSection) return;
+                const sidebar = activeSection.querySelector(".sidebar");
+                const detail = activeSection.querySelector(".detail");
+                if (sidebar) sidebar.classList.remove("hidden");
+                if (detail) detail.classList.remove("visible");
+                document
+                    .getElementById("topbar-back")
+                    .classList.remove("visible");
+                document.getElementById("topbar-dot").style.display = "";
+                document.getElementById("topbar-name").textContent =
+                    "Bob Dashboard";
+            }
+
+            function switchSection(name) {
+                document
+                    .querySelectorAll(".section")
+                    .forEach((s) => s.classList.remove("active"));
+                document
+                    .getElementById("section-" + name)
+                    .classList.add("active");
+                document
+                    .querySelectorAll(".nav-btn[data-section]")
+                    .forEach((b) =>
+                        b.classList.toggle(
+                            "active",
+                            b.dataset.section === name,
+                        ),
+                    );
+                document
+                    .querySelectorAll(".bottom-nav-item")
+                    .forEach((b) =>
+                        b.classList.toggle(
+                            "active",
+                            b.dataset.section === name,
+                        ),
+                    );
+                goBack();
+            }
+
             document
                 .querySelectorAll(".nav-btn[data-section]")
                 .forEach((btn) => {
                     btn.addEventListener("click", function () {
-                        document
-                            .querySelectorAll(".nav-btn[data-section]")
-                            .forEach((b) => b.classList.remove("active"));
-                        document
-                            .querySelectorAll(".section")
-                            .forEach((s) => s.classList.remove("active"));
-                        this.classList.add("active");
-                        document
-                            .getElementById("section-" + this.dataset.section)
-                            .classList.add("active");
+                        switchSection(this.dataset.section);
                     });
                 });
+
+            document.querySelectorAll(".bottom-nav-item").forEach((btn) => {
+                btn.addEventListener("click", function () {
+                    switchSection(this.dataset.section);
+                });
+            });
 
             document
                 .getElementById("agents-search")
@@ -902,6 +1203,12 @@
                 const a = agentsData.find((x) => x.id === id);
                 const detail = document.getElementById("agents-detail");
                 detail.innerHTML = '<div class="empty-state">Lade…</div>';
+                showDetail(
+                    detail,
+                    document.getElementById("agents-sidebar"),
+                    a.name,
+                );
+
                 try {
                     const [state, data, memories] = await Promise.all([
                         api("/api/agents/" + id + "/state"),
@@ -923,12 +1230,10 @@
         <button class="btn" onclick="editAgent(${id})">Bearbeiten</button>
         ${a.is_active ? `<button class="btn btn-danger" onclick="stopAgent(${id})">Stoppen</button>` : ""}
       </div>
-
       <div class="detail-block">
         <div class="detail-block-title">Anweisung</div>
         <div class="detail-text">${a.instruction || "—"}</div>
       </div>
-
       <div class="detail-block">
         <div class="detail-block-title">Meta</div>
         <div class="detail-mono">Zeitplan: ${a.schedule}</div>
@@ -937,18 +1242,13 @@
         <div class="detail-mono">Typ: ${a.type || "—"}</div>
         ${a.data_reads && a.data_reads.length ? `<div class="detail-mono" style="margin-top:4px;">data_reads: ${JSON.stringify(a.data_reads)}</div>` : ""}
       </div>
-
       <hr class="divider">
-
       <div class="agent-tabs">
         <button class="agent-tab active" data-tab="state">State <span class="agent-tab-count">${state.length}</span></button>
         <button class="agent-tab" data-tab="data">Data <span class="agent-tab-count">${data.length}</span></button>
         <button class="agent-tab" data-tab="memory">Memory <span class="agent-tab-count">${memories.length}</span></button>
       </div>
-
       <div class="tab-panel active" id="tab-state-${id}">
-        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
-        </div>
         <div class="state-grid">
           ${state
               .map(
@@ -969,7 +1269,6 @@
           ${!state.length ? '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Kein State.</div>' : ""}
         </div>
       </div>
-
       <div class="tab-panel" id="tab-data-${id}">
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
           <button class="btn btn-sm btn-accent" onclick="addAgentData(${id})">+ Neu</button>
@@ -1004,7 +1303,6 @@
                 : '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Keine Data-Einträge.</div>'
         }
       </div>
-
       <div class="tab-panel" id="tab-memory-${id}">
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
           <button class="btn btn-sm btn-accent" onclick="addAgentMemory(${id})">+ Neu</button>
@@ -1061,9 +1359,9 @@
 
                 if (action === "edit-state") {
                     const key = btn.dataset.key;
-                    const card = btn.closest(".state-card");
-                    const currentVal =
-                        card.querySelector(".state-val").textContent;
+                    const currentVal = btn
+                        .closest(".state-card")
+                        .querySelector(".state-val").textContent;
                     openModal(
                         "State bearbeiten",
                         `
@@ -1091,7 +1389,7 @@
                         { method: "DELETE" },
                     )
                         .then(() => {
-                            toast("State-Eintrag gelöscht.");
+                            toast("Gelöscht.");
                             selectAgent(agentId);
                         })
                         .catch(() => toast("Fehler.", true));
@@ -1115,11 +1413,11 @@
                     const d = _agentDataCache[agentId][idx];
                     if (
                         !confirm(
-                            'Data-Eintrag "' +
+                            'Eintrag "' +
                                 d.namespace +
                                 "/" +
                                 d.key +
-                                '" wirklich löschen?',
+                                '" löschen?',
                         )
                     )
                         return;
@@ -1133,7 +1431,7 @@
                         { method: "DELETE" },
                     )
                         .then(() => {
-                            toast("Eintrag gelöscht.");
+                            toast("Gelöscht.");
                             selectAgent(agentId);
                         })
                         .catch(() => toast("Fehler.", true));
@@ -1153,7 +1451,7 @@
                 } else if (action === "delete-agent-mem") {
                     const idx = Number(btn.dataset.idx);
                     const mem = _agentMemCache[agentId][idx];
-                    if (!confirm("Memory wirklich löschen?")) return;
+                    if (!confirm("Memory löschen?")) return;
                     api("/api/agents/" + agentId + "/memories", {
                         method: "DELETE",
                         headers: { "Content-Type": "application/json" },
@@ -1163,7 +1461,7 @@
                         }),
                     })
                         .then(() => {
-                            toast("Memory gelöscht.");
+                            toast("Gelöscht.");
                             selectAgent(agentId);
                         })
                         .catch(() => toast("Fehler.", true));
@@ -1185,7 +1483,7 @@
                         },
                     );
                     closeModal();
-                    toast("State gespeichert.");
+                    toast("Gespeichert.");
                     selectAgent(agentId);
                 } catch (e) {
                     toast("Fehler.", true);
@@ -1251,7 +1549,7 @@
                     .getElementById("new-data-val")
                     .value.trim();
                 if (!namespace || !key || !value) {
-                    toast("Namespace, Key und Value sind pflicht.", true);
+                    toast("Alle Felder sind pflicht.", true);
                     return;
                 }
                 try {
@@ -1261,7 +1559,7 @@
                         body: JSON.stringify({ namespace, key, value }),
                     });
                     closeModal();
-                    toast("Eintrag gespeichert.");
+                    toast("Gespeichert.");
                     selectAgent(agentId);
                 } catch (e) {
                     toast("Fehler.", true);
@@ -1284,7 +1582,42 @@
                         }),
                     });
                     closeModal();
-                    toast("Memory gespeichert.");
+                    toast("Gespeichert.");
+                    selectAgent(agentId);
+                } catch (e) {
+                    toast("Fehler.", true);
+                }
+            }
+
+            function addAgentMemory(agentId) {
+                openModal(
+                    "Memory hinzufügen",
+                    `
+    <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="new-mem-content" placeholder="Neue Beobachtung…"></textarea></div>
+  `,
+                    `
+    <button class="btn" onclick="closeModal()">Abbrechen</button>
+    <button class="btn btn-accent" onclick="saveNewAgentMemory(${agentId})">Speichern</button>
+  `,
+                );
+            }
+
+            async function saveNewAgentMemory(agentId) {
+                const content = document
+                    .getElementById("new-mem-content")
+                    .value.trim();
+                if (!content) return;
+                try {
+                    await api("/api/agents/" + agentId + "/memories", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            content,
+                            subject_type: "agent",
+                        }),
+                    });
+                    closeModal();
+                    toast("Gespeichert.");
                     selectAgent(agentId);
                 } catch (e) {
                     toast("Fehler.", true);
@@ -1300,7 +1633,7 @@
                         "Trigger gesetzt — läuft beim nächsten Scheduler-Durchlauf.",
                     );
                 } catch (e) {
-                    toast("Fehler beim Triggern.", true);
+                    toast("Fehler.", true);
                 }
             }
 
@@ -1309,9 +1642,8 @@
                 try {
                     await api("/api/agents/" + id, { method: "DELETE" });
                     toast("Agent gestoppt.");
+                    goBack();
                     await loadAgents();
-                    document.getElementById("agents-detail").innerHTML =
-                        '<div class="empty-state">Agent gestoppt.</div>';
                 } catch (e) {
                     toast("Fehler.", true);
                 }
@@ -1348,44 +1680,9 @@
                         body: JSON.stringify({ name, schedule, instruction }),
                     });
                     closeModal();
-                    toast("Agent gespeichert.");
+                    toast("Gespeichert.");
                     await loadAgents();
                     selectAgent(id);
-                } catch (e) {
-                    toast("Fehler beim Speichern.", true);
-                }
-            }
-
-            function addAgentMemory(agentId) {
-                openModal(
-                    "Memory hinzufügen",
-                    `
-    <div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="new-mem-content" placeholder="Neue Beobachtung…"></textarea></div>
-  `,
-                    `
-    <button class="btn" onclick="closeModal()">Abbrechen</button>
-    <button class="btn btn-accent" onclick="saveNewAgentMemory(${agentId})">Speichern</button>
-  `,
-                );
-            }
-
-            async function saveNewAgentMemory(agentId) {
-                const content = document
-                    .getElementById("new-mem-content")
-                    .value.trim();
-                if (!content) return;
-                try {
-                    await api("/api/agents/" + agentId + "/memories", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            content,
-                            subject_type: "agent",
-                        }),
-                    });
-                    closeModal();
-                    toast("Memory gespeichert.");
-                    selectAgent(agentId);
                 } catch (e) {
                     toast("Fehler.", true);
                 }
@@ -1417,6 +1714,18 @@
                     .classList.toggle("active", mode === "groups");
                 document.getElementById("memory-detail").innerHTML =
                     '<div class="empty-state">← Eintrag auswählen</div>';
+                document
+                    .getElementById("memory-detail")
+                    .classList.remove("visible");
+                document
+                    .getElementById("memory-sidebar")
+                    .classList.remove("hidden");
+                document
+                    .getElementById("topbar-back")
+                    .classList.remove("visible");
+                document.getElementById("topbar-dot").style.display = "";
+                document.getElementById("topbar-name").textContent =
+                    "Bob Dashboard";
                 renderMemoryList();
             }
 
@@ -1481,6 +1790,20 @@
                             Number(el.dataset.id) === id,
                         ),
                     );
+                const item = memData[memMode].find((i) => i.id === id);
+                const name =
+                    memMode === "users"
+                        ? [item.first_name, item.last_name]
+                              .filter(Boolean)
+                              .join(" ") ||
+                          item.username ||
+                          String(id)
+                        : item.title || String(id);
+                showDetail(
+                    document.getElementById("memory-detail"),
+                    document.getElementById("memory-sidebar"),
+                    name,
+                );
                 await renderMemDetail(id);
             }
 
@@ -1565,7 +1888,7 @@
     `,
                     );
                 } else if (action === "delete-mem") {
-                    if (!confirm("Memory wirklich löschen?")) return;
+                    if (!confirm("Memory löschen?")) return;
                     const endpoint =
                         memMode === "users"
                             ? "/api/users/" + subjectId + "/memories"
@@ -1579,7 +1902,7 @@
                         }),
                     })
                         .then(() => {
-                            toast("Memory gelöscht.");
+                            toast("Gelöscht.");
                             renderMemDetail(subjectId);
                         })
                         .catch(() => toast("Fehler.", true));
@@ -1606,7 +1929,7 @@
                         }),
                     });
                     closeModal();
-                    toast("Memory gespeichert.");
+                    toast("Gespeichert.");
                     renderMemDetail(subjectId);
                 } catch (e) {
                     toast("Fehler.", true);
@@ -1652,7 +1975,7 @@
                         body: JSON.stringify({ content, subject_type }),
                     });
                     closeModal();
-                    toast("Memory gespeichert.");
+                    toast("Gespeichert.");
                     renderMemDetail(subjectId);
                 } catch (e) {
                     toast("Fehler.", true);
@@ -1693,7 +2016,7 @@
     `;
                 } catch (e) {
                     el.innerHTML =
-                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
+                        '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
                 }
             }
 
