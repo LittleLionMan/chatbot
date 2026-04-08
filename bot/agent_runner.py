@@ -6,7 +6,7 @@ import telegram
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
 from bot.brain import ProviderRateLimitError
-from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING
+from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,7 @@ async def execute_agent(
                 pool, agent_id, name, pipeline, state, injected_data,
             )
         else:
-            use_web_search = work_capability in ("search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING)
+            use_web_search = work_capability in ("search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING)
             web_search_max_uses = 5 if work_capability == "search" else 2
 
             work_result = await brain.chat(
