@@ -7,7 +7,7 @@ from croniter import croniter
 import asyncpg
 from bot import brain, memory
 from bot.agent_parser import _classify_work_capability
-from bot.models import CAPABILITY_BALANCED
+from bot.models import CAPABILITY_BALANCED, CAPABILITY_DEEP_REASONING
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ async def parse_agent_system(
             system=_SYSTEM_PARSER_PROMPT,
             messages=[{"role": "user", "content": text}],
             max_tokens=4096,
-            capability=CAPABILITY_BALANCED,
+            capability=CAPABILITY_DEEP_REASONING,
             caller="agent_system_parser",
             pool=pool,
         )

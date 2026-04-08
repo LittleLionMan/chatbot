@@ -1,12 +1,12 @@
 from __future__ import annotations
 import json
 import logging
-import anthropic
 import asyncpg
 import telegram
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
-from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_REASONING
+from bot.brain import ProviderRateLimitError
+from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -241,7 +241,7 @@ async def execute_agent(
 
         prompt = _build_run_prompt(config_data, state, injected_data)
 
-        use_web_search = work_capability in ("search", CAPABILITY_REASONING)
+        use_web_search = work_capability in ("search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING)
         web_search_max_uses = 5 if work_capability == "search" else 2
 
         work_result = await brain.chat(
@@ -317,8 +317,8 @@ async def execute_agent(
         await memory.update_agent_run(pool, agent_id, next_run)
         logger.info("Agent %d done. Next run: %s", agent_id, next_run.isoformat())
 
-    except anthropic.RateLimitError as e:
-        logger.error("Agent %d (%s) hit rate limit, not updating next_run: %s", agent_id, name, e)
+    except ProviderRateLimitError as e:
+        logger.error("Agent %d (%s) hit rate limit on provider %s, not updating next_run: %s", agent_id, name, e.provider, e)
 
     except Exception as e:
         logger.error("Agent %d (%s) execution failed: %s", agent_id, name, e)

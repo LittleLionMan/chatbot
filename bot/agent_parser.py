@@ -12,6 +12,7 @@ from bot.models import (
     CAPABILITY_BALANCED,
     CAPABILITY_SEARCH,
     CAPABILITY_REASONING,
+    CAPABILITY_DEEP_REASONING,
     CAPABILITY_CODING,
 )
 from bot.utils import clean_llm_json, parse_agent_config
@@ -69,16 +70,18 @@ Antworte NUR mit einem dieser Werte, kein anderer Text:
 - fast: einfache Statusprüfungen, Ja/Nein-Entscheidungen, kurze Transformationen ohne eigenes Urteil
 - balanced: moderate Analyse, Zusammenfassungen, normaler Informationsabruf
 - search: Web-Recherche, Nachrichtenauswertung, große Mengen Text zusammenfassen und bewerten
-- reasoning: Fundamentalanalysen, komplexe mehrstufige Schlussfolgerungen, Bewertungen mit vielen Abhängigkeiten
+- reasoning: Analysen mit mehreren Abhängigkeiten, Bewertungen die Urteilsvermögen erfordern
+- deep_reasoning: komplexe mehrstufige Schlussfolgerungen mit vielen Interdependenzen — Fundamentalanalysen, strategische Systembewertungen, Entscheidungen mit langfristigen Konsequenzen die schwer rückgängig zu machen sind
 - coding: Code schreiben, debuggen, Codebasen analysieren
 
-Wähle die Capability die den Kern der Aufgabe beschreibt — nicht was theoretisch auch nötig sein könnte.
+Wähle deep_reasoning nur wenn die Aufgabe wirklich von tiefem Reasoning profitiert — nicht als Default für alles Komplexe.
 
 Beispiele:
 "Überwache Docker Container und melde wenn einer down ist" → fast
 "Suche täglich nach GPU-Angeboten unter 300€ auf Secondhand-Plattformen" → search
 "Prüfe aktuelle Nachrichten zu Unternehmen auf der Watchlist" → search
-"Erstelle vollständige Fundamentalanalysen für Unternehmen inkl. Bilanzqualität und Kursziel" → reasoning
+"Erstelle vollständige Fundamentalanalysen inkl. Bilanzqualität, Marktposition und Kursziel" → deep_reasoning
+"Bewerte ob neue Quartalszahlen die bestehende Analyse verändern" → reasoning
 "Schreibe und teste neue API-Endpoints für das Projekt" → coding
 "Fasse den täglichen Wetterbericht zusammen" → balanced"""
 
@@ -108,7 +111,7 @@ def _pick_name_for_topic(topic_type: str) -> str:
 
 
 async def _classify_work_capability(instruction: str) -> str:
-    valid = {CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_CODING}
+    valid = {CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
     try:
         raw = await brain.chat(
             system=_CAPABILITY_CLASSIFIER_SYSTEM,

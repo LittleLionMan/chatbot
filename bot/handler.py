@@ -2,11 +2,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import anthropic
 import asyncpg
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner, intent_classifier, agent_system_parser
+from bot.brain import ProviderRateLimitError, ProviderAuthError
+from bot.models import CAPABILITY_BALANCED, CAPABILITY_MULTIMODAL
 from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ def _last_bot_response(history: list[dict]) -> str | None:
         if entry["role"] == "assistant":
             return entry["content"]
     return None
+
 
 def _quoted_text(message) -> str | None:
     if message.reply_to_message is None:
@@ -103,26 +105,14 @@ async def _handle_file_content(
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
     history = await memory.get_recent_messages(pool, chat.id)
     system = brain.build_system_prompt(
-        user_memories,
-        group_memories,
-        bot_memories,
-        reflection_memories,
-        display,
-        group_title,
-        active_agents=active_agents,
+        user_memories, group_memories, bot_memories, reflection_memories,
+        display, group_title, active_agents=active_agents,
     )
     llm_messages = brain.history_to_llm_messages(history)
     user_text = caption if caption else "Was siehst du hier?"
     b64 = base64.standard_b64encode(file_bytes).decode("utf-8")
     content: list[dict] = [
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": b64,
-            },
-        },
+        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
         {"type": "text", "text": user_text},
     ]
     llm_messages.append({"role": "user", "content": content})
@@ -130,17 +120,13 @@ async def _handle_file_content(
         response = await brain.chat(
             system=system,
             messages=llm_messages,
+            capability=CAPABILITY_MULTIMODAL,
             caller="handler_file",
             pool=pool,
-            capability=CAPABILITY_MULTIMODAL,
         )
-    except anthropic.RateLimitError:
+    except (ProviderRateLimitError, ProviderAuthError) as e:
         if triggered_by_mention:
-            await message.reply_text(ratelimit.rate_limit_message())
-        return
-    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
-        if triggered_by_mention:
-            await message.reply_text(ratelimit.rate_limit_message())
+            await message.reply_text(ratelimit.rate_limit_message(e.provider))
         return
     text_turn = f"{display}: [Datei] {user_text}"
     await memory.save_message(pool, chat.id, user.id, "user", text_turn)
@@ -216,8 +202,7 @@ async def _reply(
     active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
 
     intent = await intent_classifier.classify(
-        text,
-        pool,
+        text, pool,
         has_active_agents=bool(active_agents),
         has_active_tasks=bool(active_tasks),
     )
@@ -229,9 +214,7 @@ async def _reply(
         extracted = await intent_classifier.extract_trigger_payload(text, pool)
         agent_name: str = extracted.get("agent_name", "")
         payload: dict = extracted.get("payload", {})
-        target_agent = await agent_parser.resolve_agent_by_text(
-            agent_name or text, active_agents
-        )
+        target_agent = await agent_parser.resolve_agent_by_text(agent_name or text, active_agents)
         if target_agent:
             await memory.enqueue_agent_trigger(pool, None, target_agent["name"], payload)
             payload_desc = f" mit Payload: {payload}" if payload else ""
@@ -240,9 +223,7 @@ async def _reply(
             )
         else:
             names = ", ".join(a["name"] for a in active_agents)
-            await message.reply_text(
-                f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}"
-            )
+            await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
         return
 
     if intent == "agent_system":
@@ -285,7 +266,9 @@ async def _reply(
         if target_agent:
             state = await memory.get_agent_state(pool, target_agent["id"])
             agent_memories = await memory.get_agent_memories(pool, target_agent["id"])
-            response, new_config, new_name = await agent_parser.handle_agent_talk(text, target_agent, state, agent_memories)
+            response, new_config, new_name = await agent_parser.handle_agent_talk(
+                text, target_agent, state, agent_memories
+            )
             if new_config is not None:
                 await memory.update_agent_config(pool, target_agent["id"], new_config)
             if new_name is not None:
@@ -383,16 +366,10 @@ async def _reply(
     history = await memory.get_recent_messages(pool, chat.id)
 
     system = brain.build_system_prompt(
-        user_memories,
-        group_memories,
-        bot_memories,
-        reflection_memories,
-        display,
-        group_title,
-        active_agents=active_agents,
+        user_memories, group_memories, bot_memories, reflection_memories,
+        display, group_title, active_agents=active_agents,
     )
     llm_messages = brain.history_to_llm_messages(history)
-
     quoted = _quoted_text(message)
 
     if is_group and not triggered_by_mention:
@@ -410,17 +387,13 @@ async def _reply(
             system=system,
             messages=llm_messages,
             use_web_search=True,
+            capability=CAPABILITY_BALANCED,
             caller="handler",
             pool=pool,
-            capability=CAPABILITY_BALANCED
         )
-    except anthropic.RateLimitError:
+    except (ProviderRateLimitError, ProviderAuthError) as e:
         if triggered_by_mention:
-            await message.reply_text(ratelimit.rate_limit_message())
-        return
-    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
-        if triggered_by_mention:
-            await message.reply_text(ratelimit.rate_limit_message())
+            await message.reply_text(ratelimit.rate_limit_message(e.provider))
         return
 
     await memory.save_message(pool, chat.id, user.id, "user", user_turn)
@@ -428,19 +401,14 @@ async def _reply(
 
     if is_group:
         await memory.touch_session_message(pool, chat.id)
-
     if not triggered_by_mention and is_group:
         await memory.update_spontaneous_timestamp(pool, chat.id)
 
     await _send_response(update, response, use_voice, detected_language)
 
     snippet = _build_snippet(history, text, display)
-    asyncio.create_task(
-        extractor.extract_and_store_automatic(pool, user.id, display, snippet)
-    )
-    asyncio.create_task(
-        extractor.extract_and_store_reflection(pool, chat.id, user.id, snippet)
-    )
+    asyncio.create_task(extractor.extract_and_store_automatic(pool, user.id, display, snippet))
+    asyncio.create_task(extractor.extract_and_store_reflection(pool, chat.id, user.id, snippet))
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -455,7 +423,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
 
-    if ratelimit.is_rate_limited():
+    if ratelimit.is_any_limited():
         await message.reply_text(ratelimit.rate_limit_message())
         return
 
@@ -486,35 +454,18 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if is_group:
         if is_mention or is_reply_to_bot:
-            await _reply(
-                update, pool,
-                triggered_by_mention=True,
-                transcribed_text=transcribed,
-                detected_language=lang,
-                force_voice=False,
-            )
+            await _reply(update, pool, triggered_by_mention=True,
+                         transcribed_text=transcribed, detected_language=lang)
         else:
             should = await decider.should_respond_spontaneously(
-                pool=pool,
-                group_id=chat.id,
-                message_text=transcribed,
+                pool=pool, group_id=chat.id, message_text=transcribed,
             )
             if should:
-                await _reply(
-                    update, pool,
-                    triggered_by_mention=False,
-                    transcribed_text=transcribed,
-                    detected_language=lang,
-                    force_voice=False,
-                )
+                await _reply(update, pool, triggered_by_mention=False,
+                             transcribed_text=transcribed, detected_language=lang)
     else:
-        await _reply(
-            update, pool,
-            triggered_by_mention=True,
-            transcribed_text=transcribed,
-            detected_language=lang,
-            force_voice=False,
-        )
+        await _reply(update, pool, triggered_by_mention=True,
+                     transcribed_text=transcribed, detected_language=lang)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -545,8 +496,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     agent_names_for_mention: list[str] = []
     if is_group:
-        pool_for_mention: asyncpg.Pool = context.bot_data["pool"]
-        agents_for_mention = await memory.get_active_agents_for_user(pool_for_mention, user.id)
+        agents_for_mention = await memory.get_active_agents_for_user(pool, user.id)
         agent_names_for_mention = [a["name"].lower() for a in agents_for_mention]
 
     is_mention = (
@@ -562,22 +512,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if is_group:
         if is_mention or is_reply_to_bot:
-            if ratelimit.is_rate_limited():
+            if ratelimit.is_any_limited():
                 await message.reply_text(ratelimit.rate_limit_message())
                 return
             await _reply(update, pool, triggered_by_mention=True)
         else:
-            if ratelimit.is_rate_limited():
+            if ratelimit.is_any_limited():
                 return
             should = await decider.should_respond_spontaneously(
-                pool=pool,
-                group_id=chat.id,
-                message_text=text,
+                pool=pool, group_id=chat.id, message_text=text,
             )
             if should:
                 await _reply(update, pool, triggered_by_mention=False)
     else:
-        if ratelimit.is_rate_limited():
+        if ratelimit.is_any_limited():
             await message.reply_text(ratelimit.rate_limit_message())
             return
         await _reply(update, pool, triggered_by_mention=True)
@@ -612,7 +560,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if is_group and not triggered:
         return
 
-    if ratelimit.is_rate_limited():
+    if ratelimit.is_any_limited():
         if triggered:
             await message.reply_text(ratelimit.rate_limit_message())
         return
@@ -674,7 +622,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if is_group and not triggered:
         return
 
-    if ratelimit.is_rate_limited():
+    if ratelimit.is_any_limited():
         if triggered:
             await message.reply_text(ratelimit.rate_limit_message())
         return
@@ -730,9 +678,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         agent_memories = await memory.get_agent_memories(pool, agent_id)
         status_text, _, _ = await agent_parser.handle_agent_talk(
             "Was ist dein aktueller Status und was hast du bisher beobachtet?",
-            agent,
-            state,
-            agent_memories,
+            agent, state, agent_memories,
         )
         await query.message.reply_text(
             f"{agent['name']} — Status:\n\n{status_text}",
@@ -763,10 +709,7 @@ async def handle_command_agents(update: Update, context: ContextTypes.DEFAULT_TY
     for agent in active_agents:
         instruction = parse_agent_config(agent["config"]).get("instruction", "")[:80]
         line = f"{agent['name']} — {instruction}… ({agent['schedule']})"
-        await update.effective_message.reply_text(
-            line,
-            reply_markup=_agent_keyboard(agent["id"]),
-        )
+        await update.effective_message.reply_text(line, reply_markup=_agent_keyboard(agent["id"]))
 
 
 async def handle_command_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
