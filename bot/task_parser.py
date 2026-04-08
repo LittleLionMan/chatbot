@@ -7,6 +7,7 @@ from croniter import croniter
 import asyncpg
 from bot import brain, config, memory
 from bot.utils import clean_llm_json
+from bot.models import CAPABILITY_FAST
 
 logger = logging.getLogger(__name__)
 

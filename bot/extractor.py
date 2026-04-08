@@ -5,6 +5,7 @@ import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import asyncpg
 from bot import brain, memory
+from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)

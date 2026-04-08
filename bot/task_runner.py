@@ -5,6 +5,7 @@ import telegram
 from bot import brain, memory
 from bot.task_parser import next_run_after
 from bot.soul import SOUL
+from bot.models import CAPABILITY_BALANCED, CAPABILITY_SEARCH
 
 logger = logging.getLogger(__name__)
 

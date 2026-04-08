@@ -5,6 +5,7 @@ import logging
 import asyncpg
 import telegram
 from bot import config, memory, brain, extractor, ratelimit, task_runner, agent_runner
+from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)

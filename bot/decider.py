@@ -1,6 +1,7 @@
 import asyncpg
 from bot import config, brain, memory
 from bot.soul import SOUL
+from bot.models import CAPABILITY_FAST
 
 
 DECIDER_SYSTEM = """Entscheide ob ein Bot spontan auf eine Gruppennachricht reagieren soll.

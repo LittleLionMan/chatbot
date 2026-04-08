@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import httpx
 from bot import brain
+from bot.models import CAPABILITY_FAST
 
 logger = logging.getLogger(__name__)
 
