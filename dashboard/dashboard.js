@@ -1,4 +1,6 @@
-const BASE = window.__API_URL__;
+function getBase() {
+  return window.__API_URL__ || "";
+}
 
 const CAPABILITIES = [
   "fast",
@@ -26,7 +28,7 @@ const _usageLimit = 10;
 const _isMobile = () => window.innerWidth <= 768;
 
 function api(path, opts) {
-  return fetch(BASE + path, opts).then((r) => {
+  return fetch(getBase() + path, opts).then((r) => {
     if (!r.ok) throw new Error(r.status);
     return r.json();
   });
