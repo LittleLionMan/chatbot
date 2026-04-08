@@ -135,38 +135,43 @@ async def _classify_work_capability(instruction: str) -> str:
 
 _PIPELINE_GENERATOR_SYSTEM = """Du entwirfst eine Ausführungs-Pipeline für einen Agenten der Web-Recherche betreibt oder tiefes Reasoning braucht.
 
-Die Pipeline besteht aus sequenziellen Steps. Jeder Step bekommt den Output der vorherigen Steps als Template-Variablen.
+Die Pipeline besteht aus sequenziellen Steps. Jeder Step bekommt den Output der vorherigen Steps als Template-Variablen. Die vollständige Agenten-Instruction wird jedem Step als Kontext mitgegeben — Step-Prompts müssen die Instruction nicht wiederholen, sondern nur den fokussierten Teilschritt beschreiben.
 
 Antworte NUR mit einem JSON-Array von Steps, kein anderer Text, keine Markdown-Backticks.
 
 Jeder Step hat:
-- "id": Eindeutiger snake_case Bezeichner (z.B. "search_kleinanzeigen", "search_ebay", "analyze")
-- "capability": Einer von: "search", "reasoning", "deep_reasoning"
-- "prompt_template": Die vollständige Anweisung für diesen Step. Vorherige Step-Outputs sind als {{step_id}} verfügbar. Search-Steps enden immer mit: "Fasse deine Ergebnisse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
-- "output_key": Unter welchem Key der Output gespeichert wird — wird als {{output_key}} in späteren Steps verfügbar
+- "id": Eindeutiger snake_case Bezeichner
+- "capability": Einer von: "fast", "search", "reasoning", "deep_reasoning"
+- "prompt_template": Die Anweisung für diesen Teilschritt. Vorherige Step-Outputs als {{output_key}} verfügbar. State-Variablen und trigger_payload-Felder ebenfalls als {{key}} verfügbar. Search-Steps enden immer mit: "Fasse deine Ergebnisse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
+- "output_key": Unter welchem Key der Output gespeichert wird
+- "is_router": true nur für Router-Steps, sonst weglassen
+- "only_if_route": String oder Liste von Strings — dieser Step wird nur ausgeführt wenn der Router diesen Pfad gewählt hat. Weglassen wenn der Step immer läuft.
+
+Wann einen Router einbauen:
+- Wenn die Instruction verschiedene Modi beschreibt (z.B. "normaler Modus" vs "Trigger-Modus")
+- Wenn bestimmte Steps nur unter Bedingungen laufen sollen
+- Der Router ist immer der erste Step, hat capability "fast", is_router: true
+- Der Router-Prompt listet alle möglichen Pfade und ihre Bedingungen auf
+- Router-Output ist ein einzelnes Wort (der Pfad-Name)
 
 Regeln:
-- Search-Steps: je eine klar abgegrenzte Quelle oder Suchfrage pro Step. Maximal 5 Search-Steps.
-- Der letzte Step ist immer ein "reasoning" oder "deep_reasoning" Step der alle Search-Outputs zusammenführt und das finale Ergebnis produziert.
-- Template-Variablen aus dem Agent-State oder trigger_payload sind als {{variable_name}} verfügbar.
-- Wenn die Instruction keine Web-Recherche braucht sondern nur tiefes Reasoning: ein einziger "deep_reasoning" Step reicht.
+- Steps die immer laufen: kein "only_if_route"
+- Steps die nur in bestimmten Pfaden laufen: "only_if_route": "pfadname" oder ["pfad1", "pfad2"]
+- Search-Steps: je eine klar abgegrenzte Quelle oder Suchfrage pro Step, maximal 5
+- Der letzte aktive Step ist immer ein reasoning/deep_reasoning Step der das finale Ergebnis produziert
+- Nur einfache {{key}}-Template-Variablen, keine Punkt-Notation
 
-Beispiel für einen Research-Agent:
-Input: "Suche täglich nach RTX 4060 Ti Angeboten unter 220€ auf deutschen Plattformen"
-
-Output:
+Beispiel mit Router (Jordan — normaler Modus vs Trigger-Modus):
 [
-  {"id": "search_kleinanzeigen", "capability": "search", "prompt_template": "Suche nach aktuellen Angeboten für RTX 4060 Ti unter 220€ auf Kleinanzeigen.de. Fasse deine Ergebnisse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_kleinanzeigen"},
-  {"id": "search_ebay", "capability": "search", "prompt_template": "Suche nach aktuellen Angeboten für RTX 4060 Ti unter 220€ auf eBay Kleinanzeigen und eBay.de. Fasse deine Ergebnisse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_ebay"},
-  {"id": "analyze", "capability": "reasoning", "prompt_template": "Analysiere diese Suchergebnisse auf echte Deals für eine RTX 4060 Ti unter 220€. Bekannte Angebote aus früheren Läufen: {{known_listings}}\n\nKleinanzeigen:\n{{search_kleinanzeigen}}\n\neBay:\n{{search_ebay}}\n\nIdentifiziere nur neue Angebote. Bewerte Preis, Zustand und Verkäufer-Reputation.", "output_key": "final_result"}
+  {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob trigger_payload.ticker vorhanden ist. Falls ja: antworte mit 'trigger'. Falls nein: antworte mit 'normal'.", "output_key": "route"},
+  {"id": "check_pending", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Prüfe welcher Ticker als nächstes analysiert werden soll.", "output_key": "selected_ticker"},
+  {"id": "analyze", "capability": "deep_reasoning", "only_if_route": ["normal", "trigger"], "prompt_template": "Erstelle oder aktualisiere die Fundamentalanalyse für {{selected_ticker}} basierend auf {{trigger_payload.ticker}}.", "output_key": "final_result"}
 ]
 
-Beispiel für einen Analyse-Agent ohne Search:
-Input: "Erstelle Fundamentalanalysen für Unternehmen aus der Watchlist"
-
-Output:
+Beispiel ohne Router (Gecko — immer gleicher Ablauf):
 [
-  {"id": "analyze", "capability": "deep_reasoning", "prompt_template": "Erstelle eine vollständige Fundamentalanalyse für {{trigger_payload.ticker}}: Geschäftsmodell, Marktposition, Bilanzqualität, Management, Wachstumstreiber, Risiken. Schließe mit Kauf/Halten/Verkauf-Empfehlung und Kursziel ab.", "output_key": "final_result"}
+  {"id": "search_sector_1", "capability": "search", "prompt_template": "Suche nach Unternehmen in Sektor X... Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_1"},
+  {"id": "analyze", "capability": "deep_reasoning", "prompt_template": "Analysiere: {{search_1}}", "output_key": "final_result"}
 ]"""
 
 

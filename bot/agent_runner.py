@@ -209,6 +209,11 @@ def _resolve_pipeline_template(template: str, context: dict[str, str]) -> str:
     return template
 
 
+_ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad für diesen Agenten-Lauf gilt.
+Antworte NUR mit einem einzigen Wort — dem Namen des Pfades. Kein anderer Text.
+Analysiere die Gesamtinstruktion, den aktuellen State und den Trigger-Payload um den richtigen Pfad zu bestimmen."""
+
+
 async def _execute_pipeline(
     pool: asyncpg.Pool,
     agent_id: int,
@@ -216,11 +221,16 @@ async def _execute_pipeline(
     pipeline: list[dict],
     state: dict[str, str],
     injected_data: dict[str, str],
+    config_data: dict,
 ) -> str:
     context: dict[str, str] = {}
     context.update({k: v for k, v in state.items() if v})
     context.update(injected_data)
 
+    instruction = config_data.get("instruction", "")
+    agent_system = f"{_AGENT_WORK_SYSTEM}\n\nGesamtauftrag des Agenten:\n{instruction}"
+
+    active_route: str | None = None
     last_output = ""
 
     for step in pipeline:
@@ -228,8 +238,34 @@ async def _execute_pipeline(
         capability: str = step["capability"]
         prompt_template: str = step["prompt_template"]
         output_key: str = step["output_key"]
+        is_router: bool = step.get("is_router", False)
+        only_if_route: list[str] | str | None = step.get("only_if_route")
+
+        if only_if_route is not None and active_route is not None:
+            allowed = [only_if_route] if isinstance(only_if_route, str) else only_if_route
+            if active_route not in allowed:
+                logger.info("Agent %d (%s) pipeline step '%s' skipped (route=%s, allowed=%s)", agent_id, name, step_id, active_route, allowed)
+                continue
 
         prompt = _resolve_pipeline_template(prompt_template, context)
+
+        if is_router:
+            try:
+                route_output = await brain.chat(
+                    system=_ROUTER_SYSTEM,
+                    messages=[{"role": "user", "content": f"Instruktion: {instruction}\n\nAktueller Kontext:\n{prompt}"}],
+                    max_tokens=20,
+                    capability=CAPABILITY_FAST,
+                    caller=f"agent_router:{name}",
+                )
+                active_route = route_output.strip().lower()
+                context[output_key] = active_route
+                last_output = active_route
+                logger.info("Agent %d (%s) router decided route: '%s'", agent_id, name, active_route)
+            except Exception as e:
+                logger.error("Agent %d (%s) router failed: %s", agent_id, name, e)
+                raise
+            continue
 
         is_search_step = capability == CAPABILITY_SEARCH
         use_web_search = is_search_step
@@ -247,7 +283,7 @@ async def _execute_pipeline(
 
         try:
             step_output = await brain.chat(
-                system=_AGENT_WORK_SYSTEM,
+                system=agent_system,
                 messages=[{"role": "user", "content": prompt}],
                 use_web_search=use_web_search,
                 web_search_max_uses=web_search_max_uses,
@@ -312,7 +348,7 @@ async def execute_agent(
 
         if pipeline:
             work_result = await _execute_pipeline(
-                pool, agent_id, name, pipeline, state, injected_data,
+                pool, agent_id, name, pipeline, state, injected_data, config_data,
             )
         else:
             use_web_search = work_capability in ("search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING)
