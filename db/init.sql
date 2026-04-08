@@ -117,6 +117,7 @@ CREATE INDEX IF NOT EXISTS agent_trigger_queue_pending_idx ON agent_trigger_queu
 CREATE TABLE IF NOT EXISTS llm_usage (
     id SERIAL PRIMARY KEY,
     caller TEXT NOT NULL,
+    model TEXT,
     input_tokens INT NOT NULL,
     output_tokens INT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()

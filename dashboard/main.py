@@ -8,7 +8,8 @@ import asyncpg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 load_dotenv()
@@ -38,6 +39,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
+
+app.mount("/static", StaticFiles(directory=os.path.dirname(__file__)), name="static")
 
 
 def pool() -> asyncpg.Pool:
@@ -71,6 +74,9 @@ class AgentConfigPatch(BaseModel):
     instruction: str | None = None
     schedule: str | None = None
     name: str | None = None
+    work_capability: str | None = None
+    pipeline_step: dict | None = None
+    pipeline_step_index: int | None = None
 
 
 class MemoryBody(BaseModel):
@@ -85,6 +91,16 @@ class MemoryPatch(BaseModel):
 
 
 class StatePatch(BaseModel):
+    value: str
+
+
+class AgentDataBody(BaseModel):
+    namespace: str
+    key: str
+    value: str
+
+
+class AgentDataPatch(BaseModel):
     value: str
 
 
@@ -109,6 +125,8 @@ async def get_agents() -> list[dict]:
             "schedule": r["schedule"],
             "instruction": config.get("instruction", ""),
             "type": config.get("type", ""),
+            "work_capability": config.get("work_capability", "balanced"),
+            "pipeline": config.get("pipeline", []),
             "state_keys": config.get("state_keys", []),
             "data_reads": config.get("data_reads", []),
             "last_run_at": r["last_run_at"].isoformat() if r["last_run_at"] else None,
@@ -131,6 +149,13 @@ async def patch_agent(agent_id: int, body: AgentConfigPatch) -> dict:
     new_schedule = body.schedule if body.schedule is not None else row["schedule"]
     if body.instruction is not None:
         config["instruction"] = body.instruction
+    if body.work_capability is not None:
+        config["work_capability"] = body.work_capability
+    if body.pipeline_step is not None and body.pipeline_step_index is not None:
+        pipeline: list = config.get("pipeline", [])
+        if 0 <= body.pipeline_step_index < len(pipeline):
+            pipeline[body.pipeline_step_index] = body.pipeline_step
+            config["pipeline"] = pipeline
     await pool().execute(
         "UPDATE agents SET name = $1, schedule = $2, config = $3 WHERE id = $4",
         new_name, new_schedule, json.dumps(config), agent_id,
@@ -232,16 +257,6 @@ async def delete_agent_memory(agent_id: int, body: MemoryBody) -> dict:
         agent_id, body.content,
     )
     return {"ok": True}
-
-
-class AgentDataBody(BaseModel):
-    namespace: str
-    key: str
-    value: str
-
-
-class AgentDataPatch(BaseModel):
-    value: str
 
 
 @app.get("/api/agents/{agent_id}/data")
@@ -412,6 +427,22 @@ async def get_usage() -> dict:
         ORDER BY (SUM(input_tokens) + SUM(output_tokens)) DESC
         """
     )
+    by_model = await pool().fetch(
+        """
+        SELECT
+            u.model,
+            SUM(u.input_tokens) as input,
+            SUM(u.output_tokens) as output,
+            COUNT(*) as calls,
+            r.input_cost_per_mtok,
+            r.output_cost_per_mtok
+        FROM llm_usage u
+        LEFT JOIN model_registry r ON r.api_model_name = u.model
+        WHERE u.model IS NOT NULL
+        GROUP BY u.model, r.input_cost_per_mtok, r.output_cost_per_mtok
+        ORDER BY (SUM(u.input_tokens) + SUM(u.output_tokens)) DESC
+        """
+    )
     daily = await pool().fetch(
         """
         SELECT DATE(created_at) as day, SUM(input_tokens) as input, SUM(output_tokens) as output
@@ -419,10 +450,27 @@ async def get_usage() -> dict:
         GROUP BY DATE(created_at) ORDER BY day ASC
         """
     )
+
+    model_stats = []
+    for r in by_model:
+        input_cost = float(r["input_cost_per_mtok"] or 0)
+        output_cost = float(r["output_cost_per_mtok"] or 0)
+        total_cost = (r["input"] * input_cost / 1_000_000) + (r["output"] * output_cost / 1_000_000)
+        model_stats.append({
+            "model": r["model"],
+            "input": r["input"],
+            "output": r["output"],
+            "calls": r["calls"],
+            "input_cost_per_mtok": input_cost,
+            "output_cost_per_mtok": output_cost,
+            "estimated_cost_usd": round(total_cost, 4),
+        })
+
     return {
         "total_input": total["input"] or 0,
         "total_output": total["output"] or 0,
         "by_caller": [{"caller": r["caller"], "input": r["input"], "output": r["output"], "calls": r["calls"]} for r in by_caller],
+        "by_model": model_stats,
         "daily": [{"day": str(r["day"]), "input": r["input"], "output": r["output"]} for r in daily],
     }
 
@@ -432,7 +480,7 @@ async def get_usage_history(page: int = 0, limit: int = 10) -> dict:
     offset = page * limit
     rows = await pool().fetch(
         """
-        SELECT caller, input_tokens, output_tokens, created_at
+        SELECT caller, model, input_tokens, output_tokens, created_at
         FROM llm_usage
         ORDER BY created_at DESC
         LIMIT $1 OFFSET $2
@@ -444,6 +492,7 @@ async def get_usage_history(page: int = 0, limit: int = 10) -> dict:
         "items": [
             {
                 "caller": r["caller"],
+                "model": r["model"],
                 "input_tokens": r["input_tokens"],
                 "output_tokens": r["output_tokens"],
                 "created_at": r["created_at"].isoformat(),
@@ -476,3 +525,69 @@ async def get_triggers() -> list[dict]:
         }
         for r in rows
     ]
+
+
+@app.get("/api/registry")
+async def get_registry() -> dict:
+    models = await pool().fetch(
+        """
+        SELECT
+            r.provider, r.model_id, r.display_name, r.api_model_name,
+            r.size_class, r.capabilities, r.input_cost_per_mtok,
+            r.output_cost_per_mtok, r.context_window, r.max_output_tokens,
+            r.is_local, r.notes, r.last_updated_at,
+            COALESCE(a.is_available, false) as is_available,
+            a.last_checked_at, a.error_message
+        FROM model_registry r
+        LEFT JOIN model_availability a USING (provider, model_id)
+        ORDER BY r.is_local ASC, r.input_cost_per_mtok ASC NULLS LAST
+        """
+    )
+    routing = await pool().fetch(
+        """
+        SELECT DISTINCT ON (capability)
+            unnest(r.capabilities) as capability,
+            r.api_model_name,
+            r.display_name,
+            r.provider,
+            r.input_cost_per_mtok,
+            r.is_local
+        FROM model_registry r
+        JOIN model_availability a USING (provider, model_id)
+        WHERE a.is_available = TRUE
+        ORDER BY capability, r.is_local DESC, r.input_cost_per_mtok ASC NULLS LAST
+        """
+    )
+    return {
+        "models": [
+            {
+                "provider": r["provider"],
+                "model_id": r["model_id"],
+                "display_name": r["display_name"],
+                "api_model_name": r["api_model_name"],
+                "size_class": r["size_class"],
+                "capabilities": list(r["capabilities"]),
+                "input_cost_per_mtok": float(r["input_cost_per_mtok"] or 0),
+                "output_cost_per_mtok": float(r["output_cost_per_mtok"] or 0),
+                "context_window": r["context_window"],
+                "max_output_tokens": r["max_output_tokens"],
+                "is_local": r["is_local"],
+                "notes": r["notes"],
+                "is_available": r["is_available"],
+                "last_checked_at": r["last_checked_at"].isoformat() if r["last_checked_at"] else None,
+                "error_message": r["error_message"],
+            }
+            for r in models
+        ],
+        "routing": [
+            {
+                "capability": r["capability"],
+                "model": r["api_model_name"],
+                "display_name": r["display_name"],
+                "provider": r["provider"],
+                "input_cost_per_mtok": float(r["input_cost_per_mtok"] or 0),
+                "is_local": r["is_local"],
+            }
+            for r in routing
+        ],
+    }

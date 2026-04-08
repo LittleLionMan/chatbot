@@ -113,6 +113,7 @@ async def _call_anthropic(
                     pool, caller,
                     response.usage.input_tokens,
                     response.usage.output_tokens,
+                    model=model,
                 )
             except Exception as log_err:
                 logger.warning("Token logging failed for caller %s: %s", caller, log_err)
@@ -184,6 +185,7 @@ async def _call_openai_compatible(
                     pool, caller,
                     usage.get("prompt_tokens", 0),
                     usage.get("completion_tokens", 0),
+                    model=model,
                 )
             except Exception as log_err:
                 logger.warning("Token logging failed for caller %s: %s", caller, log_err)

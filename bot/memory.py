@@ -535,10 +535,11 @@ async def log_llm_usage(
     caller: str,
     input_tokens: int,
     output_tokens: int,
+    model: str | None = None,
 ) -> None:
     await pool.execute(
-        "INSERT INTO llm_usage (caller, input_tokens, output_tokens) VALUES ($1, $2, $3)",
-        caller, input_tokens, output_tokens,
+        "INSERT INTO llm_usage (caller, model, input_tokens, output_tokens) VALUES ($1, $2, $3, $4)",
+        caller, model, input_tokens, output_tokens,
     )
 
 
