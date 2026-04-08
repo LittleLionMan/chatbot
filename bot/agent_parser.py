@@ -135,80 +135,84 @@ async def _classify_work_capability(instruction: str) -> str:
 
 _PIPELINE_GENERATOR_SYSTEM = """Du entwirfst eine Ausführungs-Pipeline für einen Agenten.
 
-Die Konfiguration besteht aus drei optionalen Teilen die kombiniert werden:
-1. "pipeline": Feste Steps die immer in dieser Reihenfolge laufen (Router, State-Reads, etc.)
-2. "pipeline_template": Ein wiederholbarer Step-Pattern für variable Datenlisten
-3. "pipeline_after_template": Feste Steps die nach den Template-Steps laufen (Analyse, Trigger, etc.)
+Die Konfiguration besteht aus drei optionalen Teilen:
+1. "pipeline": Feste Steps (Router, schnelle State-Operationen)
+2. "pipeline_template": Wiederholbarer Step für variable Listen
+3. "pipeline_after_template": Feste Steps nach dem Template (Analyse, Trigger)
 
-Antworte NUR mit einem JSON-Objekt mit diesen optionalen Feldern. Kein anderer Text, keine Markdown-Backticks.
+Antworte NUR mit einem JSON-Objekt. Kein anderer Text, keine Markdown-Backticks.
 
-Felder in "pipeline" und "pipeline_after_template" — jeder Step hat:
-- "id": Eindeutiger snake_case Bezeichner
+Felder in "pipeline" und "pipeline_after_template" — jeder Step:
+- "id": snake_case Bezeichner
 - "capability": "fast", "search", "reasoning", "deep_reasoning"
-- "prompt_template": Anweisung für diesen Teilschritt. Vorherige Step-Outputs als {{output_key}} verfügbar. State-Variablen als {{key}}, trigger_payload als {{trigger_payload.key}}.
-- "output_key": Unter welchem Key der Output gespeichert wird
-- "is_router": true nur für Router-Steps
-- "only_if_route": String oder Liste — Step nur bei diesem Route-Wert ausführen
+- "prompt_template": Anweisung. Vorherige Outputs als {{output_key}}, State als {{key}}, Payload als {{trigger_payload.key}}
+- "output_key": Speicher-Key
+- "is_router": true nur für Router
+- "only_if_route": Route-Filter (String oder Liste)
 
 Felder in "pipeline_template":
-- "source": "state" (aus Agent-State), "injected" (aus data_reads), "static" (feste Liste in Config)
-- "foreach": Key-Name im State/injected (bei source=state/injected)
-- "foreach_items": Feste Liste von Strings (bei source=static)
-- "split_by": Trennzeichen bei source=state/injected (Standard: ",")
-- "batch_size": Items pro Step (1 = ein Step pro Item)
-- "aggregate_key": Unter diesem Key werden alle Template-Outputs gesammelt und sind im nächsten Step verfügbar
-- "only_if_route": Optionaler Route-Filter für alle Template-Steps
-- "step": Step-Template mit {{item}} als Platzhalter für den aktuellen Wert, {{item_id}} als URL-sicherer Bezeichner
+- "source": "state", "injected" oder "static"
+- "foreach": State-Key (bei state/injected)
+- "foreach_items": Feste Liste (bei static)
+- "split_by": Trennzeichen (Standard ",")
+- "batch_size": Items pro Step
+- "aggregate_key": Key unter dem alle Template-Outputs gesammelt werden
+- "only_if_route": Route-Filter
+- "step": Template mit {{item}} und {{item_id}}
 
-Regeln:
-- Nur pipeline_template verwenden wenn die Anzahl der Items zur Laufzeit variabel ist (aus State) oder zur Erstellungszeit fix aber mehrere Search-Steps rechtfertigt (static)
-- Die vollständige Agenten-Instruction wird jedem Step als Kontext mitgegeben — Prompts müssen sie nicht wiederholen
-- Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
-- Router immer als ersten Step in "pipeline" wenn die Instruction Modi beschreibt
-- Der letzte Step in pipeline_after_template ist immer reasoning/deep_reasoning
+WANN pipeline_template — NUR wenn:
+- source=state/injected: Eine Liste im State wird verarbeitet deren Länge zur Laufzeit variabel ist. Beispiel: alle Ticker aus "fundamentalanalyse_vorhanden" — Anzahl unbekannt.
+- source=static: Instruction nennt explizit mehr als 3 gleichartige Items die identisch verarbeitet werden. Beispiel: 5 GPU-Modelle mit je gleicher Suche.
 
-Beispiel Jim Cramer (variable Ticker aus State, zwei Modi):
+KEIN pipeline_template wenn:
+- Die Instruction Themenbereiche/Sektoren auflistet → feste Search-Steps
+- Eine Liste als Ausschlusskriterium dient (z.B. "already known") → kein foreach
+- 3 oder weniger Items → einzelne feste Steps
+- Items unterschiedlich behandelt werden
+
+Router einbauen wenn Instruction Modi beschreibt (Trigger-Modus vs Normal-Modus).
+Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
+Letzter Step ist immer reasoning/deep_reasoning.
+
+Beispiel "N Themenbereiche recherchieren" (feste Steps, KEIN Template — Bereiche fix in Instruction):
 {
   "pipeline": [
-    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob trigger_payload.watch_ticker vorhanden ist. Falls ja: antworte mit 'trigger'. Falls nein: antworte mit 'normal'.", "output_key": "route"},
-    {"id": "update_watch_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Aktualisiere watch_triggers für {{trigger_payload.watch_ticker}}.", "output_key": "trigger_result"}
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob ein Trigger-Payload vorhanden ist der eine sofortige Aktion erfordert. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
+    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe die Trigger-Aktion aus gemäß trigger_payload.", "output_key": "trigger_done"}
   ],
-  "pipeline_template": {
-    "source": "state",
-    "foreach": "fundamentalanalyse_vorhanden",
-    "split_by": ",",
-    "batch_size": 1,
-    "aggregate_key": "all_news",
-    "only_if_route": "normal",
-    "step": {
-      "id": "search_{{item_id}}",
-      "capability": "search",
-      "prompt_template": "Suche nach aktuellen Nachrichten für {{item}} der letzten 7 Tage. Nur signifikante Ereignisse. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.",
-      "output_key": "news_{{item_id}}"
-    }
-  },
   "pipeline_after_template": [
-    {"id": "search_macro", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach aktuellen Makro-Ereignissen. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "macro_news"},
-    {"id": "analyze_and_trigger", "capability": "deep_reasoning", "only_if_route": "normal", "prompt_template": "Analysiere alle Nachrichten: {{all_news}} und Makro: {{macro_news}}. Vergleiche mit last_news. Entscheide über Trigger.", "output_key": "final_result"}
+    {"id": "search_thema_1", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach [erstem Themenbereich aus Instruction]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_1"},
+    {"id": "search_thema_2", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach [zweitem Themenbereich aus Instruction]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_2"},
+    {"id": "analyze", "capability": "deep_reasoning", "only_if_route": "normal", "prompt_template": "Analysiere: {{search_1}} {{search_2}}. Wende Filterkriterien aus Instruction an.", "output_key": "final_result"}
   ]
 }
 
-Beispiel GPU-Agent (feste Items, kein Router):
+Beispiel "Variable Liste aus State verarbeiten" (Template — Listenlänge zur Laufzeit unbekannt):
+{
+  "pipeline": [
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob Trigger-Payload einen sofortigen Sonderfall auslöst. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
+    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe Sonderfall-Logik aus gemäß trigger_payload.", "output_key": "trigger_done"}
+  ],
+  "pipeline_template": {
+    "source": "state", "foreach": "[state_key_mit_liste]", "split_by": ",", "batch_size": 1,
+    "aggregate_key": "all_results", "only_if_route": "normal",
+    "step": {"id": "process_{{item_id}}", "capability": "search", "prompt_template": "Verarbeite {{item}} gemäß Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
+  },
+  "pipeline_after_template": [
+    {"id": "analyze", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}. Erstelle finales Ergebnis gemäß Instruction.", "output_key": "final_result"}
+  ]
+}
+
+Beispiel "Feste Liste gleichartiger Items durchsuchen" (static Template — >3 identisch verarbeitete Items):
 {
   "pipeline_template": {
     "source": "static",
-    "foreach_items": ["RTX 4060 Ti 16GB <220€", "RTX 9070 XT 16GB <500€", "RTX 3090 24GB <600€"],
-    "batch_size": 1,
-    "aggregate_key": "all_listings",
-    "step": {
-      "id": "search_{{item_id}}",
-      "capability": "search",
-      "prompt_template": "Suche nach aktuellen Angeboten für {{item}} auf deutschen Secondhand-Plattformen. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.",
-      "output_key": "listings_{{item_id}}"
-    }
+    "foreach_items": ["[Item 1 aus Instruction]", "[Item 2 aus Instruction]", "[Item 3 aus Instruction]", "[Item 4 aus Instruction]"],
+    "batch_size": 1, "aggregate_key": "all_results",
+    "step": {"id": "search_{{item_id}}", "capability": "search", "prompt_template": "Suche nach {{item}} gemäß den Kriterien aus der Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
   },
   "pipeline_after_template": [
-    {"id": "analyze", "capability": "reasoning", "prompt_template": "Analysiere alle gefundenen Angebote: {{all_listings}}. Vergleiche mit known_listings und price_baseline.", "output_key": "final_result"}
+    {"id": "analyze", "capability": "reasoning", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}. Wende Bewertungskriterien aus Instruction an.", "output_key": "final_result"}
   ]
 }"""
 
