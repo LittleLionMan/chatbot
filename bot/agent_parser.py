@@ -14,6 +14,8 @@ from bot.models import (
     CAPABILITY_REASONING,
     CAPABILITY_DEEP_REASONING,
     CAPABILITY_CODING,
+    CAPABILITY_MULTIMODAL,
+    CAPABILITY_LONG_CONTEXT,
 )
 from bot.utils import clean_llm_json, parse_agent_config
 
