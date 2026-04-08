@@ -1,0 +1,38 @@
+use_default_settings: true
+
+server:
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "de-DE"
+  max_page: 1
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    use_mobile_ui: false
+
+  - name: bing
+    engine: bing
+    shortcut: b
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+
+ui:
+  static_use_hash: true
+
+enabled_plugins:
+  - "Basic Calculator"
+  - "Hash plugin"
+  - "Self Informations"
+  - "Tracker URL remover"

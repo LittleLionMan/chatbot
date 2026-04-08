@@ -209,41 +209,50 @@ async def chat(
     pool: asyncpg.Pool | None = None,
     capability: Capability | None = None,
     force_model: str | None = None,
+    search_queries: list[str] | None = None,
 ) -> str:
     model = force_model or (select_model(capability) if capability else select_model(CAPABILITY_BALANCED))
     provider = get_provider_for_model(model) if not force_model else _infer_provider(model)
-
     resolved_max_tokens = max_tokens or get_max_output_tokens(capability or CAPABILITY_BALANCED)
 
     logger.debug("chat caller=%s capability=%s model=%s provider=%s max_tokens=%d", caller, capability, model, provider, resolved_max_tokens)
 
-    if use_web_search and provider != "anthropic":
-        logger.warning(
-            "Web search requested for non-Anthropic provider %s — falling back to Anthropic for caller %s",
-            provider, caller,
-        )
-        model = select_model(capability, CAPABILITY_BALANCED) if capability else model
-        provider = "anthropic"
-        model = next(
-            (m["api_model_name"] for m in [] if m),
-            "claude-sonnet-4-6",
-        )
-        from bot.models import _available_models
-        anthropic_candidates = [
-            m for m in _available_models
-            if m["provider"] == "anthropic" and (capability is None or capability in m["capabilities"])
-        ]
-        if anthropic_candidates:
-            anthropic_candidates.sort(key=lambda m: m["input_cost_per_mtok"])
-            model = anthropic_candidates[0]["api_model_name"]
+    if use_web_search:
+        from bot import search as _search
+        searxng_available = await _search.is_available()
+
+        if searxng_available:
+            augmented_messages = await _inject_search_results(messages, search_queries, _search)
+            try:
+                if provider == "anthropic":
+                    return await _call_anthropic(
+                        system, augmented_messages, model, resolved_max_tokens,
+                        False, None, caller, pool,
+                    )
+                return await _call_openai_compatible(
+                    system, augmented_messages, model, provider, resolved_max_tokens, caller, pool,
+                )
+            except (ProviderRateLimitError, ProviderAuthError):
+                raise
         else:
-            model = "claude-sonnet-4-6"
+            logger.warning("SearXNG not available — falling back to Anthropic native search for caller %s", caller)
+            from bot.models import _available_models
+            anthropic_candidates = [
+                m for m in _available_models
+                if m["provider"] == "anthropic" and (capability is None or capability in m["capabilities"])
+            ]
+            if anthropic_candidates:
+                anthropic_candidates.sort(key=lambda m: m["input_cost_per_mtok"])
+                model = anthropic_candidates[0]["api_model_name"]
+            else:
+                model = "claude-sonnet-4-6"
+            provider = "anthropic"
 
     try:
         if provider == "anthropic":
             return await _call_anthropic(
                 system, messages, model, resolved_max_tokens,
-                use_web_search, web_search_max_uses, caller, pool,
+                use_web_search and not (await _searxng_available_cached()), web_search_max_uses, caller, pool,
             )
         return await _call_openai_compatible(
             system, messages, model, provider, resolved_max_tokens, caller, pool,
@@ -256,6 +265,60 @@ async def chat(
     except ProviderAuthError as e:
         ratelimit.set_no_credits(e.provider)
         raise
+
+
+_searxng_available: bool | None = None
+
+
+async def _searxng_available_cached() -> bool:
+    global _searxng_available
+    if _searxng_available is None:
+        from bot import search as _search
+        _searxng_available = await _search.is_available()
+    return _searxng_available
+
+
+async def _inject_search_results(
+    messages: list[dict],
+    search_queries: list[str] | None,
+    search_module,
+) -> list[dict]:
+    if not messages:
+        return messages
+
+    last_message = messages[-1]
+    user_text: str = ""
+    if isinstance(last_message.get("content"), str):
+        user_text = last_message["content"]
+    elif isinstance(last_message.get("content"), list):
+        for block in last_message["content"]:
+            if isinstance(block, dict) and block.get("type") == "text":
+                user_text = block.get("text", "")
+                break
+
+    queries = search_queries or [user_text[:200]]
+    all_results: list[str] = []
+    for query in queries:
+        if not query.strip():
+            continue
+        result = await search_module.search(query)
+        if result:
+            all_results.append(f"Suchanfrage: {query}\n\n{result}")
+
+    if not all_results:
+        return messages
+
+    search_context = "\n\n---\n\n".join(all_results)
+    injection = f"\n\n[Suchergebnisse aus dem Internet — verwende diese für deine Antwort:]\n\n{search_context}"
+
+    augmented = list(messages[:-1])
+    last = dict(last_message)
+    if isinstance(last.get("content"), str):
+        last["content"] = last["content"] + injection
+    elif isinstance(last.get("content"), list):
+        last["content"] = list(last["content"]) + [{"type": "text", "text": injection}]
+    augmented.append(last)
+    return augmented
 
 
 def build_system_prompt(

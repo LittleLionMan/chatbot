@@ -16,6 +16,29 @@ logger = logging.getLogger(__name__)
 _pending_agent_systems: dict[int, dict] = {}
 
 
+_SEARCH_DECISION_SYSTEM = """Entscheide ob diese Nachricht aktuelle Informationen aus dem Internet erfordert.
+Antworte ausschließlich mit 'ja' oder 'nein'.
+'ja' wenn: aktuelle Preise, News, Kurse, Wetter, aktuelle Ereignisse, Fakten die sich ändern können, konkrete Personen oder Unternehmen deren aktueller Status relevant ist.
+'nein' wenn: allgemeine Fragen, Meinungen, Konzepte, Unterhaltung, Aufgaben die kein aktuelles Wissen brauchen.
+Beispiele: "Was kostet Bitcoin?" → ja, "Was denkst du über KI?" → nein, "Wie läuft die Inflation?" → ja, "Erkläre mir Quantencomputing" → nein."""
+
+
+async def _should_search(text: str) -> bool:
+    try:
+        from bot import brain as _brain
+        from bot.models import CAPABILITY_FAST
+        result = await _brain.chat(
+            system=_SEARCH_DECISION_SYSTEM,
+            messages=[{"role": "user", "content": text}],
+            max_tokens=5,
+            capability=CAPABILITY_FAST,
+            caller="search_decision",
+        )
+        return result.strip().lower().startswith("ja")
+    except Exception:
+        return False
+
+
 def _display_name(user) -> str:
     if user.first_name and user.last_name:
         return f"{user.first_name} {user.last_name}"
@@ -427,11 +450,17 @@ async def _reply(
 
     llm_messages.append({"role": "user", "content": user_turn})
 
+    needs_search = await _should_search(text)
+    if needs_search:
+        from bot import search as _search
+        if await _search.is_available():
+            await message.reply_text("Moment, ich schaue kurz nach…")
+
     try:
         response = await brain.chat(
             system=system,
             messages=llm_messages,
-            use_web_search=True,
+            use_web_search=needs_search,
             capability=CAPABILITY_BALANCED,
             caller="handler",
             pool=pool,

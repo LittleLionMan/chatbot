@@ -21,3 +21,4 @@ BOT_SCHEDULER_INTERVAL_SECONDS: int = int(os.getenv("BOT_SCHEDULER_INTERVAL_SECO
 BOT_DEFAULT_TIMEZONE: str = os.getenv("BOT_DEFAULT_TIMEZONE", "UTC")
 
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+SEARXNG_BASE_URL: str = os.getenv("SEARXNG_BASE_URL", "http://searxng:8080")

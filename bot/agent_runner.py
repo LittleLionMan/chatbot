@@ -234,8 +234,16 @@ async def _execute_pipeline(
         is_search_step = capability == CAPABILITY_SEARCH
         use_web_search = is_search_step
         web_search_max_uses = 3 if is_search_step else None
+        search_queries: list[str] | None = [prompt] if is_search_step else None
 
-        logger.info("Agent %d (%s) pipeline step '%s' [%s]", agent_id, name, step_id, capability)
+        force_model: str | None = None
+        if is_search_step:
+            from bot.models import select_model_for_provider
+            from bot import search as _search
+            if not await _search.is_available():
+                force_model = select_model_for_provider(capability, "anthropic")
+
+        logger.info("Agent %d (%s) pipeline step '%s' [%s]%s", agent_id, name, step_id, capability, f" → {force_model}" if force_model else "")
 
         try:
             step_output = await brain.chat(
@@ -243,7 +251,9 @@ async def _execute_pipeline(
                 messages=[{"role": "user", "content": prompt}],
                 use_web_search=use_web_search,
                 web_search_max_uses=web_search_max_uses,
+                search_queries=search_queries,
                 capability=capability,
+                force_model=force_model,
                 caller=f"agent_pipeline:{name}:{step_id}",
             )
         except Exception as e:
