@@ -1,6 +1,7 @@
 use_default_settings: true
 
 server:
+  secret_key: "HIER_ERSETZEN_openssl_rand_-hex_32"
   limiter: false
   image_proxy: false
 
