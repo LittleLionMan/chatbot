@@ -278,7 +278,34 @@ async def _searxng_available_cached() -> bool:
     return _searxng_available
 
 
-async def _inject_search_results(
+_QUERY_EXTRACTION_SYSTEM = """Extrahiere aus dieser Nutzernachricht 1-3 optimierte Suchanfragen.
+Antworte NUR mit einem JSON-Array von Strings, kein anderer Text, keine Markdown-Backticks.
+Optimiere die Queries für maximale Relevanz: präzise Begriffe, relevante Qualifier, aktuelle Jahreszahl wenn zeitkritisch.
+Beispiele:
+"Wie ist das Wetter in Berlin?" → ["Wetter Berlin aktuell"]
+"Was kostet eine RTX 4090 gerade?" → ["RTX 4090 Preis 2026"]
+"Neueste Nachrichten zu OpenAI" → ["OpenAI News April 2026"]
+"Vergleich Python vs JavaScript für Backend" → ["Python vs JavaScript Backend Performance Vergleich 2026"]"""
+
+
+async def _extract_search_queries(text: str) -> list[str]:
+    from bot import brain as _brain
+    from bot.models import CAPABILITY_FAST
+    import json
+    try:
+        raw = await _brain.chat(
+            system=_QUERY_EXTRACTION_SYSTEM,
+            messages=[{"role": "user", "content": text}],
+            max_tokens=100,
+            capability=CAPABILITY_FAST,
+            caller="search_query_extractor",
+        )
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [q for q in parsed if isinstance(q, str) and q.strip()][:3]
+        return [text[:100]]
+    except Exception:
+        return [text[:100]]
     messages: list[dict],
     search_queries: list[str] | None,
     search_module,
@@ -296,7 +323,7 @@ async def _inject_search_results(
                 user_text = block.get("text", "")
                 break
 
-    queries = search_queries or [user_text[:200]]
+    queries = search_queries or await _extract_search_queries(user_text)
     all_results: list[str] = []
     for query in queries:
         if not query.strip():
@@ -309,7 +336,10 @@ async def _inject_search_results(
         return messages
 
     search_context = "\n\n---\n\n".join(all_results)
-    injection = f"\n\n[Suchergebnisse aus dem Internet — verwende diese für deine Antwort:]\n\n{search_context}"
+    injection = (
+        f"\n\n[Suchergebnisse aus dem Internet — der User wurde bereits informiert dass du suchst. "
+        f"Antworte direkt mit dem Ergebnis, keine Einleitung wie 'ich habe gesucht' oder 'lass mich nachsehen'.]\n\n{search_context}"
+    )
 
     augmented = list(messages[:-1])
     last = dict(last_message)
