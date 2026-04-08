@@ -48,6 +48,7 @@ _PROVIDER_BASE_URLS: dict[str, str] = {
 
 _available_models: list[dict] = []
 _capability_model_map: dict[str, str] = {}
+_capability_max_tokens_map: dict[str, int] = {}
 _pool_ref: asyncpg.Pool | None = None
 
 
@@ -109,8 +110,9 @@ async def _check_ollama() -> list[str]:
 
 
 def _build_capability_map() -> None:
-    global _capability_model_map
+    global _capability_model_map, _capability_max_tokens_map
     _capability_model_map = {}
+    _capability_max_tokens_map = {}
 
     for capability in ALL_CAPABILITIES:
         candidates = [m for m in _available_models if capability in m["capabilities"]]
@@ -118,16 +120,19 @@ def _build_capability_map() -> None:
         local = [m for m in candidates if m["is_local"]]
         if local:
             _capability_model_map[capability] = local[0]["api_model_name"]
+            _capability_max_tokens_map[capability] = local[0]["max_output_tokens"]
             continue
 
         if candidates:
             candidates.sort(key=lambda m: m["input_cost_per_mtok"])
             _capability_model_map[capability] = candidates[0]["api_model_name"]
+            _capability_max_tokens_map[capability] = candidates[0]["max_output_tokens"]
 
     logger.info("━━━ Model routing ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     for capability in ALL_CAPABILITIES:
         model = _capability_model_map.get(capability, "— nicht verfügbar —")
-        logger.info("  %-14s → %s", capability, model)
+        max_tok = _capability_max_tokens_map.get(capability, 0)
+        logger.info("  %-14s → %-40s (max_tokens: %d)", capability, model, max_tok)
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 
@@ -138,7 +143,7 @@ async def run_availability_check(pool: asyncpg.Pool) -> None:
     logger.info("Running model availability check...")
 
     all_models: list[asyncpg.Record] = await pool.fetch(
-        "SELECT provider, model_id, api_model_name, capabilities, input_cost_per_mtok, output_cost_per_mtok, context_window, is_local FROM model_registry ORDER BY input_cost_per_mtok ASC NULLS LAST"
+        "SELECT provider, model_id, api_model_name, capabilities, input_cost_per_mtok, output_cost_per_mtok, context_window, max_output_tokens, is_local FROM model_registry ORDER BY input_cost_per_mtok ASC NULLS LAST"
     )
 
     available_providers: set[str] = set()
@@ -205,6 +210,7 @@ async def run_availability_check(pool: asyncpg.Pool) -> None:
                 "input_cost_per_mtok": float(row["input_cost_per_mtok"] or 0),
                 "output_cost_per_mtok": float(row["output_cost_per_mtok"] or 0),
                 "context_window": row["context_window"],
+                "max_output_tokens": int(row["max_output_tokens"] or 8192),
                 "is_local": row["is_local"],
             })
 
@@ -224,6 +230,14 @@ def select_model(capability: Capability, fallback_capability: Capability | None 
     if fallback_capability and fallback_capability in _capability_model_map:
         return _capability_model_map[fallback_capability]
     return os.getenv("LLM_MODEL", "claude-sonnet-4-6")
+
+
+def get_max_output_tokens(capability: Capability, fallback_capability: Capability | None = None) -> int:
+    if capability in _capability_max_tokens_map:
+        return _capability_max_tokens_map[capability]
+    if fallback_capability and fallback_capability in _capability_max_tokens_map:
+        return _capability_max_tokens_map[fallback_capability]
+    return 8192
 
 
 def get_provider_for_model(api_model_name: str) -> str:

@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS model_registry (
     input_cost_per_mtok NUMERIC(10, 4),
     output_cost_per_mtok NUMERIC(10, 4),
     context_window INT,
+    max_output_tokens INT,
     is_local BOOLEAN NOT NULL DEFAULT FALSE,
     notes TEXT,
     last_updated_at TIMESTAMPTZ DEFAULT NOW(),

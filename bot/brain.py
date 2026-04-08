@@ -9,6 +9,7 @@ from bot.models import (
     Capability,
     CAPABILITY_BALANCED,
     get_provider_for_model,
+    get_max_output_tokens,
     select_model,
 )
 from bot.soul import SOUL, BEHAVIOR_RULES as _BEHAVIOR_RULES
@@ -199,7 +200,7 @@ async def _call_openai_compatible(
 async def chat(
     system: str,
     messages: list[dict],
-    max_tokens: int = 2048,
+    max_tokens: int | None = None,
     use_web_search: bool = False,
     web_search_max_uses: int | None = None,
     caller: str = "unknown",
@@ -210,7 +211,9 @@ async def chat(
     model = force_model or (select_model(capability) if capability else select_model(CAPABILITY_BALANCED))
     provider = get_provider_for_model(model) if not force_model else _infer_provider(model)
 
-    logger.debug("chat caller=%s capability=%s model=%s provider=%s", caller, capability, model, provider)
+    resolved_max_tokens = max_tokens or get_max_output_tokens(capability or CAPABILITY_BALANCED)
+
+    logger.debug("chat caller=%s capability=%s model=%s provider=%s max_tokens=%d", caller, capability, model, provider, resolved_max_tokens)
 
     if use_web_search and provider != "anthropic":
         logger.warning(
@@ -237,11 +240,11 @@ async def chat(
     try:
         if provider == "anthropic":
             return await _call_anthropic(
-                system, messages, model, max_tokens,
+                system, messages, model, resolved_max_tokens,
                 use_web_search, web_search_max_uses, caller, pool,
             )
         return await _call_openai_compatible(
-            system, messages, model, provider, max_tokens, caller, pool,
+            system, messages, model, provider, resolved_max_tokens, caller, pool,
         )
 
     except ProviderRateLimitError as e:

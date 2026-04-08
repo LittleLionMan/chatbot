@@ -123,8 +123,7 @@ async def _handle_file_content(
             capability=CAPABILITY_MULTIMODAL,
             caller="handler_file",
             pool=pool,
-        )
-    except (ProviderRateLimitError, ProviderAuthError) as e:
+        )    except (ProviderRateLimitError, ProviderAuthError) as e:
         if triggered_by_mention:
             await message.reply_text(ratelimit.rate_limit_message(e.provider))
         return
@@ -390,8 +389,7 @@ async def _reply(
             capability=CAPABILITY_BALANCED,
             caller="handler",
             pool=pool,
-        )
-    except (ProviderRateLimitError, ProviderAuthError) as e:
+        )    except (ProviderRateLimitError, ProviderAuthError) as e:
         if triggered_by_mention:
             await message.reply_text(ratelimit.rate_limit_message(e.provider))
         return

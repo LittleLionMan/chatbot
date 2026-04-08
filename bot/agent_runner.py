@@ -203,6 +203,63 @@ async def _execute_tool_calls(
             logger.error("Agent %d tool %s failed: %s", agent_id, tool, e)
 
 
+def _resolve_pipeline_template(template: str, context: dict[str, str]) -> str:
+    for k, v in context.items():
+        template = template.replace(f"{{{{{k}}}}}", v)
+    return template
+
+
+async def _execute_pipeline(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    name: str,
+    pipeline: list[dict],
+    state: dict[str, str],
+    injected_data: dict[str, str],
+) -> str:
+    context: dict[str, str] = {}
+    context.update({k: v for k, v in state.items() if v})
+    context.update(injected_data)
+
+    last_output = ""
+
+    for step in pipeline:
+        step_id: str = step["id"]
+        capability: str = step["capability"]
+        prompt_template: str = step["prompt_template"]
+        output_key: str = step["output_key"]
+
+        prompt = _resolve_pipeline_template(prompt_template, context)
+
+        is_search_step = capability == CAPABILITY_SEARCH
+        use_web_search = is_search_step
+        web_search_max_uses = 3 if is_search_step else None
+
+        logger.info("Agent %d (%s) pipeline step '%s' [%s]", agent_id, name, step_id, capability)
+
+        try:
+            step_output = await brain.chat(
+                system=_AGENT_WORK_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+                use_web_search=use_web_search,
+                web_search_max_uses=web_search_max_uses,
+                capability=capability,
+                caller=f"agent_pipeline:{name}:{step_id}",
+            )
+        except Exception as e:
+            logger.error("Agent %d (%s) pipeline step '%s' failed: %s", agent_id, name, step_id, e)
+            raise
+
+        context[output_key] = step_output
+        last_output = step_output
+        logger.info(
+            "Agent %d (%s) step '%s' done (%d chars output)",
+            agent_id, name, step_id, len(step_output),
+        )
+
+    return last_output
+
+
 async def execute_agent(
     pool: asyncpg.Pool,
     bot: telegram.Bot,
@@ -241,26 +298,31 @@ async def execute_agent(
 
         prompt = _build_run_prompt(config_data, state, injected_data)
 
-        use_web_search = work_capability in ("search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING)
-        web_search_max_uses = 5 if work_capability == "search" else 2
+        pipeline: list[dict] = config_data.get("pipeline", [])
 
-        work_result = await brain.chat(
-            system=_AGENT_WORK_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=8192,
-            use_web_search=use_web_search,
-            web_search_max_uses=web_search_max_uses,
-            capability=work_capability,
-            caller=f"agent_work:{name}",
-            pool=pool,
-        )
+        if pipeline:
+            work_result = await _execute_pipeline(
+                pool, agent_id, name, pipeline, state, injected_data,
+            )
+        else:
+            use_web_search = work_capability in ("search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING)
+            web_search_max_uses = 5 if work_capability == "search" else 2
+
+            work_result = await brain.chat(
+                system=_AGENT_WORK_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+                use_web_search=use_web_search,
+                web_search_max_uses=web_search_max_uses,
+                capability=work_capability,
+                caller=f"agent_work:{name}",
+                pool=pool,
+            )
 
         logger.warning("Agent %d (%s) work result: %r", agent_id, name, work_result[:300])
 
         raw_structured = await brain.chat(
             system=_AGENT_STRUCTURE_SYSTEM,
             messages=[{"role": "user", "content": work_result}],
-            max_tokens=8192,
             capability=CAPABILITY_FAST,
             caller=f"agent_structure:{name}",
             pool=pool,
@@ -301,7 +363,6 @@ async def execute_agent(
             message_text = await brain.chat(
                 system=relay_system,
                 messages=[{"role": "user", "content": report}],
-                max_tokens=2048,
                 capability=CAPABILITY_FAST,
                 caller=f"agent_relay:{name}",
                 pool=pool,

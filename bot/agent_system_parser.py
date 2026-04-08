@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 import asyncpg
 from bot import brain, memory
-from bot.agent_parser import _classify_work_capability
+from bot.agent_parser import _classify_work_capability, _generate_pipeline
 from bot.models import CAPABILITY_BALANCED, CAPABILITY_DEEP_REASONING
 from bot.utils import clean_llm_json
 
@@ -54,7 +54,6 @@ async def parse_agent_system(
         raw = await brain.chat(
             system=_SYSTEM_PARSER_PROMPT,
             messages=[{"role": "user", "content": text}],
-            max_tokens=4096,
             capability=CAPABILITY_DEEP_REASONING,
             caller="agent_system_parser",
             pool=pool,
@@ -92,18 +91,27 @@ async def parse_agent_system(
             work_capability = await _classify_work_capability(instruction)
             logger.info("Agent '%s' work_capability classified as: %s", agent_raw.get("name"), work_capability)
 
+            state_keys: list[str] = agent_raw.get("state_keys", ["last_run_summary"])
+            pipeline = await _generate_pipeline(instruction, work_capability, state_keys)
+            if pipeline:
+                logger.info("Agent '%s' will run with pipeline (%d steps)", agent_raw.get("name"), len(pipeline))
+
             next_run_local = croniter(schedule, now).get_next(datetime)
             next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
 
+            agent_config: dict = {
+                "instruction": instruction,
+                "state_keys": state_keys,
+                "data_reads": agent_raw.get("data_reads", []),
+                "type": agent_raw.get("type", "default"),
+                "work_capability": work_capability,
+            }
+            if pipeline:
+                agent_config["pipeline"] = pipeline
+
             agents_prepared.append({
                 "name": agent_raw.get("name", "Agent"),
-                "config": {
-                    "instruction": instruction,
-                    "state_keys": agent_raw.get("state_keys", ["last_run_summary"]),
-                    "data_reads": agent_raw.get("data_reads", []),
-                    "type": agent_raw.get("type", "default"),
-                    "work_capability": work_capability,
-                },
+                "config": agent_config,
                 "schedule": schedule,
                 "target_chat_id": user_id if agent_raw.get("target") == "dm" else source_chat_id,
                 "next_run_at": next_run_utc,

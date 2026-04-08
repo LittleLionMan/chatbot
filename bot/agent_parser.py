@@ -129,6 +129,75 @@ async def _classify_work_capability(instruction: str) -> str:
         return CAPABILITY_BALANCED
 
 
+_PIPELINE_GENERATOR_SYSTEM = """Du entwirfst eine Ausführungs-Pipeline für einen Agenten der Web-Recherche betreibt oder tiefes Reasoning braucht.
+
+Die Pipeline besteht aus sequenziellen Steps. Jeder Step bekommt den Output der vorherigen Steps als Template-Variablen.
+
+Antworte NUR mit einem JSON-Array von Steps, kein anderer Text, keine Markdown-Backticks.
+
+Jeder Step hat:
+- "id": Eindeutiger snake_case Bezeichner (z.B. "search_kleinanzeigen", "search_ebay", "analyze")
+- "capability": Einer von: "search", "reasoning", "deep_reasoning"
+- "prompt_template": Die vollständige Anweisung für diesen Step. Vorherige Step-Outputs sind als {{step_id}} verfügbar. Search-Steps enden immer mit: "Fasse deine Ergebnisse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
+- "output_key": Unter welchem Key der Output gespeichert wird — wird als {{output_key}} in späteren Steps verfügbar
+
+Regeln:
+- Search-Steps: je eine klar abgegrenzte Quelle oder Suchfrage pro Step. Maximal 5 Search-Steps.
+- Der letzte Step ist immer ein "reasoning" oder "deep_reasoning" Step der alle Search-Outputs zusammenführt und das finale Ergebnis produziert.
+- Template-Variablen aus dem Agent-State oder trigger_payload sind als {{variable_name}} verfügbar.
+- Wenn die Instruction keine Web-Recherche braucht sondern nur tiefes Reasoning: ein einziger "deep_reasoning" Step reicht.
+
+Beispiel für einen Research-Agent:
+Input: "Suche täglich nach RTX 4060 Ti Angeboten unter 220€ auf deutschen Plattformen"
+
+Output:
+[
+  {"id": "search_kleinanzeigen", "capability": "search", "prompt_template": "Suche nach aktuellen Angeboten für RTX 4060 Ti unter 220€ auf Kleinanzeigen.de. Fasse deine Ergebnisse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_kleinanzeigen"},
+  {"id": "search_ebay", "capability": "search", "prompt_template": "Suche nach aktuellen Angeboten für RTX 4060 Ti unter 220€ auf eBay Kleinanzeigen und eBay.de. Fasse deine Ergebnisse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_ebay"},
+  {"id": "analyze", "capability": "reasoning", "prompt_template": "Analysiere diese Suchergebnisse auf echte Deals für eine RTX 4060 Ti unter 220€. Bekannte Angebote aus früheren Läufen: {{known_listings}}\n\nKleinanzeigen:\n{{search_kleinanzeigen}}\n\neBay:\n{{search_ebay}}\n\nIdentifiziere nur neue Angebote. Bewerte Preis, Zustand und Verkäufer-Reputation.", "output_key": "final_result"}
+]
+
+Beispiel für einen Analyse-Agent ohne Search:
+Input: "Erstelle Fundamentalanalysen für Unternehmen aus der Watchlist"
+
+Output:
+[
+  {"id": "analyze", "capability": "deep_reasoning", "prompt_template": "Erstelle eine vollständige Fundamentalanalyse für {{trigger_payload.ticker}}: Geschäftsmodell, Marktposition, Bilanzqualität, Management, Wachstumstreiber, Risiken. Schließe mit Kauf/Halten/Verkauf-Empfehlung und Kursziel ab.", "output_key": "final_result"}
+]"""
+
+
+_PIPELINE_CAPABILITIES = {CAPABILITY_SEARCH, CAPABILITY_DEEP_REASONING}
+
+
+async def _generate_pipeline(instruction: str, work_capability: str, state_keys: list[str]) -> list[dict] | None:
+    if work_capability not in _PIPELINE_CAPABILITIES:
+        return None
+    try:
+        state_hint = f"Verfügbare State-Variablen: {', '.join(state_keys)}" if state_keys else ""
+        content = f"Agent-Instruction: {instruction}"
+        if state_hint:
+            content += f"\n{state_hint}"
+        raw = await brain.chat(
+            system=_PIPELINE_GENERATOR_SYSTEM,
+            messages=[{"role": "user", "content": content}],
+            capability=CAPABILITY_REASONING,
+        )
+        parsed = json.loads(clean_llm_json(raw))
+        if not isinstance(parsed, list) or not parsed:
+            logger.warning("Pipeline generator returned invalid structure")
+            return None
+        required_keys = {"id", "capability", "prompt_template", "output_key"}
+        for step in parsed:
+            if not isinstance(step, dict) or not required_keys.issubset(step.keys()):
+                logger.warning("Pipeline step missing required keys: %r", step)
+                return None
+        logger.info("Pipeline generated with %d steps: %s", len(parsed), [s["id"] for s in parsed])
+        return parsed
+    except Exception as e:
+        logger.warning("Pipeline generation failed: %s", e)
+        return None
+
+
 async def resolve_agent_by_text(
     text: str,
     active_agents: list[dict],
@@ -168,7 +237,6 @@ async def parse_agent_creation(
         raw = await brain.chat(
             system=_AGENT_PARSER_SYSTEM,
             messages=[{"role": "user", "content": text}],
-            max_tokens=600,
             capability=CAPABILITY_BALANCED,
         )
         logger.debug("Agent parser raw LLM output: %r", raw)
@@ -188,6 +256,11 @@ async def parse_agent_creation(
         work_capability = await _classify_work_capability(instruction)
         logger.info("Agent work_capability classified as: %s", work_capability)
 
+        state_keys: list[str] = parsed.get("state_keys", ["last_run_summary"])
+        pipeline = await _generate_pipeline(instruction, work_capability, state_keys)
+        if pipeline:
+            logger.info("Agent will run with pipeline (%d steps)", len(pipeline))
+
         tz_str = await memory.get_user_timezone(pool, user_id)
         try:
             tz = ZoneInfo(tz_str)
@@ -202,11 +275,13 @@ async def parse_agent_creation(
 
         agent_config = {
             "instruction": instruction,
-            "state_keys": parsed.get("state_keys", ["last_run_summary"]),
+            "state_keys": state_keys,
             "data_reads": parsed.get("data_reads", []),
             "type": parsed.get("type", "default"),
             "work_capability": work_capability,
         }
+        if pipeline:
+            agent_config["pipeline"] = pipeline
 
         raw_suggested: str | None = parsed.get("suggested_name")
         if raw_suggested and raw_suggested.strip().lower() == config.BOT_NAME.lower():
@@ -249,7 +324,6 @@ async def handle_agent_talk(
             messages=[
                 {"role": "user", "content": f"{context}\n\nNutzeranfrage: {text}"},
             ],
-            max_tokens=2048,
             capability=CAPABILITY_BALANCED,
         )
     except Exception as e:
