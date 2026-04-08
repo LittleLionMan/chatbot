@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner, intent_classifier, agent_system_parser
 from bot.brain import ProviderRateLimitError, ProviderAuthError
 from bot.models import CAPABILITY_BALANCED, CAPABILITY_MULTIMODAL
+from bot.agent_parser import _classify_work_capability, _generate_pipeline
 from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -243,6 +244,50 @@ async def _reply(
                 instruction = parse_agent_config(agent["config"]).get("instruction", "")[:80]
                 line = f"{agent['name']} — {instruction}… ({agent['schedule']})"
                 await message.reply_text(line, reply_markup=_agent_keyboard(agent["id"]))
+        return
+
+    if intent == "agent_config":
+        if not active_agents:
+            await message.reply_text("Du hast keine aktiven Agenten.")
+            return
+        extracted = await intent_classifier.extract_agent_config_request(text, pool)
+        agent_name: str = extracted.get("agent_name", "")
+        target_agent = await agent_parser.resolve_agent_by_text(agent_name or text, active_agents)
+        if not target_agent:
+            names = ", ".join(a["name"] for a in active_agents)
+            await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
+            return
+
+        from bot.utils import parse_agent_config as _pac
+        current_config = dict(_pac(target_agent["config"]))
+        response_parts: list[str] = []
+
+        set_capability: str | None = extracted.get("set_capability")
+        if set_capability:
+            current_config["work_capability"] = set_capability
+            response_parts.append(f"work_capability auf {set_capability} gesetzt.")
+
+        if extracted.get("reclassify_capability") and not set_capability:
+            new_cap = await _classify_work_capability(current_config.get("instruction", ""))
+            current_config["work_capability"] = new_cap
+            response_parts.append(f"Capability neu klassifiziert: {new_cap}.")
+
+        if extracted.get("regenerate_pipeline"):
+            new_pipeline = await _generate_pipeline(
+                current_config.get("instruction", ""),
+                current_config.get("work_capability", "balanced"),
+                current_config.get("state_keys", ["last_run_summary"]),
+            )
+            if new_pipeline:
+                current_config["pipeline"] = new_pipeline
+                step_ids = ", ".join(s["id"] for s in new_pipeline)
+                response_parts.append(f"Pipeline generiert: {len(new_pipeline)} Steps ({step_ids}).")
+            else:
+                response_parts.append("Für diese Instruction wird keine Pipeline benötigt.")
+
+        await memory.update_agent_config(pool, target_agent["id"], current_config)
+        reply = f"{target_agent['name']}: " + " ".join(response_parts) if response_parts else f"Keine Änderungen für {target_agent['name']}."
+        await message.reply_text(reply)
         return
 
     if intent == "agent_stop":
