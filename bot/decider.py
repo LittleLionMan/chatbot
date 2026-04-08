@@ -28,5 +28,6 @@ async def should_respond_spontaneously(
             }
         ],
         max_tokens=5,
+        capability=CAPABILITY_FAST,
     )
     return decision.strip().lower().startswith("ja")

@@ -6,6 +6,7 @@ import asyncpg
 import telegram
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
+from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_REASONING
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,6 @@ async def _load_data_reads(
                 logger.warning("Agent %d data_read type=state missing agent_name, skipping", agent_id)
                 continue
             state = await memory.get_agent_state_by_name(pool, agent_name)
-            logger.warning("Agent %d data_read state from '%s': %r", agent_id, agent_name, state)
             if state is None:
                 logger.warning("Agent %d data_read: agent '%s' not found or has no state", agent_id, agent_name)
                 continue
@@ -190,16 +190,6 @@ async def _execute_tool_calls(
                 )
                 logger.info("Agent %d db_write_from_work: %s/%s (%d chars)", agent_id, call["namespace"], call["key"], len(work_result))
 
-            elif tool == "db_write_from_work":
-                await memory.write_agent_data(
-                    pool,
-                    agent_id,
-                    call["namespace"],
-                    call["key"],
-                    work_result,
-                )
-                logger.info("Agent %d db_write_from_work: %s/%s (%d chars)", agent_id, call["namespace"], call["key"], len(work_result))
-
             elif tool == "notify_user":
                 msg = call.get("message", "")
                 if msg:
@@ -226,7 +216,9 @@ async def execute_agent(
     config_data: dict = parse_agent_config(agent["config"])
     schedule: str = agent["schedule"]
 
-    logger.info("Executing agent %d (%s) for user %d", agent_id, name, user_id)
+    work_capability: str = config_data.get("work_capability", CAPABILITY_BALANCED)
+
+    logger.info("Executing agent %d (%s) for user %d with capability=%s", agent_id, name, user_id, work_capability)
 
     try:
         state = await memory.get_agent_state(pool, agent_id)
@@ -249,12 +241,16 @@ async def execute_agent(
 
         prompt = _build_run_prompt(config_data, state, injected_data)
 
+        use_web_search = work_capability in ("search", CAPABILITY_REASONING)
+        web_search_max_uses = 5 if work_capability == "search" else 2
+
         work_result = await brain.chat(
             system=_AGENT_WORK_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=8192,
-            use_web_search=True,
-            web_search_max_uses=1,
+            use_web_search=use_web_search,
+            web_search_max_uses=web_search_max_uses,
+            capability=work_capability,
             caller=f"agent_work:{name}",
             pool=pool,
         )
@@ -265,7 +261,7 @@ async def execute_agent(
             system=_AGENT_STRUCTURE_SYSTEM,
             messages=[{"role": "user", "content": work_result}],
             max_tokens=8192,
-            use_web_search=False,
+            capability=CAPABILITY_FAST,
             caller=f"agent_structure:{name}",
             pool=pool,
         )
@@ -306,6 +302,7 @@ async def execute_agent(
                 system=relay_system,
                 messages=[{"role": "user", "content": report}],
                 max_tokens=2048,
+                capability=CAPABILITY_FAST,
                 caller=f"agent_relay:{name}",
                 pool=pool,
             )

@@ -75,6 +75,7 @@ async def classify(
             max_tokens=20,
             caller="intent_classifier",
             pool=pool,
+            capability=CAPABILITY_FAST,
         )
         intent = result.strip().lower()
         valid = {"agent_system", "agent_create", "agent_trigger", "agent_stop", "agent_list", "agent_talk", "task_create", "task_stop", "task_list", "none"}
@@ -98,6 +99,7 @@ async def extract_trigger_payload(text: str, pool: asyncpg.Pool) -> dict:
             max_tokens=256,
             caller="trigger_payload_extractor",
             pool=pool,
+            capability=CAPABILITY_FAST,
         )
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):

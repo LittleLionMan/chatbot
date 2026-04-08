@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS agent_trigger_queue (
     target_agent_name TEXT NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW(),
+    scheduled_for TIMESTAMPTZ DEFAULT NOW(),
     processed_at TIMESTAMPTZ
 );
 
@@ -123,3 +124,32 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 CREATE INDEX IF NOT EXISTS llm_usage_created_idx ON llm_usage (created_at DESC);
 CREATE INDEX IF NOT EXISTS llm_usage_caller_idx ON llm_usage (caller, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS model_registry (
+    id SERIAL PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    api_model_name TEXT NOT NULL,
+    size_class TEXT,
+    capabilities TEXT[] NOT NULL DEFAULT '{}',
+    input_cost_per_mtok NUMERIC(10, 4),
+    output_cost_per_mtok NUMERIC(10, 4),
+    context_window INT,
+    is_local BOOLEAN NOT NULL DEFAULT FALSE,
+    notes TEXT,
+    last_updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (provider, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS model_registry_provider_idx ON model_registry (provider);
+CREATE INDEX IF NOT EXISTS model_registry_capabilities_idx ON model_registry USING GIN (capabilities);
+
+CREATE TABLE IF NOT EXISTS model_availability (
+    provider TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    is_available BOOLEAN NOT NULL DEFAULT FALSE,
+    last_checked_at TIMESTAMPTZ DEFAULT NOW(),
+    error_message TEXT,
+    PRIMARY KEY (provider, model_id)
+);

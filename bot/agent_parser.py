@@ -7,6 +7,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 import asyncpg
 from bot import brain, config, memory
+from bot.models import (
+    CAPABILITY_FAST,
+    CAPABILITY_BALANCED,
+    CAPABILITY_SEARCH,
+    CAPABILITY_REASONING,
+    CAPABILITY_CODING,
+)
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -56,6 +63,25 @@ Output: {"instruction": "Erstelle eine Fundamentalanalyse für den per trigger_p
 Eingabe: "Beobachte RTX 4060 Ti Preise täglich unter 220€, nenn ihn Linus"
 Output: {"instruction": "Suche nach Angeboten für RTX 4060 Ti unter 220€ auf deutschen Sekundärmarkt-Plattformen. Vergleiche mit bekannten Fundstücken. Melde nur neue Treffer oder relevante Preisänderungen.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 9 * * *", "target": "same", "wants_name": true, "suggested_name": "Linus"}"""
 
+_CAPABILITY_CLASSIFIER_SYSTEM = """Analysiere diese Agent-Instruction und bestimme welche primäre Fähigkeit der ausführende LLM-Call benötigt.
+
+Antworte NUR mit einem dieser Werte, kein anderer Text:
+- fast: einfache Statusprüfungen, Ja/Nein-Entscheidungen, kurze Transformationen ohne eigenes Urteil
+- balanced: moderate Analyse, Zusammenfassungen, normaler Informationsabruf
+- search: Web-Recherche, Nachrichtenauswertung, große Mengen Text zusammenfassen und bewerten
+- reasoning: Fundamentalanalysen, komplexe mehrstufige Schlussfolgerungen, Bewertungen mit vielen Abhängigkeiten
+- coding: Code schreiben, debuggen, Codebasen analysieren
+
+Wähle die Capability die den Kern der Aufgabe beschreibt — nicht was theoretisch auch nötig sein könnte.
+
+Beispiele:
+"Überwache Docker Container und melde wenn einer down ist" → fast
+"Suche täglich nach GPU-Angeboten unter 300€ auf Secondhand-Plattformen" → search
+"Prüfe aktuelle Nachrichten zu Unternehmen auf der Watchlist" → search
+"Erstelle vollständige Fundamentalanalysen für Unternehmen inkl. Bilanzqualität und Kursziel" → reasoning
+"Schreibe und teste neue API-Endpoints für das Projekt" → coding
+"Fasse den täglichen Wetterbericht zusammen" → balanced"""
+
 _NAME_RESOLUTION_SYSTEM = """Identifiziere welcher Agent aus der Liste gemeint ist.
 Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.
 Wenn kein Agent eindeutig zuzuordnen ist, antworte mit 0.
@@ -73,12 +99,31 @@ Mögliche Anfragen:
 - Allgemeine Ansprache → antworte im Stil von Bob
 
 Wenn du die Konfiguration änderst, gib immer das vollständige neue config-Objekt zurück — alle Felder, nicht nur die geänderten.
-Das config-Objekt hat die Felder: instruction, state_keys, data_reads, type."""
+Das config-Objekt hat die Felder: instruction, state_keys, data_reads, type, work_capability."""
 
 
 def _pick_name_for_topic(topic_type: str) -> str:
     candidates = _NAMES_BY_TOPIC.get(topic_type.lower(), _NAMES_BY_TOPIC["default"])
     return random.choice(candidates)
+
+
+async def _classify_work_capability(instruction: str) -> str:
+    valid = {CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_CODING}
+    try:
+        raw = await brain.chat(
+            system=_CAPABILITY_CLASSIFIER_SYSTEM,
+            messages=[{"role": "user", "content": instruction}],
+            max_tokens=20,
+            capability=CAPABILITY_FAST,
+        )
+        result = raw.strip().lower()
+        if result in valid:
+            return result
+        logger.warning("Capability classifier returned unknown value %r, falling back to balanced", result)
+        return CAPABILITY_BALANCED
+    except Exception as e:
+        logger.warning("Capability classification failed: %s", e)
+        return CAPABILITY_BALANCED
 
 
 async def resolve_agent_by_text(
@@ -99,6 +144,7 @@ async def resolve_agent_by_text(
                 "content": f"Agenten:\n{agent_list}\n\nNutzeranfrage: {text}",
             }],
             max_tokens=10,
+            capability=CAPABILITY_FAST,
         )
         resolved_id = int(raw.strip())
         if resolved_id == 0:
@@ -120,6 +166,7 @@ async def parse_agent_creation(
             system=_AGENT_PARSER_SYSTEM,
             messages=[{"role": "user", "content": text}],
             max_tokens=600,
+            capability=CAPABILITY_BALANCED,
         )
         logger.debug("Agent parser raw LLM output: %r", raw)
         parsed = json.loads(clean_llm_json(raw))
@@ -134,6 +181,9 @@ async def parse_agent_creation(
         instruction = parsed.get("instruction", "").strip()
         if not instruction:
             return None
+
+        work_capability = await _classify_work_capability(instruction)
+        logger.info("Agent work_capability classified as: %s", work_capability)
 
         tz_str = await memory.get_user_timezone(pool, user_id)
         try:
@@ -152,6 +202,7 @@ async def parse_agent_creation(
             "state_keys": parsed.get("state_keys", ["last_run_summary"]),
             "data_reads": parsed.get("data_reads", []),
             "type": parsed.get("type", "default"),
+            "work_capability": work_capability,
         }
 
         raw_suggested: str | None = parsed.get("suggested_name")
@@ -196,6 +247,7 @@ async def handle_agent_talk(
                 {"role": "user", "content": f"{context}\n\nNutzeranfrage: {text}"},
             ],
             max_tokens=2048,
+            capability=CAPABILITY_BALANCED,
         )
     except Exception as e:
         logger.warning("Agent talk LLM call failed: %s", e)

@@ -19,6 +19,7 @@ async def parse_voice_request(text: str) -> bool:
             system=_VOICE_REQUEST_SYSTEM,
             messages=[{"role": "user", "content": text}],
             max_tokens=3,
+            capability=CAPABILITY_FAST
         )
         return result.strip().lower().startswith("ja")
     except Exception as e:

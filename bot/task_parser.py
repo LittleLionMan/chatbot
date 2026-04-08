@@ -44,6 +44,7 @@ async def parse_task(
             system=_TASK_PARSER_SYSTEM,
             messages=[{"role": "user", "content": text}],
             max_tokens=256,
+            capability=CAPABILITY_FAST,
         )
         logger.debug("Task parser raw LLM output: %r", raw)
         parsed = json.loads(clean_llm_json(raw))
@@ -104,6 +105,7 @@ async def parse_stop_request(
                 "content": f"Aktive Tasks:\n{task_list}\n\nNutzeranfrage: {text}",
             }],
             max_tokens=64,
+            capability=CAPABILITY_FAST,
         )
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):

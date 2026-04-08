@@ -66,6 +66,7 @@ async def _extract_reflections_for_session(
             system=extractor._REFLECTION_SYSTEM,
             messages=[{"role": "user", "content": f"Interaktion:\n{snippet}"}],
             max_tokens=1024,
+            capability=CAPABILITY_FAST
         )
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):
@@ -109,6 +110,7 @@ async def _maybe_send_proactive(
             system=_PROACTIVE_SYSTEM,
             messages=[{"role": "user", "content": f"Neue Beobachtungen:\n- {reflection_text}"}],
             max_tokens=5,
+            capability=CAPABILITY_FAST
         )
         if not decision.strip().lower().startswith("ja"):
             return
@@ -129,6 +131,7 @@ async def _maybe_send_proactive(
         response = await brain.chat(
             system=system,
             messages=[{"role": "user", "content": f"Schreib eine proaktive Nachricht basierend auf diesen Beobachtungen:\n- {reflection_text}"}],
+            capability=CAPABILITY_BALANCED
         )
 
         await bot.send_message(chat_id=group_id, text=response)

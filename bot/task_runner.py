@@ -32,6 +32,7 @@ async def execute_task(
             messages=[{"role": "user", "content": description}],
             max_tokens=2048,
             use_web_search=True,
+            capability=CAPABILITY_SEARCH,
         )
 
         await bot.send_message(chat_id=target_chat_id, text=response)

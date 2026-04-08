@@ -132,6 +132,7 @@ async def _handle_file_content(
             messages=llm_messages,
             caller="handler_file",
             pool=pool,
+            capability=CAPABILITY_MULTIMODAL,
         )
     except anthropic.RateLimitError:
         if triggered_by_mention:
@@ -411,6 +412,7 @@ async def _reply(
             use_web_search=True,
             caller="handler",
             pool=pool,
+            capability=CAPABILITY_BALANCED
         )
     except anthropic.RateLimitError:
         if triggered_by_mention:

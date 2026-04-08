@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 from bot import config, memory, handler, scheduler
+from bot.models import run_availability_check
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -24,6 +25,9 @@ async def post_init(application) -> None:
     pool = await memory.get_pool()
     application.bot_data["pool"] = pool
     logging.info("Database pool initialized.")
+
+    await run_availability_check(pool)
+
     asyncio.create_task(scheduler.run(pool, application.bot))
     logging.info("Scheduler started.")
 

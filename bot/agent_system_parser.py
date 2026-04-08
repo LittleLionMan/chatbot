@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 import asyncpg
 from bot import brain, memory
+from bot.agent_parser import _classify_work_capability
+from bot.models import CAPABILITY_BALANCED
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,7 @@ async def parse_agent_system(
             system=_SYSTEM_PARSER_PROMPT,
             messages=[{"role": "user", "content": text}],
             max_tokens=4096,
+            capability=CAPABILITY_BALANCED,
             caller="agent_system_parser",
             pool=pool,
         )
@@ -86,6 +89,9 @@ async def parse_agent_system(
             if not instruction:
                 return None
 
+            work_capability = await _classify_work_capability(instruction)
+            logger.info("Agent '%s' work_capability classified as: %s", agent_raw.get("name"), work_capability)
+
             next_run_local = croniter(schedule, now).get_next(datetime)
             next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
 
@@ -96,6 +102,7 @@ async def parse_agent_system(
                     "state_keys": agent_raw.get("state_keys", ["last_run_summary"]),
                     "data_reads": agent_raw.get("data_reads", []),
                     "type": agent_raw.get("type", "default"),
+                    "work_capability": work_capability,
                 },
                 "schedule": schedule,
                 "target_chat_id": user_id if agent_raw.get("target") == "dm" else source_chat_id,
