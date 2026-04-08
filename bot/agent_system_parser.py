@@ -92,9 +92,11 @@ async def parse_agent_system(
             logger.info("Agent '%s' work_capability classified as: %s", agent_raw.get("name"), work_capability)
 
             state_keys: list[str] = agent_raw.get("state_keys", ["last_run_summary"])
-            pipeline = await _generate_pipeline(instruction, work_capability, state_keys)
-            if pipeline:
-                logger.info("Agent '%s' will run with pipeline (%d steps)", agent_raw.get("name"), len(pipeline))
+            pipeline_result = await _generate_pipeline(instruction, work_capability, state_keys)
+            if pipeline_result:
+                has_tmpl = bool(pipeline_result.get("pipeline_template"))
+                total = len(pipeline_result.get("pipeline", [])) + len(pipeline_result.get("pipeline_after_template", []))
+                logger.info("Agent '%s' pipeline: %d fixed steps, template=%s", agent_raw.get("name"), total, has_tmpl)
 
             next_run_local = croniter(schedule, now).get_next(datetime)
             next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
@@ -106,8 +108,13 @@ async def parse_agent_system(
                 "type": agent_raw.get("type", "default"),
                 "work_capability": work_capability,
             }
-            if pipeline:
-                agent_config["pipeline"] = pipeline
+            if pipeline_result:
+                if pipeline_result.get("pipeline"):
+                    agent_config["pipeline"] = pipeline_result["pipeline"]
+                if pipeline_result.get("pipeline_template"):
+                    agent_config["pipeline_template"] = pipeline_result["pipeline_template"]
+                if pipeline_result.get("pipeline_after_template"):
+                    agent_config["pipeline_after_template"] = pipeline_result["pipeline_after_template"]
 
             agents_prepared.append({
                 "name": agent_raw.get("name", "Agent"),

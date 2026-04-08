@@ -210,40 +210,71 @@ async function selectAgent(id) {
         `<option value="${c}" ${c === a.work_capability ? "selected" : ""}>${c}</option>`,
     ).join("");
 
-    const pipelineHtml =
-      a.pipeline && a.pipeline.length
-        ? `
-      <div class="detail-block">
-        <div class="detail-block-title">
-          Pipeline (${a.pipeline.length} Steps)
-          <button class="btn btn-sm btn-accent" onclick="addPipelineStep(${id})">+ Step</button>
+    const allSteps = [
+      ...(a.pipeline || []).map((s) => ({ ...s, _section: "pipeline" })),
+      ...(a.pipeline_after_template || []).map((s) => ({
+        ...s,
+        _section: "pipeline_after_template",
+      })),
+    ];
+    const hasTemplate =
+      a.pipeline_template && typeof a.pipeline_template === "object";
+    const totalSteps = allSteps.length + (hasTemplate ? 1 : 0);
+
+    const renderStep = (step, i, section) => `
+      <div class="pipeline-step">
+        <div class="pipeline-step-header">
+          <span class="pipeline-step-id">${step.id}${step.is_router ? " 🔀" : ""}</span>
+          <span class="badge badge-cap">${step.capability}</span>
+          ${step.only_if_route ? `<span class="badge badge-pipeline">${Array.isArray(step.only_if_route) ? step.only_if_route.join("|") : step.only_if_route}</span>` : ""}
+          <button class="btn btn-sm" onclick="editPipelineStep(${id}, ${i}, '${section}')">Bearbeiten</button>
+          <button class="btn btn-sm btn-danger" onclick="deletePipelineStep(${id}, ${i}, '${section}')">Löschen</button>
         </div>
-        ${a.pipeline
-          .map(
-            (step, i) => `
-          <div class="pipeline-step">
-            <div class="pipeline-step-header">
-              <span class="pipeline-step-id">${step.id}${step.is_router ? " 🔀" : ""}</span>
-              <span class="badge badge-cap">${step.capability}</span>
-              ${step.only_if_route ? `<span class="badge badge-pipeline">${Array.isArray(step.only_if_route) ? step.only_if_route.join("|") : step.only_if_route}</span>` : ""}
-              <button class="btn btn-sm" onclick="editPipelineStep(${id}, ${i})">Bearbeiten</button>
-              <button class="btn btn-sm btn-danger" onclick="deletePipelineStep(${id}, ${i})">Löschen</button>
-            </div>
-            <div class="pipeline-step-prompt">${step.prompt_template.slice(0, 120)}${step.prompt_template.length > 120 ? "…" : ""}</div>
-            <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if_route: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}</div>
-          </div>
-        `,
-          )
-          .join("")}
+        <div class="pipeline-step-prompt">${step.prompt_template.slice(0, 120)}${step.prompt_template.length > 120 ? "…" : ""}</div>
+        <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}</div>
       </div>
-    `
-        : `
+    `;
+
+    const pipelineHtml = `
       <div class="detail-block">
         <div class="detail-block-title">
-          Pipeline
+          Pipeline (${totalSteps} Steps)
           <button class="btn btn-sm btn-accent" onclick="addPipelineStep(${id})">+ Step</button>
         </div>
-        <div style="font-size:13px;color:var(--text3);">Keine Pipeline.</div>
+        ${
+          (a.pipeline || []).length
+            ? `
+          <div class="ns-label" style="margin-bottom:6px;">Feste Steps (pipeline)</div>
+          ${(a.pipeline || []).map((s, i) => renderStep(s, i, "pipeline")).join("")}
+        `
+            : ""
+        }
+        ${
+          hasTemplate
+            ? `
+          <div class="ns-label" style="margin:10px 0 6px;">Template (${a.pipeline_template.source === "static" ? a.pipeline_template.foreach_items?.length + " Items" : "dynamisch aus " + a.pipeline_template.foreach})</div>
+          <div class="pipeline-step" style="border-style:dashed;">
+            <div class="pipeline-step-header">
+              <span class="pipeline-step-id">∀ ${a.pipeline_template.step?.id || "template"}</span>
+              <span class="badge badge-cap">${a.pipeline_template.step?.capability || "?"}</span>
+              ${a.pipeline_template.only_if_route ? `<span class="badge badge-pipeline">${a.pipeline_template.only_if_route}</span>` : ""}
+              <button class="btn btn-sm" onclick="editPipelineTemplate(${id})">Bearbeiten</button>
+            </div>
+            <div class="pipeline-step-prompt">${a.pipeline_template.step?.prompt_template?.slice(0, 120) || ""}…</div>
+            <div class="pipeline-step-meta">aggregate_key: ${a.pipeline_template.aggregate_key} · batch: ${a.pipeline_template.batch_size || 1}</div>
+          </div>
+        `
+            : ""
+        }
+        ${
+          (a.pipeline_after_template || []).length
+            ? `
+          <div class="ns-label" style="margin:10px 0 6px;">Nach Template (pipeline_after_template)</div>
+          ${(a.pipeline_after_template || []).map((s, i) => renderStep(s, i, "pipeline_after_template")).join("")}
+        `
+            : ""
+        }
+        ${totalSteps === 0 ? '<div style="font-size:13px;color:var(--text3);">Keine Pipeline.</div>' : ""}
       </div>
     `;
 
@@ -396,9 +427,14 @@ async function saveCapability(agentId) {
   }
 }
 
-function editPipelineStep(agentId, stepIndex) {
+function editPipelineStep(agentId, stepIndex, section) {
+  section = section || "pipeline";
   const a = agentsData.find((x) => x.id === agentId);
-  const step = a.pipeline[stepIndex];
+  const steps =
+    section === "pipeline_after_template"
+      ? a.pipeline_after_template || []
+      : a.pipeline || [];
+  const step = steps[stepIndex];
   const capOptions = CAPABILITIES.map(
     (c) =>
       `<option value="${c}" ${c === step.capability ? "selected" : ""}>${c}</option>`,
@@ -418,12 +454,17 @@ function editPipelineStep(agentId, stepIndex) {
        <label class="modal-label" style="margin:0;">is_router</label>
      </div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
-     <button class="btn btn-accent" onclick="savePipelineStep(${agentId}, ${stepIndex})">Speichern</button>`,
+     <button class="btn btn-accent" onclick="savePipelineStep(${agentId}, ${stepIndex}, '${section}')">Speichern</button>`,
   );
 }
 
-async function savePipelineStep(agentId, stepIndex) {
+async function savePipelineStep(agentId, stepIndex, section) {
+  section = section || "pipeline";
   const a = agentsData.find((x) => x.id === agentId);
+  const steps =
+    section === "pipeline_after_template"
+      ? a.pipeline_after_template || []
+      : a.pipeline || [];
   const routeRaw = document.getElementById("edit-step-route").value.trim();
   let onlyIfRoute = null;
   if (routeRaw) {
@@ -442,16 +483,25 @@ async function savePipelineStep(agentId, stepIndex) {
   if (onlyIfRoute !== null) updated.only_if_route = onlyIfRoute;
   if (document.getElementById("edit-step-router").checked)
     updated.is_router = true;
+
+  const newSteps = [...steps];
+  newSteps[stepIndex] = updated;
+  const patchKey =
+    section === "pipeline_after_template"
+      ? "pipeline_after_template"
+      : "pipeline";
+
   try {
     await api("/api/agents/" + agentId, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        pipeline_step: updated,
-        pipeline_step_index: stepIndex,
-      }),
+      body: JSON.stringify({ [patchKey]: newSteps }),
     });
-    a.pipeline[stepIndex] = updated;
+    if (section === "pipeline_after_template") {
+      a.pipeline_after_template = newSteps;
+    } else {
+      a.pipeline = newSteps;
+    }
     closeModal();
     toast("Step gespeichert.");
     selectAgent(agentId);
@@ -460,22 +510,131 @@ async function savePipelineStep(agentId, stepIndex) {
   }
 }
 
-async function deletePipelineStep(agentId, stepIndex) {
+async function deletePipelineStep(agentId, stepIndex, section) {
+  section = section || "pipeline";
   confirmModal("Pipeline-Step wirklich löschen?", async () => {
+    const a = agentsData.find((x) => x.id === agentId);
+    const steps =
+      section === "pipeline_after_template"
+        ? [...(a.pipeline_after_template || [])]
+        : [...(a.pipeline || [])];
+    steps.splice(stepIndex, 1);
+    const patchKey =
+      section === "pipeline_after_template"
+        ? "pipeline_after_template"
+        : "pipeline";
     try {
       await api("/api/agents/" + agentId, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pipeline_step_delete: stepIndex }),
+        body: JSON.stringify({ [patchKey]: steps }),
       });
-      const a = agentsData.find((x) => x.id === agentId);
-      a.pipeline.splice(stepIndex, 1);
+      if (section === "pipeline_after_template") {
+        a.pipeline_after_template = steps;
+      } else {
+        a.pipeline = steps;
+      }
       toast("Step gelöscht.");
       selectAgent(agentId);
     } catch (e) {
       toast("Fehler.", true);
     }
   });
+}
+
+function editPipelineTemplate(agentId) {
+  const a = agentsData.find((x) => x.id === agentId);
+  const t = a.pipeline_template || {};
+  const step = t.step || {};
+  const capOptions = CAPABILITIES.map(
+    (c) =>
+      `<option value="${c}" ${c === step.capability ? "selected" : ""}>${c}</option>`,
+  ).join("");
+  const itemsList = Array.isArray(t.foreach_items)
+    ? t.foreach_items.join("\n")
+    : "";
+  openModal(
+    "Pipeline Template bearbeiten",
+    `<div class="modal-field">
+       <div class="modal-label">Source</div>
+       <select class="modal-select" id="tmpl-source" onchange="toggleTemplateSource()">
+         <option value="static" ${t.source === "static" ? "selected" : ""}>static (feste Liste)</option>
+         <option value="state" ${t.source === "state" ? "selected" : ""}>state (aus Agent-State)</option>
+         <option value="injected" ${t.source === "injected" ? "selected" : ""}>injected (aus data_reads)</option>
+       </select>
+     </div>
+     <div class="modal-field" id="tmpl-foreach-field" style="${t.source !== "static" ? "" : "display:none"}">
+       <div class="modal-label">foreach (State-Key)</div>
+       <input class="modal-input" id="tmpl-foreach" value="${t.foreach || ""}" placeholder="z.B. fundamentalanalyse_vorhanden" />
+     </div>
+     <div class="modal-field" id="tmpl-items-field" style="${t.source === "static" ? "" : "display:none"}">
+       <div class="modal-label">foreach_items (ein Item pro Zeile)</div>
+       <textarea class="modal-input" id="tmpl-items" style="min-height:100px;">${itemsList}</textarea>
+     </div>
+     <div class="modal-field"><div class="modal-label">split_by (Trennzeichen)</div><input class="modal-input" id="tmpl-split" value="${t.split_by || ","}" /></div>
+     <div class="modal-field"><div class="modal-label">batch_size</div><input class="modal-input" id="tmpl-batch" type="number" value="${t.batch_size || 1}" /></div>
+     <div class="modal-field"><div class="modal-label">aggregate_key</div><input class="modal-input" id="tmpl-agg" value="${t.aggregate_key || ""}" /></div>
+     <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="tmpl-route" value="${t.only_if_route || ""}" /></div>
+     <hr class="divider">
+     <div class="modal-label" style="margin-bottom:8px;">Step Template</div>
+     <div class="modal-field"><div class="modal-label">ID ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-id" value="${step.id || "search_{{item_id}}"}" /></div>
+     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="tmpl-step-cap">${capOptions}</select></div>
+     <div class="modal-field"><div class="modal-label">Prompt Template ({{item}} und {{item_id}} verfügbar)</div><textarea class="modal-input" id="tmpl-step-prompt" style="min-height:140px;">${step.prompt_template || ""}</textarea></div>
+     <div class="modal-field"><div class="modal-label">Output Key ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-key" value="${step.output_key || "result_{{item_id}}"}" /></div>`,
+    `<button class="btn" onclick="closeModal()">Abbrechen</button>
+     <button class="btn btn-accent" onclick="savePipelineTemplate(${agentId})">Speichern</button>`,
+  );
+}
+
+function toggleTemplateSource() {
+  const src = document.getElementById("tmpl-source").value;
+  document.getElementById("tmpl-foreach-field").style.display =
+    src !== "static" ? "" : "none";
+  document.getElementById("tmpl-items-field").style.display =
+    src === "static" ? "" : "none";
+}
+
+async function savePipelineTemplate(agentId) {
+  const source = document.getElementById("tmpl-source").value;
+  const template = {
+    source,
+    split_by: document.getElementById("tmpl-split").value || ",",
+    batch_size: parseInt(document.getElementById("tmpl-batch").value) || 1,
+    aggregate_key: document.getElementById("tmpl-agg").value.trim(),
+    step: {
+      id: document.getElementById("tmpl-step-id").value.trim(),
+      capability: document.getElementById("tmpl-step-cap").value,
+      prompt_template: document.getElementById("tmpl-step-prompt").value,
+      output_key: document.getElementById("tmpl-step-key").value.trim(),
+    },
+  };
+  if (source === "static") {
+    const items = document
+      .getElementById("tmpl-items")
+      .value.split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    template.foreach_items = items;
+  } else {
+    template.foreach = document.getElementById("tmpl-foreach").value.trim();
+  }
+  const routeRaw = document.getElementById("tmpl-route").value.trim();
+  if (routeRaw) template.only_if_route = routeRaw;
+
+  try {
+    await api("/api/agents/" + agentId, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pipeline_template: template }),
+    });
+    const a = agentsData.find((x) => x.id === agentId);
+    a.pipeline_template = template;
+    closeModal();
+    toast("Template gespeichert.");
+    selectAgent(agentId);
+  } catch (e) {
+    toast("Fehler.", true);
+  }
 }
 
 function addPipelineStep(agentId) {

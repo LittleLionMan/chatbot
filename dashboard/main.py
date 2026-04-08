@@ -75,12 +75,14 @@ class AgentConfigPatch(BaseModel):
     schedule: str | None = None
     name: str | None = None
     work_capability: str | None = None
+    pipeline: list | None = None
+    pipeline_template: dict | None = None
+    pipeline_after_template: list | None = None
     pipeline_step: dict | None = None
     pipeline_step_index: int | None = None
     pipeline_step_delete: int | None = None
     pipeline_step_add: dict | None = None
     pipeline_step_add_index: int | None = None
-    pipeline: list | None = None
 
 
 class MemoryBody(BaseModel):
@@ -131,6 +133,8 @@ async def get_agents() -> list[dict]:
             "type": config.get("type", ""),
             "work_capability": config.get("work_capability", "balanced"),
             "pipeline": config.get("pipeline", []),
+            "pipeline_template": config.get("pipeline_template"),
+            "pipeline_after_template": config.get("pipeline_after_template", []),
             "state_keys": config.get("state_keys", []),
             "data_reads": config.get("data_reads", []),
             "last_run_at": r["last_run_at"].isoformat() if r["last_run_at"] else None,
@@ -157,6 +161,10 @@ async def patch_agent(agent_id: int, body: AgentConfigPatch) -> dict:
         config["work_capability"] = body.work_capability
     if body.pipeline is not None:
         config["pipeline"] = body.pipeline
+    if body.pipeline_template is not None:
+        config["pipeline_template"] = body.pipeline_template
+    if body.pipeline_after_template is not None:
+        config["pipeline_after_template"] = body.pipeline_after_template
     if body.pipeline_step is not None and body.pipeline_step_index is not None:
         pipeline: list = config.get("pipeline", [])
         if 0 <= body.pipeline_step_index < len(pipeline):

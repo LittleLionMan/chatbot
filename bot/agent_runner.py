@@ -214,6 +214,73 @@ Antworte NUR mit einem einzigen Wort — dem Namen des Pfades. Kein anderer Text
 Analysiere die Gesamtinstruktion, den aktuellen State und den Trigger-Payload um den richtigen Pfad zu bestimmen."""
 
 
+def _expand_pipeline_template(
+    config_data: dict,
+    state: dict[str, str],
+    injected_data: dict[str, str],
+) -> list[dict]:
+    template = config_data.get("pipeline_template")
+    if not template:
+        return []
+
+    source = template.get("source", "state")
+    foreach_key = template.get("foreach", "")
+    split_by = template.get("split_by", ",")
+    batch_size = int(template.get("batch_size", 1))
+    step_template = template.get("step", {})
+    aggregate_key = template.get("aggregate_key", "template_results")
+    only_if_route = template.get("only_if_route")
+    foreach_items: list[str] = template.get("foreach_items", [])
+
+    if source == "static":
+        items = foreach_items
+    elif source == "state":
+        raw = state.get(foreach_key, "")
+        items = [i.strip() for i in raw.split(split_by) if i.strip()]
+    elif source == "injected":
+        raw = injected_data.get(foreach_key, "")
+        items = [i.strip() for i in raw.split(split_by) if i.strip()]
+    else:
+        items = []
+
+    if not items:
+        logger.info("Pipeline template foreach '%s' (source=%s) produced no items", foreach_key, source)
+        return []
+
+    batches: list[list[str]] = []
+    for i in range(0, len(items), batch_size):
+        batches.append(items[i:i + batch_size])
+
+    expanded: list[dict] = []
+    all_output_keys: list[str] = []
+
+    for batch in batches:
+        item_str = ", ".join(batch)
+        safe_id = item_str.lower().replace(" ", "_").replace("/", "_").replace("<", "lt").replace(">", "gt")[:40]
+
+        step = {}
+        for k, v in step_template.items():
+            if isinstance(v, str):
+                step[k] = v.replace("{{item}}", item_str).replace("{{item_id}}", safe_id)
+            else:
+                step[k] = v
+
+        step["id"] = step.get("id", f"template_{safe_id}").replace("{{item}}", item_str).replace("{{item_id}}", safe_id)
+        step["output_key"] = step.get("output_key", f"result_{safe_id}").replace("{{item}}", item_str).replace("{{item_id}}", safe_id)
+
+        if only_if_route:
+            step["only_if_route"] = only_if_route
+
+        all_output_keys.append(step["output_key"])
+        expanded.append(step)
+        logger.info("Pipeline template expanded step '%s' for item(s): %s", step["id"], item_str)
+
+    config_data["_template_output_keys"] = all_output_keys
+    config_data["_template_aggregate_key"] = aggregate_key
+
+    return expanded
+
+
 async def _execute_pipeline(
     pool: asyncpg.Pool,
     agent_id: int,
@@ -230,10 +297,21 @@ async def _execute_pipeline(
     instruction = config_data.get("instruction", "")
     agent_system = f"{_AGENT_WORK_SYSTEM}\n\nGesamtauftrag des Agenten:\n{instruction}"
 
+    pipeline_before: list[dict] = config_data.get("pipeline", [])
+    template_steps: list[dict] = _expand_pipeline_template(config_data, state, injected_data)
+    pipeline_after: list[dict] = config_data.get("pipeline_after_template", [])
+
+    full_pipeline = pipeline_before + template_steps + pipeline_after
+    if not full_pipeline:
+        full_pipeline = pipeline
+
+    aggregate_key: str = config_data.get("_template_aggregate_key", "")
+    template_output_keys: list[str] = config_data.get("_template_output_keys", [])
+
     active_route: str | None = None
     last_output = ""
 
-    for step in pipeline:
+    for step in full_pipeline:
         step_id: str = step["id"]
         capability: str = step["capability"]
         prompt_template: str = step["prompt_template"]
@@ -303,6 +381,10 @@ async def _execute_pipeline(
             agent_id, name, step_id, len(step_output),
         )
 
+        if aggregate_key and output_key in template_output_keys:
+            existing = context.get(aggregate_key, "")
+            context[aggregate_key] = f"{existing}\n\n---\n\n{output_key}:\n{step_output}" if existing else f"{output_key}:\n{step_output}"
+
     return last_output
 
 
@@ -345,8 +427,9 @@ async def execute_agent(
         prompt = _build_run_prompt(config_data, state, injected_data)
 
         pipeline: list[dict] = config_data.get("pipeline", [])
+        has_template = bool(config_data.get("pipeline_template"))
 
-        if pipeline:
+        if pipeline or has_template:
             work_result = await _execute_pipeline(
                 pool, agent_id, name, pipeline, state, injected_data, config_data,
             )

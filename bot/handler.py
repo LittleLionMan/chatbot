@@ -301,10 +301,19 @@ async def _reply(
                 current_config.get("work_capability", "balanced"),
                 current_config.get("state_keys", ["last_run_summary"]),
             )
+            current_config.pop("pipeline", None)
+            current_config.pop("pipeline_template", None)
+            current_config.pop("pipeline_after_template", None)
             if new_pipeline:
-                current_config["pipeline"] = new_pipeline
-                step_ids = ", ".join(s["id"] for s in new_pipeline)
-                response_parts.append(f"Pipeline generiert: {len(new_pipeline)} Steps ({step_ids}).")
+                if new_pipeline.get("pipeline"):
+                    current_config["pipeline"] = new_pipeline["pipeline"]
+                if new_pipeline.get("pipeline_template"):
+                    current_config["pipeline_template"] = new_pipeline["pipeline_template"]
+                if new_pipeline.get("pipeline_after_template"):
+                    current_config["pipeline_after_template"] = new_pipeline["pipeline_after_template"]
+                total = len(new_pipeline.get("pipeline", [])) + len(new_pipeline.get("pipeline_after_template", []))
+                has_tmpl = bool(new_pipeline.get("pipeline_template"))
+                response_parts.append(f"Pipeline generiert: {total} feste Steps, Template={'ja' if has_tmpl else 'nein'}.")
             else:
                 response_parts.append("Für diese Instruction wird keine Pipeline benötigt.")
 

@@ -133,52 +133,90 @@ async def _classify_work_capability(instruction: str) -> str:
         return CAPABILITY_BALANCED
 
 
-_PIPELINE_GENERATOR_SYSTEM = """Du entwirfst eine Ausführungs-Pipeline für einen Agenten der Web-Recherche betreibt oder tiefes Reasoning braucht.
+_PIPELINE_GENERATOR_SYSTEM = """Du entwirfst eine Ausführungs-Pipeline für einen Agenten.
 
-Die Pipeline besteht aus sequenziellen Steps. Jeder Step bekommt den Output der vorherigen Steps als Template-Variablen. Die vollständige Agenten-Instruction wird jedem Step als Kontext mitgegeben — Step-Prompts müssen die Instruction nicht wiederholen, sondern nur den fokussierten Teilschritt beschreiben.
+Die Konfiguration besteht aus drei optionalen Teilen die kombiniert werden:
+1. "pipeline": Feste Steps die immer in dieser Reihenfolge laufen (Router, State-Reads, etc.)
+2. "pipeline_template": Ein wiederholbarer Step-Pattern für variable Datenlisten
+3. "pipeline_after_template": Feste Steps die nach den Template-Steps laufen (Analyse, Trigger, etc.)
 
-Antworte NUR mit einem JSON-Array von Steps, kein anderer Text, keine Markdown-Backticks.
+Antworte NUR mit einem JSON-Objekt mit diesen optionalen Feldern. Kein anderer Text, keine Markdown-Backticks.
 
-Jeder Step hat:
+Felder in "pipeline" und "pipeline_after_template" — jeder Step hat:
 - "id": Eindeutiger snake_case Bezeichner
-- "capability": Einer von: "fast", "search", "reasoning", "deep_reasoning"
-- "prompt_template": Die Anweisung für diesen Teilschritt. Vorherige Step-Outputs als {{output_key}} verfügbar. State-Variablen und trigger_payload-Felder ebenfalls als {{key}} verfügbar. Search-Steps enden immer mit: "Fasse deine Ergebnisse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
+- "capability": "fast", "search", "reasoning", "deep_reasoning"
+- "prompt_template": Anweisung für diesen Teilschritt. Vorherige Step-Outputs als {{output_key}} verfügbar. State-Variablen als {{key}}, trigger_payload als {{trigger_payload.key}}.
 - "output_key": Unter welchem Key der Output gespeichert wird
-- "is_router": true nur für Router-Steps, sonst weglassen
-- "only_if_route": String oder Liste von Strings — dieser Step wird nur ausgeführt wenn der Router diesen Pfad gewählt hat. Weglassen wenn der Step immer läuft.
+- "is_router": true nur für Router-Steps
+- "only_if_route": String oder Liste — Step nur bei diesem Route-Wert ausführen
 
-Wann einen Router einbauen:
-- Wenn die Instruction verschiedene Modi beschreibt (z.B. "normaler Modus" vs "Trigger-Modus")
-- Wenn bestimmte Steps nur unter Bedingungen laufen sollen
-- Der Router ist immer der erste Step, hat capability "fast", is_router: true
-- Der Router-Prompt listet alle möglichen Pfade und ihre Bedingungen auf
-- Router-Output ist ein einzelnes Wort (der Pfad-Name)
+Felder in "pipeline_template":
+- "source": "state" (aus Agent-State), "injected" (aus data_reads), "static" (feste Liste in Config)
+- "foreach": Key-Name im State/injected (bei source=state/injected)
+- "foreach_items": Feste Liste von Strings (bei source=static)
+- "split_by": Trennzeichen bei source=state/injected (Standard: ",")
+- "batch_size": Items pro Step (1 = ein Step pro Item)
+- "aggregate_key": Unter diesem Key werden alle Template-Outputs gesammelt und sind im nächsten Step verfügbar
+- "only_if_route": Optionaler Route-Filter für alle Template-Steps
+- "step": Step-Template mit {{item}} als Platzhalter für den aktuellen Wert, {{item_id}} als URL-sicherer Bezeichner
 
 Regeln:
-- Steps die immer laufen: kein "only_if_route"
-- Steps die nur in bestimmten Pfaden laufen: "only_if_route": "pfadname" oder ["pfad1", "pfad2"]
-- Search-Steps: je eine klar abgegrenzte Quelle oder Suchfrage pro Step, maximal 5
-- Der letzte aktive Step ist immer ein reasoning/deep_reasoning Step der das finale Ergebnis produziert
-- Nur einfache {{key}}-Template-Variablen, keine Punkt-Notation
+- Nur pipeline_template verwenden wenn die Anzahl der Items zur Laufzeit variabel ist (aus State) oder zur Erstellungszeit fix aber mehrere Search-Steps rechtfertigt (static)
+- Die vollständige Agenten-Instruction wird jedem Step als Kontext mitgegeben — Prompts müssen sie nicht wiederholen
+- Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
+- Router immer als ersten Step in "pipeline" wenn die Instruction Modi beschreibt
+- Der letzte Step in pipeline_after_template ist immer reasoning/deep_reasoning
 
-Beispiel mit Router (Jordan — normaler Modus vs Trigger-Modus):
-[
-  {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob trigger_payload.ticker vorhanden ist. Falls ja: antworte mit 'trigger'. Falls nein: antworte mit 'normal'.", "output_key": "route"},
-  {"id": "check_pending", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Prüfe welcher Ticker als nächstes analysiert werden soll.", "output_key": "selected_ticker"},
-  {"id": "analyze", "capability": "deep_reasoning", "only_if_route": ["normal", "trigger"], "prompt_template": "Erstelle oder aktualisiere die Fundamentalanalyse für {{selected_ticker}} basierend auf {{trigger_payload.ticker}}.", "output_key": "final_result"}
-]
+Beispiel Jim Cramer (variable Ticker aus State, zwei Modi):
+{
+  "pipeline": [
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob trigger_payload.watch_ticker vorhanden ist. Falls ja: antworte mit 'trigger'. Falls nein: antworte mit 'normal'.", "output_key": "route"},
+    {"id": "update_watch_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Aktualisiere watch_triggers für {{trigger_payload.watch_ticker}}.", "output_key": "trigger_result"}
+  ],
+  "pipeline_template": {
+    "source": "state",
+    "foreach": "fundamentalanalyse_vorhanden",
+    "split_by": ",",
+    "batch_size": 1,
+    "aggregate_key": "all_news",
+    "only_if_route": "normal",
+    "step": {
+      "id": "search_{{item_id}}",
+      "capability": "search",
+      "prompt_template": "Suche nach aktuellen Nachrichten für {{item}} der letzten 7 Tage. Nur signifikante Ereignisse. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.",
+      "output_key": "news_{{item_id}}"
+    }
+  },
+  "pipeline_after_template": [
+    {"id": "search_macro", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach aktuellen Makro-Ereignissen. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "macro_news"},
+    {"id": "analyze_and_trigger", "capability": "deep_reasoning", "only_if_route": "normal", "prompt_template": "Analysiere alle Nachrichten: {{all_news}} und Makro: {{macro_news}}. Vergleiche mit last_news. Entscheide über Trigger.", "output_key": "final_result"}
+  ]
+}
 
-Beispiel ohne Router (Gecko — immer gleicher Ablauf):
-[
-  {"id": "search_sector_1", "capability": "search", "prompt_template": "Suche nach Unternehmen in Sektor X... Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten, keine Einleitungen. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_1"},
-  {"id": "analyze", "capability": "deep_reasoning", "prompt_template": "Analysiere: {{search_1}}", "output_key": "final_result"}
-]"""
+Beispiel GPU-Agent (feste Items, kein Router):
+{
+  "pipeline_template": {
+    "source": "static",
+    "foreach_items": ["RTX 4060 Ti 16GB <220€", "RTX 9070 XT 16GB <500€", "RTX 3090 24GB <600€"],
+    "batch_size": 1,
+    "aggregate_key": "all_listings",
+    "step": {
+      "id": "search_{{item_id}}",
+      "capability": "search",
+      "prompt_template": "Suche nach aktuellen Angeboten für {{item}} auf deutschen Secondhand-Plattformen. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.",
+      "output_key": "listings_{{item_id}}"
+    }
+  },
+  "pipeline_after_template": [
+    {"id": "analyze", "capability": "reasoning", "prompt_template": "Analysiere alle gefundenen Angebote: {{all_listings}}. Vergleiche mit known_listings und price_baseline.", "output_key": "final_result"}
+  ]
+}"""
 
 
 _PIPELINE_CAPABILITIES = {CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
 
 
-async def _generate_pipeline(instruction: str, work_capability: str, state_keys: list[str]) -> list[dict] | None:
+async def _generate_pipeline(instruction: str, work_capability: str, state_keys: list[str]) -> dict | None:
     if work_capability not in _PIPELINE_CAPABILITIES:
         return None
     try:
@@ -192,15 +230,24 @@ async def _generate_pipeline(instruction: str, work_capability: str, state_keys:
             capability=CAPABILITY_REASONING,
         )
         parsed = json.loads(clean_llm_json(raw))
-        if not isinstance(parsed, list) or not parsed:
-            logger.warning("Pipeline generator returned invalid structure")
+        if not isinstance(parsed, dict):
+            logger.warning("Pipeline generator returned non-dict")
             return None
-        required_keys = {"id", "capability", "prompt_template", "output_key"}
-        for step in parsed:
-            if not isinstance(step, dict) or not required_keys.issubset(step.keys()):
-                logger.warning("Pipeline step missing required keys: %r", step)
-                return None
-        logger.info("Pipeline generated with %d steps: %s", len(parsed), [s["id"] for s in parsed])
+
+        has_pipeline = isinstance(parsed.get("pipeline"), list)
+        has_template = isinstance(parsed.get("pipeline_template"), dict)
+        has_after = isinstance(parsed.get("pipeline_after_template"), list)
+
+        if not has_pipeline and not has_template and not has_after:
+            logger.warning("Pipeline generator returned empty structure")
+            return None
+
+        logger.info(
+            "Pipeline generated: %d fixed steps, template=%s, %d after-steps",
+            len(parsed.get("pipeline", [])),
+            "yes" if has_template else "no",
+            len(parsed.get("pipeline_after_template", [])),
+        )
         return parsed
     except Exception as e:
         logger.warning("Pipeline generation failed: %s", e)
@@ -266,9 +313,11 @@ async def parse_agent_creation(
         logger.info("Agent work_capability classified as: %s", work_capability)
 
         state_keys: list[str] = parsed.get("state_keys", ["last_run_summary"])
-        pipeline = await _generate_pipeline(instruction, work_capability, state_keys)
-        if pipeline:
-            logger.info("Agent will run with pipeline (%d steps)", len(pipeline))
+        pipeline_result = await _generate_pipeline(instruction, work_capability, state_keys)
+        if pipeline_result:
+            steps_count = len(pipeline_result.get("pipeline", [])) + len(pipeline_result.get("pipeline_after_template", []))
+            has_template = bool(pipeline_result.get("pipeline_template"))
+            logger.info("Agent pipeline generated: %d fixed steps, template=%s", steps_count, has_template)
 
         tz_str = await memory.get_user_timezone(pool, user_id)
         try:
@@ -289,8 +338,13 @@ async def parse_agent_creation(
             "type": parsed.get("type", "default"),
             "work_capability": work_capability,
         }
-        if pipeline:
-            agent_config["pipeline"] = pipeline
+        if pipeline_result:
+            if pipeline_result.get("pipeline"):
+                agent_config["pipeline"] = pipeline_result["pipeline"]
+            if pipeline_result.get("pipeline_template"):
+                agent_config["pipeline_template"] = pipeline_result["pipeline_template"]
+            if pipeline_result.get("pipeline_after_template"):
+                agent_config["pipeline_after_template"] = pipeline_result["pipeline_after_template"]
 
         raw_suggested: str | None = parsed.get("suggested_name")
         if raw_suggested and raw_suggested.strip().lower() == config.BOT_NAME.lower():
