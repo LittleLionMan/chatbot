@@ -98,11 +98,15 @@ Mögliche Anfragen:
 - Statusabfrage ("Wie läuft X?", "Was hat X gefunden?") → fasse State und Beobachtungen zusammen
 - Konfigurationsänderung (Suchgebiet, Häufigkeit, Inhalt, Kriterien) → bestätige knapp, gib das vollständige neue config-Objekt zurück: ```config\n{...}\n```
 - Umbenennung ("nenn ihn X", "er soll jetzt Y heißen") → bestätige knapp, gib den neuen Namen zurück: ```name\nNeuerName\n```
+- Capability neu klassifizieren ("analysiere seine Capability", "setze die richtige Capability") → bestätige knapp, gib zurück: ```reclassify_capability\ntrue\n```
+- Pipeline neu generieren ("generiere eine Pipeline", "erstelle eine Pipeline für ihn", "optimiere seinen Workflow") → bestätige knapp, gib zurück: ```regenerate_pipeline\ntrue\n```
 - Kombination aus mehreren Änderungen → alle zutreffenden Blöcke zurückgeben
 - Allgemeine Ansprache → antworte im Stil von Bob
 
 Wenn du die Konfiguration änderst, gib immer das vollständige neue config-Objekt zurück — alle Felder, nicht nur die geänderten.
-Das config-Objekt hat die Felder: instruction, state_keys, data_reads, type, work_capability."""
+Das config-Objekt hat die Felder: instruction, state_keys, data_reads, type, work_capability.
+work_capability nie selbst setzen wenn der Nutzer Reklassifizierung anfragt — dafür gibt es ```reclassify_capability```.
+pipeline nie selbst generieren — dafür gibt es ```regenerate_pipeline```."""
 
 
 def _pick_name_for_topic(topic_type: str) -> str:
@@ -321,9 +325,7 @@ async def handle_agent_talk(
     try:
         response = await brain.chat(
             system=_AGENT_TALK_SYSTEM,
-            messages=[
-                {"role": "user", "content": f"{context}\n\nNutzeranfrage: {text}"},
-            ],
+            messages=[{"role": "user", "content": f"{context}\n\nNutzeranfrage: {text}"}],
             capability=CAPABILITY_BALANCED,
         )
     except Exception as e:
@@ -350,6 +352,38 @@ async def handle_agent_talk(
             response = response[:response.index("```name")].strip()
         except Exception as e:
             logger.warning("Name extraction from agent talk response failed: %s", e)
+
+    if "```reclassify_capability" in response:
+        try:
+            response = response[:response.index("```reclassify_capability")].strip()
+            instruction = (new_config or config_data).get("instruction", "")
+            new_capability = await _classify_work_capability(instruction)
+            logger.info("Agent %s capability reclassified as: %s", agent["name"], new_capability)
+            if new_config is None:
+                new_config = dict(config_data)
+            new_config["work_capability"] = new_capability
+            response = response + f"\nCapability neu klassifiziert: {new_capability}"
+        except Exception as e:
+            logger.warning("Capability reclassification failed: %s", e)
+
+    if "```regenerate_pipeline" in response:
+        try:
+            response = response[:response.index("```regenerate_pipeline")].strip()
+            current_config = new_config or config_data
+            instruction = current_config.get("instruction", "")
+            work_capability = current_config.get("work_capability", CAPABILITY_BALANCED)
+            state_keys = current_config.get("state_keys", ["last_run_summary"])
+            new_pipeline = await _generate_pipeline(instruction, work_capability, state_keys)
+            if new_config is None:
+                new_config = dict(config_data)
+            if new_pipeline:
+                new_config["pipeline"] = new_pipeline
+                logger.info("Agent %s pipeline regenerated with %d steps", agent["name"], len(new_pipeline))
+                response = response + f"\nPipeline neu generiert: {len(new_pipeline)} Steps ({', '.join(s['id'] for s in new_pipeline)})"
+            else:
+                response = response + "\nFür diese Instruction wird keine Pipeline benötigt."
+        except Exception as e:
+            logger.warning("Pipeline regeneration failed: %s", e)
 
     return response, new_config, new_name
 
