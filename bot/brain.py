@@ -278,14 +278,14 @@ async def _searxng_available_cached() -> bool:
     return _searxng_available
 
 
-_QUERY_EXTRACTION_SYSTEM = """Extrahiere aus dieser Nutzernachricht 1-3 optimierte Suchanfragen.
+_QUERY_EXTRACTION_SYSTEM = """Extrahiere aus dieser Nutzernachricht 1-3 optimierte Suchanfragen für eine Suchmaschine.
 Antworte NUR mit einem JSON-Array von Strings, kein anderer Text, keine Markdown-Backticks.
-Optimiere die Queries für maximale Relevanz: präzise Begriffe, relevante Qualifier, aktuelle Jahreszahl wenn zeitkritisch.
+Kurz und präzise — wie ein Mensch der etwas googelt.
 Beispiele:
 "Wie ist das Wetter in Berlin?" → ["Wetter Berlin aktuell"]
 "Was kostet eine RTX 4090 gerade?" → ["RTX 4090 Preis 2026"]
-"Neueste Nachrichten zu OpenAI" → ["OpenAI News April 2026"]
-"Vergleich Python vs JavaScript für Backend" → ["Python vs JavaScript Backend Performance Vergleich 2026"]"""
+"Neueste Nachrichten zu OpenAI" → ["OpenAI News 2026"]
+"Vergleich Python vs JavaScript für Backend" → ["Python JavaScript Backend Vergleich"]"""
 
 
 async def _extract_search_queries(text: str) -> list[str]:
@@ -306,6 +306,9 @@ async def _extract_search_queries(text: str) -> list[str]:
         return [text[:100]]
     except Exception:
         return [text[:100]]
+
+
+async def _inject_search_results(
     messages: list[dict],
     search_queries: list[str] | None,
     search_module,
