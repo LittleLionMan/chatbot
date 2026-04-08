@@ -77,6 +77,10 @@ class AgentConfigPatch(BaseModel):
     work_capability: str | None = None
     pipeline_step: dict | None = None
     pipeline_step_index: int | None = None
+    pipeline_step_delete: int | None = None
+    pipeline_step_add: dict | None = None
+    pipeline_step_add_index: int | None = None
+    pipeline: list | None = None
 
 
 class MemoryBody(BaseModel):
@@ -151,11 +155,26 @@ async def patch_agent(agent_id: int, body: AgentConfigPatch) -> dict:
         config["instruction"] = body.instruction
     if body.work_capability is not None:
         config["work_capability"] = body.work_capability
+    if body.pipeline is not None:
+        config["pipeline"] = body.pipeline
     if body.pipeline_step is not None and body.pipeline_step_index is not None:
         pipeline: list = config.get("pipeline", [])
         if 0 <= body.pipeline_step_index < len(pipeline):
             pipeline[body.pipeline_step_index] = body.pipeline_step
             config["pipeline"] = pipeline
+    if body.pipeline_step_delete is not None:
+        pipeline = config.get("pipeline", [])
+        if 0 <= body.pipeline_step_delete < len(pipeline):
+            pipeline.pop(body.pipeline_step_delete)
+            config["pipeline"] = pipeline
+    if body.pipeline_step_add is not None:
+        pipeline = config.get("pipeline", [])
+        idx = body.pipeline_step_add_index
+        if idx is None or idx >= len(pipeline):
+            pipeline.append(body.pipeline_step_add)
+        else:
+            pipeline.insert(idx, body.pipeline_step_add)
+        config["pipeline"] = pipeline
     await pool().execute(
         "UPDATE agents SET name = $1, schedule = $2, config = $3 WHERE id = $4",
         new_name, new_schedule, json.dumps(config), agent_id,

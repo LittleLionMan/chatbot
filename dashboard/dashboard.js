@@ -214,25 +214,38 @@ async function selectAgent(id) {
       a.pipeline && a.pipeline.length
         ? `
       <div class="detail-block">
-        <div class="detail-block-title">Pipeline (${a.pipeline.length} Steps)</div>
+        <div class="detail-block-title">
+          Pipeline (${a.pipeline.length} Steps)
+          <button class="btn btn-sm btn-accent" onclick="addPipelineStep(${id})">+ Step</button>
+        </div>
         ${a.pipeline
           .map(
             (step, i) => `
           <div class="pipeline-step">
             <div class="pipeline-step-header">
-              <span class="pipeline-step-id">${step.id}</span>
+              <span class="pipeline-step-id">${step.id}${step.is_router ? " 🔀" : ""}</span>
               <span class="badge badge-cap">${step.capability}</span>
+              ${step.only_if_route ? `<span class="badge badge-pipeline">${Array.isArray(step.only_if_route) ? step.only_if_route.join("|") : step.only_if_route}</span>` : ""}
               <button class="btn btn-sm" onclick="editPipelineStep(${id}, ${i})">Bearbeiten</button>
+              <button class="btn btn-sm btn-danger" onclick="deletePipelineStep(${id}, ${i})">Löschen</button>
             </div>
             <div class="pipeline-step-prompt">${step.prompt_template.slice(0, 120)}${step.prompt_template.length > 120 ? "…" : ""}</div>
-            <div class="pipeline-step-meta">output_key: ${step.output_key}</div>
+            <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if_route: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}</div>
           </div>
         `,
           )
           .join("")}
       </div>
     `
-        : "";
+        : `
+      <div class="detail-block">
+        <div class="detail-block-title">
+          Pipeline
+          <button class="btn btn-sm btn-accent" onclick="addPipelineStep(${id})">+ Step</button>
+        </div>
+        <div style="font-size:13px;color:var(--text3);">Keine Pipeline.</div>
+      </div>
+    `;
 
     detail.innerHTML = `
       <div class="action-bar">
@@ -390,12 +403,20 @@ function editPipelineStep(agentId, stepIndex) {
     (c) =>
       `<option value="${c}" ${c === step.capability ? "selected" : ""}>${c}</option>`,
   ).join("");
+  const onlyIfRoute = Array.isArray(step.only_if_route)
+    ? step.only_if_route.join(", ")
+    : step.only_if_route || "";
   openModal(
     "Pipeline-Step bearbeiten",
-    `<div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" value="${step.id}" disabled /></div>
+    `<div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="edit-step-id" value="${step.id}" /></div>
      <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="edit-step-cap">${capOptions}</select></div>
      <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="edit-step-prompt" style="min-height:200px;">${step.prompt_template}</textarea></div>
-     <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="edit-step-key" value="${step.output_key}" /></div>`,
+     <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="edit-step-key" value="${step.output_key}" /></div>
+     <div class="modal-field"><div class="modal-label">only_if_route (leer = immer, mehrere mit Komma)</div><input class="modal-input" id="edit-step-route" value="${onlyIfRoute}" placeholder="z.B. normal oder normal, trigger" /></div>
+     <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
+       <input type="checkbox" id="edit-step-router" ${step.is_router ? "checked" : ""} />
+       <label class="modal-label" style="margin:0;">is_router</label>
+     </div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="savePipelineStep(${agentId}, ${stepIndex})">Speichern</button>`,
   );
@@ -403,13 +424,24 @@ function editPipelineStep(agentId, stepIndex) {
 
 async function savePipelineStep(agentId, stepIndex) {
   const a = agentsData.find((x) => x.id === agentId);
-  const step = a.pipeline[stepIndex];
+  const routeRaw = document.getElementById("edit-step-route").value.trim();
+  let onlyIfRoute = null;
+  if (routeRaw) {
+    const parts = routeRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    onlyIfRoute = parts.length === 1 ? parts[0] : parts;
+  }
   const updated = {
-    id: step.id,
+    id: document.getElementById("edit-step-id").value.trim(),
     capability: document.getElementById("edit-step-cap").value,
     prompt_template: document.getElementById("edit-step-prompt").value,
-    output_key: document.getElementById("edit-step-key").value,
+    output_key: document.getElementById("edit-step-key").value.trim(),
   };
+  if (onlyIfRoute !== null) updated.only_if_route = onlyIfRoute;
+  if (document.getElementById("edit-step-router").checked)
+    updated.is_router = true;
   try {
     await api("/api/agents/" + agentId, {
       method: "PATCH",
@@ -422,6 +454,96 @@ async function savePipelineStep(agentId, stepIndex) {
     a.pipeline[stepIndex] = updated;
     closeModal();
     toast("Step gespeichert.");
+    selectAgent(agentId);
+  } catch (e) {
+    toast("Fehler.", true);
+  }
+}
+
+async function deletePipelineStep(agentId, stepIndex) {
+  confirmModal("Pipeline-Step wirklich löschen?", async () => {
+    try {
+      await api("/api/agents/" + agentId, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pipeline_step_delete: stepIndex }),
+      });
+      const a = agentsData.find((x) => x.id === agentId);
+      a.pipeline.splice(stepIndex, 1);
+      toast("Step gelöscht.");
+      selectAgent(agentId);
+    } catch (e) {
+      toast("Fehler.", true);
+    }
+  });
+}
+
+function addPipelineStep(agentId) {
+  const capOptions = CAPABILITIES.map(
+    (c) => `<option value="${c}">${c}</option>`,
+  ).join("");
+  openModal(
+    "Neuen Pipeline-Step hinzufügen",
+    `<div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="new-step-id" placeholder="z.B. search_news" /></div>
+     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="new-step-cap">${capOptions}</select></div>
+     <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="new-step-prompt" style="min-height:160px;" placeholder="Anweisung für diesen Step…"></textarea></div>
+     <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="new-step-key" placeholder="z.B. search_result" /></div>
+     <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="new-step-route" placeholder="z.B. normal" /></div>
+     <div class="modal-field"><div class="modal-label">Position (leer = ans Ende)</div><input class="modal-input" id="new-step-pos" type="number" placeholder="0 = Anfang" /></div>
+     <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
+       <input type="checkbox" id="new-step-router" />
+       <label class="modal-label" style="margin:0;">is_router</label>
+     </div>`,
+    `<button class="btn" onclick="closeModal()">Abbrechen</button>
+     <button class="btn btn-accent" onclick="saveNewPipelineStep(${agentId})">Hinzufügen</button>`,
+  );
+}
+
+async function saveNewPipelineStep(agentId) {
+  const id = document.getElementById("new-step-id").value.trim();
+  const key = document.getElementById("new-step-key").value.trim();
+  const prompt = document.getElementById("new-step-prompt").value.trim();
+  if (!id || !key || !prompt) {
+    toast("ID, Output Key und Prompt sind pflicht.", true);
+    return;
+  }
+  const routeRaw = document.getElementById("new-step-route").value.trim();
+  let onlyIfRoute = null;
+  if (routeRaw) {
+    const parts = routeRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    onlyIfRoute = parts.length === 1 ? parts[0] : parts;
+  }
+  const posRaw = document.getElementById("new-step-pos").value.trim();
+  const pos = posRaw !== "" ? parseInt(posRaw) : null;
+  const step = {
+    id,
+    capability: document.getElementById("new-step-cap").value,
+    prompt_template: prompt,
+    output_key: key,
+  };
+  if (onlyIfRoute !== null) step.only_if_route = onlyIfRoute;
+  if (document.getElementById("new-step-router").checked) step.is_router = true;
+  try {
+    await api("/api/agents/" + agentId, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pipeline_step_add: step,
+        pipeline_step_add_index: pos,
+      }),
+    });
+    const a = agentsData.find((x) => x.id === agentId);
+    a.pipeline = a.pipeline || [];
+    if (pos === null || pos >= a.pipeline.length) {
+      a.pipeline.push(step);
+    } else {
+      a.pipeline.splice(pos, 0, step);
+    }
+    closeModal();
+    toast("Step hinzugefügt.");
     selectAgent(agentId);
   } catch (e) {
     toast("Fehler.", true);
