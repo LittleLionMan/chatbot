@@ -293,6 +293,7 @@ async def _execute_pipeline(
     injected_data: dict[str, str],
     config_data: dict,
 ) -> str:
+    context: dict[str, str] = {}
     context.update({k: v for k, v in state.items() if v})
     context.update(injected_data)
 
