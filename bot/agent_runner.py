@@ -34,7 +34,7 @@ Felder:
 Verfügbare Tools:
 - {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — für kurze Werte die sicher in JSON passen (URLs, Datum, kurze Statusmeldungen).
 - {"tool": "db_write_from_work", "namespace": "...", "key": "..."} — für lange Texte, Analysen, Berichte. Kein value-Feld nötig — der Runner speichert automatisch den vollständigen Work-Output als Text. Immer verwenden wenn der Inhalt länger als ein Satz ist.
-- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus.
+- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus. Wichtig: target_agent_name exakt so schreiben wie in der Agenten-Instruction genannt — keine Underscores statt Leerzeichen, keine Veränderung der Groß-/Kleinschreibung. Beispiel: "Jim Cramer" nicht "jim_cramer", "Gecko" nicht "gecko".
 - {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
 
 Wann state_updates, wann db_write, wann db_write_from_work:
