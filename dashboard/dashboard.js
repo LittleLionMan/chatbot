@@ -638,12 +638,22 @@ async function savePipelineTemplate(agentId) {
 }
 
 function addPipelineStep(agentId) {
+  const a = agentsData.find((x) => x.id === agentId);
+  const hasAfterTemplate =
+    a.pipeline_after_template && a.pipeline_after_template.length > 0;
   const capOptions = CAPABILITIES.map(
     (c) => `<option value="${c}">${c}</option>`,
   ).join("");
   openModal(
     "Neuen Pipeline-Step hinzufügen",
-    `<div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="new-step-id" placeholder="z.B. search_news" /></div>
+    `<div class="modal-field">
+       <div class="modal-label">Sektion</div>
+       <select class="modal-select" id="new-step-section">
+         <option value="pipeline">pipeline (feste Steps)</option>
+         ${hasAfterTemplate ? '<option value="pipeline_after_template">pipeline_after_template (nach Template)</option>' : ""}
+       </select>
+     </div>
+     <div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="new-step-id" placeholder="z.B. search_news" /></div>
      <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="new-step-cap">${capOptions}</select></div>
      <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="new-step-prompt" style="min-height:160px;" placeholder="Anweisung für diesen Step…"></textarea></div>
      <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="new-step-key" placeholder="z.B. search_result" /></div>
@@ -666,6 +676,7 @@ async function saveNewPipelineStep(agentId) {
     toast("ID, Output Key und Prompt sind pflicht.", true);
     return;
   }
+  const section = document.getElementById("new-step-section").value;
   const routeRaw = document.getElementById("new-step-route").value.trim();
   let onlyIfRoute = null;
   if (routeRaw) {
@@ -685,21 +696,29 @@ async function saveNewPipelineStep(agentId) {
   };
   if (onlyIfRoute !== null) step.only_if_route = onlyIfRoute;
   if (document.getElementById("new-step-router").checked) step.is_router = true;
+
+  const a = agentsData.find((x) => x.id === agentId);
+  const currentSteps =
+    section === "pipeline_after_template"
+      ? [...(a.pipeline_after_template || [])]
+      : [...(a.pipeline || [])];
+
+  if (pos === null || pos >= currentSteps.length) {
+    currentSteps.push(step);
+  } else {
+    currentSteps.splice(pos, 0, step);
+  }
+
   try {
     await api("/api/agents/" + agentId, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        pipeline_step_add: step,
-        pipeline_step_add_index: pos,
-      }),
+      body: JSON.stringify({ [section]: currentSteps }),
     });
-    const a = agentsData.find((x) => x.id === agentId);
-    a.pipeline = a.pipeline || [];
-    if (pos === null || pos >= a.pipeline.length) {
-      a.pipeline.push(step);
+    if (section === "pipeline_after_template") {
+      a.pipeline_after_template = currentSteps;
     } else {
-      a.pipeline.splice(pos, 0, step);
+      a.pipeline = currentSteps;
     }
     closeModal();
     toast("Step hinzugefügt.");
