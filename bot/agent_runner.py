@@ -293,7 +293,6 @@ async def _execute_pipeline(
     injected_data: dict[str, str],
     config_data: dict,
 ) -> str:
-    context: dict[str, str] = {}
     context.update({k: v for k, v in state.items() if v})
     context.update(injected_data)
 
@@ -348,6 +347,7 @@ async def _execute_pipeline(
                     max_tokens=20,
                     capability=CAPABILITY_FAST,
                     caller=f"agent_router:{name}",
+                    pool=pool,
                 )
                 active_route = route_output.strip().lower()
                 context[output_key] = active_route
@@ -382,6 +382,7 @@ async def _execute_pipeline(
                 capability=capability,
                 force_model=force_model,
                 caller=f"agent_pipeline:{name}:{step_id}",
+                pool=pool,
             )
         except Exception as e:
             logger.error("Agent %d (%s) pipeline step '%s' failed: %s", agent_id, name, step_id, e)
