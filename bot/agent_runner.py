@@ -33,7 +33,7 @@ Felder:
 
 Verfügbare Tools:
 - {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — für kurze Werte die sicher in JSON passen (URLs, Datum, kurze Statusmeldungen).
-- {"tool": "db_write_from_work", "namespace": "...", "key": "..."} — für lange Texte, Analysen, Berichte. Kein value-Feld nötig — der Runner speichert automatisch den vollständigen Work-Output als Text. Immer verwenden wenn der Inhalt länger als ein Satz ist.
+- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — für lange Texte, Analysen, Berichte. Optionales "source_key"-Feld: wenn gesetzt, speichert der Runner den Output des Pipeline-Steps mit diesem output_key statt des work_result. Verwende source_key wenn die zu speichernde Analyse in einem früheren Pipeline-Step produziert wurde (z.B. "source_key": "full_analysis"). Immer verwenden wenn der Inhalt länger als ein Satz ist.
 - {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus. Wichtig: target_agent_name exakt so schreiben wie in der Agenten-Instruction genannt — keine Underscores statt Leerzeichen, keine Veränderung der Groß-/Kleinschreibung. Beispiel: "Jim Cramer" nicht "jim_cramer", "Gecko" nicht "gecko".
 - {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
 
@@ -158,6 +158,7 @@ async def _execute_tool_calls(
     target_chat_id: int,
     tool_calls: list[dict],
     work_result: str = "",
+    pipeline_context: dict[str, str] | None = None,
 ) -> None:
     for call in tool_calls:
         tool = call.get("tool")
@@ -181,14 +182,22 @@ async def _execute_tool_calls(
                     logger.info("Agent %d queued trigger for: %s (delay: %dm)", agent_id, target_name, delay)
 
             elif tool == "db_write_from_work":
+                source_key: str | None = call.get("source_key")
+                if source_key and pipeline_context and source_key in pipeline_context:
+                    content = pipeline_context[source_key]
+                    logger.info("Agent %d db_write_from_work (source_key=%s): %s/%s (%d chars)", agent_id, source_key, call["namespace"], call["key"], len(content))
+                else:
+                    content = work_result
+                    if source_key:
+                        logger.warning("Agent %d db_write_from_work: source_key '%s' not found in context, falling back to work_result", agent_id, source_key)
+                    logger.info("Agent %d db_write_from_work: %s/%s (%d chars)", agent_id, call["namespace"], call["key"], len(content))
                 await memory.write_agent_data(
                     pool,
                     agent_id,
                     call["namespace"],
                     call["key"],
-                    work_result,
+                    content,
                 )
-                logger.info("Agent %d db_write_from_work: %s/%s (%d chars)", agent_id, call["namespace"], call["key"], len(work_result))
 
             elif tool == "notify_user":
                 msg = call.get("message", "")
@@ -400,7 +409,7 @@ async def _execute_pipeline(
             existing = context.get(aggregate_key, "")
             context[aggregate_key] = f"{existing}\n\n---\n\n{output_key}:\n{step_output}" if existing else f"{output_key}:\n{step_output}"
 
-    return last_output
+    return last_output, context
 
 
 async def execute_agent(
@@ -445,10 +454,11 @@ async def execute_agent(
         has_template = bool(config_data.get("pipeline_template"))
 
         if pipeline or has_template:
-            work_result = await _execute_pipeline(
+            work_result, pipeline_context = await _execute_pipeline(
                 pool, agent_id, name, pipeline, state, injected_data, config_data,
             )
         else:
+            pipeline_context: dict[str, str] = {}
             use_web_search = work_capability in ("search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING)
             web_search_max_uses = 5 if work_capability == "search" else 2
 
@@ -498,7 +508,7 @@ async def execute_agent(
         await memory.set_agent_state(pool, agent_id, state)
 
         if tool_calls:
-            await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls, work_result)
+            await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls, work_result, pipeline_context)
 
         has_notify_tool = any(c.get("tool") == "notify_user" for c in tool_calls)
 
