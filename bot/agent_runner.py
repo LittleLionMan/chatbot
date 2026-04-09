@@ -211,7 +211,10 @@ def _resolve_pipeline_template(template: str, context: dict[str, str]) -> str:
 
 _ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad für diesen Agenten-Lauf gilt.
 Antworte NUR mit einem einzigen Wort — dem Namen des Pfades. Kein anderer Text.
-Analysiere die Gesamtinstruktion, den aktuellen State und den Trigger-Payload um den richtigen Pfad zu bestimmen."""
+
+Wichtig: Der Default-Pfad ist immer 'normal'. Wähle einen anderen Pfad NUR wenn ein expliziter Trigger-Payload vorhanden ist der diesen Pfad eindeutig auslöst.
+Wenn kein Payload vorhanden ist oder der Payload leer ist: antworte mit 'normal'.
+Entscheide anhand der verfügbaren Daten — nicht anhand von Vermutungen."""
 
 
 def _expand_pipeline_template(
@@ -329,9 +332,19 @@ async def _execute_pipeline(
 
         if is_router:
             try:
+                payload_keys = {k: v for k, v in context.items() if k.startswith("trigger_payload.")}
+                payload_summary = "\n".join(f"  {k} = {v}" for k, v in payload_keys.items()) if payload_keys else "  (kein Payload vorhanden)"
+                state_summary = "\n".join(f"  {k} = {str(v)[:80]}" for k, v in context.items() if not k.startswith("trigger_payload.") and not k.startswith("state:") and not k.startswith("db:"))
+
+                router_context = (
+                    f"Instruktion: {instruction}\n\n"
+                    f"Trigger-Payload:\n{payload_summary}\n\n"
+                    f"Aktueller State:\n{state_summary}\n\n"
+                    f"Router-Prompt: {prompt}"
+                )
                 route_output = await brain.chat(
                     system=_ROUTER_SYSTEM,
-                    messages=[{"role": "user", "content": f"Instruktion: {instruction}\n\nAktueller Kontext:\n{prompt}"}],
+                    messages=[{"role": "user", "content": router_context}],
                     max_tokens=20,
                     capability=CAPABILITY_FAST,
                     caller=f"agent_router:{name}",
@@ -339,7 +352,7 @@ async def _execute_pipeline(
                 active_route = route_output.strip().lower()
                 context[output_key] = active_route
                 last_output = active_route
-                logger.info("Agent %d (%s) router decided route: '%s'", agent_id, name, active_route)
+                logger.info("Agent %d (%s) router decided route: '%s' (payload_keys: %s)", agent_id, name, active_route, list(payload_keys.keys()))
             except Exception as e:
                 logger.error("Agent %d (%s) router failed: %s", agent_id, name, e)
                 raise

@@ -232,6 +232,17 @@ def select_model(capability: Capability, fallback_capability: Capability | None 
     return os.getenv("LLM_MODEL", "claude-sonnet-4-6")
 
 
+def select_model_for_provider(capability: Capability, provider: str) -> str | None:
+    candidates = [
+        m for m in _available_models
+        if capability in m["capabilities"] and m["provider"] == provider
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda m: m["input_cost_per_mtok"])
+    return candidates[0]["api_model_name"]
+
+
 def get_max_output_tokens(capability: Capability, fallback_capability: Capability | None = None) -> int:
     if capability in _capability_max_tokens_map:
         return _capability_max_tokens_map[capability]
