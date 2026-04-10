@@ -210,6 +210,7 @@ async def chat(
     capability: Capability | None = None,
     force_model: str | None = None,
     search_queries: list[str] | None = None,
+    search_time_range: str | None = None,
 ) -> str:
     model = force_model or (select_model(capability) if capability else select_model(CAPABILITY_BALANCED))
     provider = get_provider_for_model(model) if not force_model else _infer_provider(model)
@@ -222,7 +223,7 @@ async def chat(
         searxng_available = await _search.is_available()
 
         if searxng_available:
-            augmented_messages = await _inject_search_results(messages, search_queries, _search)
+            augmented_messages = await _inject_search_results(messages, search_queries, search_time_range, _search)
             try:
                 if provider == "anthropic":
                     return await _call_anthropic(
@@ -311,6 +312,7 @@ async def _extract_search_queries(text: str) -> list[str]:
 async def _inject_search_results(
     messages: list[dict],
     search_queries: list[str] | None,
+    search_time_range: str | None,
     search_module,
 ) -> list[dict]:
     if not messages:
@@ -331,7 +333,7 @@ async def _inject_search_results(
     for query in queries:
         if not query.strip():
             continue
-        result = await search_module.search(query)
+        result = await search_module.search(query, time_range=search_time_range)
         if result:
             all_results.append(f"Suchanfrage: {query}\n\n{result}")
 

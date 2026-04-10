@@ -38,7 +38,7 @@ Verfügbare Tools:
 - {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
 
 Wann state_updates, wann db_write, wann db_write_from_work:
-- state_updates: Watchlists, Ticker-Listen, Flags, kurze Statusinfos — alles was andere Agents via State lesen sollen. Niemals last_run_summary in state_updates — der Runner setzt ihn automatisch aus report.
+- state_updates: Watchlists, Ticker-Listen, Flags, kurze Statusinfos — alles was andere Agents via State lesen sollen. Niemals last_run_summary in state_updates — der Runner setzt ihn automatisch aus report. Beispiele für typische State-Keys: analyses_overview, fundamentalanalyse_pending, known_companies.
 - db_write: kurze Werte (URLs, Datum, kurze Statusmeldungen) — nur wenn der Wert in einem JSON-String sicher passt.
 - db_write_from_work: alle langen Texte — Analysen, Berichte, Markdown-Dokumente. Kein JSON-Escaping nötig.
 
@@ -374,6 +374,7 @@ async def _execute_pipeline(
         use_web_search = is_search_step
         web_search_max_uses = 3 if is_search_step else None
         search_queries: list[str] | None = [prompt] if is_search_step else None
+        search_time_range: str | None = step.get("time_range") if is_search_step else None
 
         force_model: str | None = None
         if is_search_step:
@@ -382,7 +383,12 @@ async def _execute_pipeline(
             if not await _search.is_available():
                 force_model = select_model_for_provider(capability, "anthropic")
 
-        logger.info("Agent %d (%s) pipeline step '%s' [%s]%s", agent_id, name, step_id, capability, f" → {force_model}" if force_model else "")
+        logger.info(
+            "Agent %d (%s) pipeline step '%s' [%s]%s%s",
+            agent_id, name, step_id, capability,
+            f" → {force_model}" if force_model else "",
+            f" time_range={search_time_range}" if search_time_range else "",
+        )
 
         try:
             step_output = await brain.chat(
@@ -391,6 +397,7 @@ async def _execute_pipeline(
                 use_web_search=use_web_search,
                 web_search_max_uses=web_search_max_uses,
                 search_queries=search_queries,
+                search_time_range=search_time_range,
                 capability=capability,
                 force_model=force_model,
                 caller=f"agent_pipeline:{name}:{step_id}",
@@ -406,11 +413,6 @@ async def _execute_pipeline(
             "Agent %d (%s) step '%s' done (%d chars output)",
             agent_id, name, step_id, len(step_output),
         )
-        if capability == CAPABILITY_SEARCH:
-            logger.warning(
-                "Agent %d (%s) step '%s' search output:\n%s",
-                agent_id, name, step_id, step_output[:800],
-            )
 
         if aggregate_key and output_key in template_output_keys:
             existing = context.get(aggregate_key, "")

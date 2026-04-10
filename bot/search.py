@@ -9,6 +9,8 @@ _SEARXNG_URL = f"{config.SEARXNG_BASE_URL}/search"
 _MAX_RESULTS = 8
 _MAX_SNIPPET_CHARS = 300
 
+_VALID_TIME_RANGES = {"day", "week", "month", "year"}
+
 
 def _format_results(results: list[dict]) -> str:
     if not results:
@@ -24,23 +26,24 @@ def _format_results(results: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-async def search(query: str, language: str = "de-DE") -> str:
+async def search(query: str, language: str = "de-DE", time_range: str | None = None) -> str:
     try:
+        params: dict[str, str] = {
+            "q": query,
+            "format": "json",
+            "language": language,
+            "safesearch": "0",
+            "categories": "general",
+        }
+        if time_range and time_range in _VALID_TIME_RANGES:
+            params["time_range"] = time_range
+
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                _SEARXNG_URL,
-                params={
-                    "q": query,
-                    "format": "json",
-                    "language": language,
-                    "safesearch": "0",
-                    "categories": "general",
-                },
-            )
+            resp = await client.get(_SEARXNG_URL, params=params)
             resp.raise_for_status()
             data = resp.json()
             results: list[dict] = data.get("results", [])
-            logger.info("SearXNG query '%s': %d results", query, len(results))
+            logger.info("SearXNG query '%s' (time_range=%s): %d results", query, time_range or "none", len(results))
             return _format_results(results)
     except httpx.ConnectError:
         logger.warning("SearXNG not reachable")

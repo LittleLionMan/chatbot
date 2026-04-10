@@ -149,6 +149,7 @@ Felder in "pipeline" und "pipeline_after_template" — jeder Step:
 - "output_key": Speicher-Key
 - "is_router": true nur für Router
 - "only_if_route": Route-Filter (String oder Liste)
+- "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year". Setze "year" für Finance-, News- und Markt-Agents bei denen aktuelle Daten wichtig sind. Weglassen wenn historische oder zeitlose Daten gesucht werden.
 
 Felder in "pipeline_template":
 - "source": "state", "injected" oder "static"
