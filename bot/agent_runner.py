@@ -406,6 +406,11 @@ async def _execute_pipeline(
             "Agent %d (%s) step '%s' done (%d chars output)",
             agent_id, name, step_id, len(step_output),
         )
+        if capability == CAPABILITY_SEARCH:
+            logger.warning(
+                "Agent %d (%s) step '%s' search output:\n%s",
+                agent_id, name, step_id, step_output[:800],
+            )
 
         if aggregate_key and output_key in template_output_keys:
             existing = context.get(aggregate_key, "")
