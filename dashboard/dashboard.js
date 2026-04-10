@@ -234,7 +234,7 @@ async function selectAgent(id) {
           <button class="btn btn-sm btn-danger" onclick="deletePipelineStep(${id}, ${i}, '${section}')">Löschen</button>
         </div>
         <div class="pipeline-step-prompt">${step.prompt_template.slice(0, 120)}${step.prompt_template.length > 120 ? "…" : ""}</div>
-        <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}${step.time_range ? ` · time_range: ${step.time_range}` : ""}</div>
+        <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}${step.time_range ? ` · time_range: ${step.time_range}` : ""}${step.search_query ? ` · query: ${step.search_query}` : ""}</div>
       </div>
     `;
 
@@ -458,6 +458,7 @@ function editPipelineStep(agentId, stepIndex, section) {
      <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="edit-step-prompt" style="min-height:200px;">${step.prompt_template}</textarea></div>
      <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="edit-step-key" value="${step.output_key}" /></div>
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer, mehrere mit Komma)</div><input class="modal-input" id="edit-step-route" value="${onlyIfRoute}" placeholder="z.B. normal oder normal, trigger" /></div>
+     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, kurz + präzise, Template-Vars erlaubt)</div><input class="modal-input" id="edit-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
      <div class="modal-field"><div class="modal-label">time_range (nur für Search-Steps)</div><select class="modal-select" id="edit-step-timerange">${_timeRangeOptions(step.time_range)}</select></div>
      <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
        <input type="checkbox" id="edit-step-router" ${step.is_router ? "checked" : ""} />
@@ -485,6 +486,7 @@ async function savePipelineStep(agentId, stepIndex, section) {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
   const timeRange = document.getElementById("edit-step-timerange").value;
+  const searchQuery = document.getElementById("edit-step-searchquery").value.trim();
   const updated = {
     id: document.getElementById("edit-step-id").value.trim(),
     capability: document.getElementById("edit-step-cap").value,
@@ -492,6 +494,7 @@ async function savePipelineStep(agentId, stepIndex, section) {
     output_key: document.getElementById("edit-step-key").value.trim(),
   };
   if (onlyIfRoute !== null) updated.only_if_route = onlyIfRoute;
+  if (searchQuery) updated.search_query = searchQuery;
   if (timeRange) updated.time_range = timeRange;
   if (document.getElementById("edit-step-router").checked)
     updated.is_router = true;
@@ -670,6 +673,7 @@ function addPipelineStep(agentId) {
      <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="new-step-prompt" style="min-height:160px;" placeholder="Anweisung für diesen Step…"></textarea></div>
      <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="new-step-key" placeholder="z.B. search_result" /></div>
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="new-step-route" placeholder="z.B. normal" /></div>
+     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, kurz + präzise, Template-Vars erlaubt)</div><input class="modal-input" id="new-step-searchquery" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
      <div class="modal-field"><div class="modal-label">time_range (nur für Search-Steps)</div><select class="modal-select" id="new-step-timerange">${_timeRangeOptions("")}</select></div>
      <div class="modal-field"><div class="modal-label">Position (leer = ans Ende)</div><input class="modal-input" id="new-step-pos" type="number" placeholder="0 = Anfang" /></div>
      <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
@@ -700,6 +704,7 @@ async function saveNewPipelineStep(agentId) {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
   const timeRange = document.getElementById("new-step-timerange").value;
+  const searchQuery = document.getElementById("new-step-searchquery").value.trim();
   const posRaw = document.getElementById("new-step-pos").value.trim();
   const pos = posRaw !== "" ? parseInt(posRaw) : null;
   const step = {
@@ -709,6 +714,7 @@ async function saveNewPipelineStep(agentId) {
     output_key: key,
   };
   if (onlyIfRoute !== null) step.only_if_route = onlyIfRoute;
+  if (searchQuery) step.search_query = searchQuery;
   if (timeRange) step.time_range = timeRange;
   if (document.getElementById("new-step-router").checked) step.is_router = true;
 

@@ -373,8 +373,17 @@ async def _execute_pipeline(
         is_search_step = capability == CAPABILITY_SEARCH
         use_web_search = is_search_step
         web_search_max_uses = 3 if is_search_step else None
-        search_queries: list[str] | None = [prompt] if is_search_step else None
         search_time_range: str | None = step.get("time_range") if is_search_step else None
+
+        search_queries: list[str] | None = None
+        if is_search_step:
+            raw_query = step.get("search_query", "")
+            if raw_query:
+                resolved_query = _resolve_pipeline_template(raw_query, context)
+                search_queries = [resolved_query]
+                logger.info("Agent %d (%s) step '%s' using search_query: %r", agent_id, name, step_id, resolved_query)
+            else:
+                search_queries = [prompt]
 
         force_model: str | None = None
         if is_search_step:

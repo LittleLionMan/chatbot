@@ -145,11 +145,12 @@ Antworte NUR mit einem JSON-Objekt. Kein anderer Text, keine Markdown-Backticks.
 Felder in "pipeline" und "pipeline_after_template" — jeder Step:
 - "id": snake_case Bezeichner
 - "capability": "fast", "search", "reasoning", "deep_reasoning"
-- "prompt_template": Anweisung. Vorherige Outputs als {{output_key}}, State als {{key}}, Payload als {{trigger_payload.key}}
+- "prompt_template": Anweisung für das LLM. Vorherige Outputs als {{output_key}}, State als {{key}}, Payload als {{trigger_payload.key}}
 - "output_key": Speicher-Key
 - "is_router": true nur für Router
 - "only_if_route": Route-Filter (String oder Liste)
 - "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year". Setze "year" für Finance-, News- und Markt-Agents bei denen aktuelle Daten wichtig sind. Weglassen wenn historische oder zeitlose Daten gesucht werden.
+- "search_query": Nur für Search-Steps. Kurze, optimierte Suchanfrage für SearXNG (1-6 Wörter), getrennt vom prompt_template. Template-Variablen wie {{selected_ticker}} sind erlaubt. Beispiel: "{{selected_ticker}} Finanzkennzahlen 2026". Wenn nicht gesetzt, wird prompt_template als Query verwendet — was fast immer schlechte Ergebnisse liefert. Immer setzen bei Search-Steps.
 
 Felder in "pipeline_template":
 - "source": "state", "injected" oder "static"
