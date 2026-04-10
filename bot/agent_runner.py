@@ -42,6 +42,8 @@ Wann state_updates, wann db_write, wann db_write_from_work:
 - db_write: kurze Werte (URLs, Datum, kurze Statusmeldungen) — nur wenn der Wert in einem JSON-String sicher passt.
 - db_write_from_work: alle langen Texte — Analysen, Berichte, Markdown-Dokumente. Kein JSON-Escaping nötig.
 
+Wichtig: state_updates werden IMMER gesetzt wenn der Work-Result State-Änderungen beschreibt — unabhängig davon ob report "KEINE_AENDERUNG" ist. Ein "KEINE_AENDERUNG"-Report bedeutet nur dass der User nicht benachrichtigt wird, nicht dass State-Updates weggelassen werden.
+
 report ist die Zusammenfassung für den User und muss immer befüllt sein wenn etwas passiert ist — auch wenn state_updates gesetzt werden. Ohne report kein Telegram-Feedback.
 
 Beispiel:
@@ -106,14 +108,14 @@ async def _load_data_reads(
                 rows = await memory.query_agent_data(pool, namespace, agent_id=target_agent_id)
                 if rows:
                     combined = "\n".join(f"{r['key']}: {r['value']}" for r in rows)
-                    label = f"db:{agent_name or 'self'}:{namespace}"
+                    label = read.get("as") or f"db:{agent_name or 'self'}:{namespace}"
                     result[label] = combined
                     logger.info("Agent %d pre-loaded namespace %s from agent_id %d (%d entries)", agent_id, namespace, target_agent_id, len(rows))
             else:
                 key = _resolve_template(key, trigger_payload)
                 value = await memory.read_agent_data(pool, target_agent_id, namespace, key)
                 if value is not None:
-                    label = f"db:{agent_name or 'self'}:{namespace}:{key}"
+                    label = read.get("as") or f"db:{agent_name or 'self'}:{namespace}:{key}"
                     result[label] = value
                     logger.info("Agent %d pre-loaded %s/%s from agent_id %d", agent_id, namespace, key, target_agent_id)
 
@@ -301,7 +303,7 @@ async def _execute_pipeline(
     state: dict[str, str],
     injected_data: dict[str, str],
     config_data: dict,
-) -> str:
+) -> tuple[str, dict[str, str]]:
     context: dict[str, str] = {}
     context.update({k: v for k, v in state.items() if v})
     context.update(injected_data)

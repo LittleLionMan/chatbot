@@ -40,7 +40,7 @@ Felder:
 - "state_keys": Liste von Schlüsseln die der Agent zwischen Läufen im Gedächtnis behalten soll. Immer enthalten: "last_run_summary". Weitere nach Bedarf.
 - "data_reads": Liste von Datenbank-Lesevorgängen die vor jedem Lauf automatisch ausgeführt werden. Zwei Typen:
   - {"type": "state", "agent_name": "..."} — liest den kompletten State eines anderen Agenten. Nutze das wenn dieser Agent die primäre Datenquelle ist.
-  - {"type": "namespace", "namespace": "...", "agent_name": "..."} — liest einen DB-Namespace eines anderen Agenten. Optional "key" für einzelne Einträge, Template-Variablen wie {{trigger_payload.ticker}} möglich.
+  - {"type": "namespace", "namespace": "...", "agent_name": "...", "key": "...", "as": "..."} — liest einen DB-Namespace eines anderen Agenten. Optional "key" für einzelne Einträge, Template-Variablen wie {{trigger_payload.ticker}} möglich. Optionales "as"-Feld setzt einen fixen Context-Key statt des automatisch generierten Labels.
   Leer wenn der Agent keine fremden Daten braucht.
 - "type": Kurzes Schlagwort für den Bereich. Beispiele: "monitoring", "research", "coding", "finance", "news", "market".
 - "schedule": Cron-Expression (5 Felder). Beispiele: stündlich = "0 * * * *", täglich um 9 = "0 9 * * *", montags = "0 9 * * 1".
@@ -59,7 +59,7 @@ Eingabe: "Erstelle täglich um 9 für jeweils ein Unternehmen aus Gordons Liste 
 Output: {"instruction": "Lies Gordons Unternehmensliste. Wähle ein Unternehmen ohne Fundamentalanalyse und erstelle eine vollständige Analyse.", "state_keys": ["last_run_summary", "analyzed_tickers"], "data_reads": [{"type": "state", "agent_name": "Gordon"}], "type": "finance", "schedule": "0 9 * * *", "target": "same", "wants_name": false, "suggested_name": null}
 
 Eingabe: "Analysiere täglich um 10 das Unternehmen das per Trigger-Payload als ticker übergeben wird"
-Output: {"instruction": "Erstelle eine Fundamentalanalyse für den per trigger_payload.ticker übergebenen Ticker.", "state_keys": ["last_run_summary"], "data_reads": [{"namespace": "companies", "key": "{{trigger_payload.ticker}}:criteria_match"}], "type": "finance", "schedule": "0 10 * * *", "target": "same", "wants_name": false, "suggested_name": null}
+Output: {"instruction": "Erstelle eine Fundamentalanalyse für den per trigger_payload.ticker übergebenen Ticker.", "state_keys": ["last_run_summary"], "data_reads": [{"type": "namespace", "namespace": "analyses", "key": "{{trigger_payload.ticker}}", "as": "existing_analysis"}], "type": "finance", "schedule": "0 10 * * *", "target": "same", "wants_name": false, "suggested_name": null}
 
 Eingabe: "Beobachte RTX 4060 Ti Preise täglich unter 220€, nenn ihn Linus"
 Output: {"instruction": "Suche nach Angeboten für RTX 4060 Ti unter 220€ auf deutschen Sekundärmarkt-Plattformen. Vergleiche mit bekannten Fundstücken. Melde nur neue Treffer oder relevante Preisänderungen.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 9 * * *", "target": "same", "wants_name": true, "suggested_name": "Linus"}"""
@@ -94,7 +94,7 @@ _AGENT_TALK_SYSTEM = """Du bist Bob. Ein Nutzer fragt nach einem deiner laufende
 
 Du sprichst ÜBER den Agenten — du bist nicht der Agent und schlüpfst nicht in seine Rolle.
 
-Dir werden Name, Konfiguration, aktueller State und bisherige Beobachtungen des Agenten übergeben.
+Dir werden Name, Konfiguration, aktueller State, bisherige Beobachtungen und gespeicherte Daten des Agenten übergeben.
 
 Mögliche Anfragen:
 - Statusabfrage ("Wie läuft X?", "Was hat X gefunden?") → fasse State und Beobachtungen in Bobs Stimme zusammen, z.B. "Gecko hat bisher 12 Unternehmen gefunden..."
@@ -373,16 +373,31 @@ async def handle_agent_talk(
     agent: dict,
     state: dict[str, str],
     agent_memories: list[str],
+    pool: asyncpg.Pool | None = None,
 ) -> tuple[str, dict | None, str | None]:
     config_data = parse_agent_config(agent["config"])
     state_summary = "\n".join(f"{k}: {v}" for k, v in state.items()) if state else "noch kein State"
     memories_summary = "\n- ".join(agent_memories) if agent_memories else "noch keine Beobachtungen"
+
+    data_summary = ""
+    if pool is not None:
+        try:
+            data_rows = await memory.get_all_agent_data(pool, agent["id"])
+            if data_rows:
+                ns_lines: list[str] = []
+                for row in data_rows[:20]:
+                    preview = row["value"][:120] + "…" if len(row["value"]) > 120 else row["value"]
+                    ns_lines.append(f"{row['namespace']}/{row['key']}: {preview}")
+                data_summary = "\n".join(ns_lines)
+        except Exception as e:
+            logger.warning("Failed to load agent data for talk context: %s", e)
 
     context = (
         f"Agent: {agent['name']}\n"
         f"Konfiguration: {json.dumps(config_data, ensure_ascii=False)}\n\n"
         f"Aktueller State:\n{state_summary}\n\n"
         f"Bisherige Beobachtungen:\n- {memories_summary}"
+        + (f"\n\nGespeicherte Daten (Namespace/Key: Vorschau):\n{data_summary}" if data_summary else "")
     )
 
     try:

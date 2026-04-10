@@ -344,7 +344,7 @@ async def _reply(
             state = await memory.get_agent_state(pool, target_agent["id"])
             agent_memories = await memory.get_agent_memories(pool, target_agent["id"])
             response, new_config, new_name = await agent_parser.handle_agent_talk(
-                text, target_agent, state, agent_memories
+                text, target_agent, state, agent_memories, pool=pool
             )
             if new_config is not None:
                 await memory.update_agent_config(pool, target_agent["id"], new_config)
@@ -761,7 +761,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         agent_memories = await memory.get_agent_memories(pool, agent_id)
         status_text, _, _ = await agent_parser.handle_agent_talk(
             "Was ist dein aktueller Status und was hast du bisher beobachtet?",
-            agent, state, agent_memories,
+            agent, state, agent_memories, pool=pool
         )
         await query.message.reply_text(
             f"{agent['name']} — Status:\n\n{status_text}",

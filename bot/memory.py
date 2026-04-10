@@ -469,6 +469,24 @@ async def query_agent_data(
     return [dict(r) for r in rows]
 
 
+async def get_all_agent_data(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    limit: int = 100,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT namespace, key, value, updated_at
+        FROM agent_data
+        WHERE agent_id = $1
+        ORDER BY namespace, key
+        LIMIT $2
+        """,
+        agent_id, limit,
+    )
+    return [dict(r) for r in rows]
+
+
 async def enqueue_agent_trigger(
     pool: asyncpg.Pool,
     source_agent_id: int | None,
