@@ -225,6 +225,9 @@ async def chat(
 
         if searxng_available:
             augmented_messages = await _inject_search_results(messages, search_queries, search_time_range, search_categories, _search)
+            if augmented_messages is messages:
+                logger.info("chat caller=%s: no search results injected, skipping LLM call", caller)
+                return ""
             try:
                 if provider == "anthropic":
                     return await _call_anthropic(

@@ -33,7 +33,7 @@ Felder:
 
 Verfügbare Tools:
 - {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — für kurze Werte die sicher in JSON passen (URLs, Datum, kurze Statusmeldungen).
-- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — für lange Texte, Analysen, Berichte. Optionales "source_key"-Feld: wenn gesetzt, speichert der Runner den Output des Pipeline-Steps mit diesem output_key statt des work_result. Verwende source_key wenn die zu speichernde Analyse in einem früheren Pipeline-Step produziert wurde (z.B. "source_key": "full_analysis"). Immer verwenden wenn der Inhalt länger als ein Satz ist.
+- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — für lange Texte, Analysen, Berichte. Das "source_key"-Feld referenziert einen Pipeline-Context-Key dessen Inhalt gespeichert werden soll — nicht den work_result. Wenn der work_result eine Speicheranweisung mit source_key enthält (z.B. "Speichern: db_write_from_work namespace=X key=Y source_key=full_analysis"), MUSS dieser Tool-Call mit exakt diesem source_key erzeugt werden. Wenn verfügbare Pipeline-Context-Keys am Ende des work_result aufgelistet sind, zeigen diese welche source_keys verfügbar sind — nutze sie.
 - {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus. Wichtig: target_agent_name exakt so schreiben wie in der Agenten-Instruction genannt — keine Underscores statt Leerzeichen, keine Veränderung der Groß-/Kleinschreibung. Beispiel: "Jim Cramer" nicht "jim_cramer", "Gecko" nicht "gecko".
 - {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
 
@@ -440,12 +440,17 @@ async def _execute_pipeline(
             logger.error("Agent %d (%s) pipeline step '%s' failed: %s", agent_id, name, step_id, e)
             raise
 
-        context[output_key] = step_output
-        last_output = step_output
-        logger.info(
-            "Agent %d (%s) step '%s' done (%d chars output)",
-            agent_id, name, step_id, len(step_output),
-        )
+        if is_search_step and not step_output:
+            context[output_key] = "Keine aktuellen Suchergebnisse verfügbar."
+            last_output = context[output_key]
+            logger.info("Agent %d (%s) step '%s' skipped — no search results", agent_id, name, step_id)
+        else:
+            context[output_key] = step_output
+            last_output = step_output
+            logger.info(
+                "Agent %d (%s) step '%s' done (%d chars output)",
+                agent_id, name, step_id, len(step_output),
+            )
 
         if aggregate_key and output_key in template_output_keys:
             existing = context.get(aggregate_key, "")
@@ -516,9 +521,21 @@ async def execute_agent(
 
         logger.warning("Agent %d (%s) work result: %r", agent_id, name, work_result[:300])
 
+        context_summary = ""
+        if pipeline_context:
+            long_keys = {k: len(v) for k, v in pipeline_context.items() if len(v) > 200}
+            if long_keys:
+                context_summary = "
+
+Verfügbare Pipeline-Context-Keys (output_key → Zeichenlänge):
+" + "
+".join(
+                    f"  {k}: {chars} Zeichen" for k, chars in long_keys.items()
+                )
+
         raw_structured = await brain.chat(
             system=_AGENT_STRUCTURE_SYSTEM,
-            messages=[{"role": "user", "content": work_result}],
+            messages=[{"role": "user", "content": work_result + context_summary}],
             capability=CAPABILITY_FAST,
             caller=f"agent_structure:{name}",
             pool=pool,
