@@ -228,7 +228,7 @@ async function selectAgent(id) {
       <div class="pipeline-step">
         <div class="pipeline-step-header">
           <div class="pipeline-step-info">
-            <span class="pipeline-step-id">${step.id}${step.is_router ? " 🔀" : ""}</span>
+            <span class="pipeline-step-id">${step.id}${step.is_router ? " 🔀" : ""}${step.is_output ? " 📤" : ""}</span>
             <span class="badge badge-cap">${step.capability}</span>
             ${step.only_if_route ? `<span class="badge badge-pipeline">${Array.isArray(step.only_if_route) ? step.only_if_route.join("|") : step.only_if_route}</span>` : ""}
             ${step.time_range ? `<span class="badge badge-pipeline">⏱ ${step.time_range}</span>` : ""}
@@ -460,6 +460,38 @@ function _categoryOptions(selected) {
     .join("");
 }
 
+function _updateEditStepVisibility() {
+  const cap = document.getElementById("edit-step-cap")?.value || "";
+  const isSearch = cap === "search";
+  const isFinance = cap === "finance";
+  const fields = {
+    "field-edit-searchquery": isSearch,
+    "field-edit-timerange": isSearch,
+    "field-edit-categories": isSearch,
+    "field-edit-tickerkey": isFinance,
+  };
+  for (const [id, show] of Object.entries(fields)) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = show ? "block" : "none";
+  }
+}
+
+function _updateNewStepVisibility() {
+  const cap = document.getElementById("new-step-cap")?.value || "";
+  const isSearch = cap === "search";
+  const isFinance = cap === "finance";
+  const fields = {
+    "field-new-searchquery": isSearch,
+    "field-new-timerange": isSearch,
+    "field-new-categories": isSearch,
+    "field-new-tickerkey": isFinance,
+  };
+  for (const [id, show] of Object.entries(fields)) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = show ? "block" : "none";
+  }
+}
+
 function editPipelineStep(agentId, stepIndex, section) {
   section = section || "pipeline";
   const a = agentsData.find((x) => x.id === agentId);
@@ -475,20 +507,23 @@ function editPipelineStep(agentId, stepIndex, section) {
   const onlyIfRoute = Array.isArray(step.only_if_route)
     ? step.only_if_route.join(", ")
     : step.only_if_route || "";
+  const cap = step.capability || "";
+  const isSearch = cap === "search";
+  const isFinance = cap === "finance";
   openModal(
     "Pipeline-Step bearbeiten",
     `<div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="edit-step-id" value="${step.id}" /></div>
-     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="edit-step-cap">${capOptions}</select></div>
+     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="edit-step-cap" onchange="_updateEditStepVisibility()">${capOptions}</select></div>
      <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="edit-step-prompt" style="min-height:200px;">${step.prompt_template}</textarea></div>
      <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="edit-step-key" value="${step.output_key}" /></div>
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer, mehrere mit Komma)</div><input class="modal-input" id="edit-step-route" value="${onlyIfRoute}" placeholder="z.B. normal oder normal, trigger" /></div>
-     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, kurz + präzise, Template-Vars erlaubt)</div><input class="modal-input" id="edit-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
-     <div class="modal-field"><div class="modal-label">ticker_key (nur für Finance-Steps, Standard: selected_ticker)</div><input class="modal-input" id="edit-step-tickerkey" value="${step.ticker_key || ""}" placeholder="selected_ticker" /></div>
-     <div class="modal-field"><div class="modal-label">time_range (nur für Search-Steps)</div><select class="modal-select" id="edit-step-timerange">${_timeRangeOptions(step.time_range)}</select></div>
-     <div class="modal-field"><div class="modal-label">categories (nur für Search-Steps)</div><select class="modal-select" id="edit-step-categories">${_categoryOptions(step.categories)}</select></div>
-     <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
-       <input type="checkbox" id="edit-step-router" ${step.is_router ? "checked" : ""} />
-       <label class="modal-label" style="margin:0;">is_router</label>
+     <div class="modal-field" id="field-edit-searchquery" style="display:${isSearch ? "block" : "none"}"><div class="modal-label">search_query</div><input class="modal-input" id="edit-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
+     <div class="modal-field" id="field-edit-timerange" style="display:${isSearch ? "block" : "none"}"><div class="modal-label">time_range</div><select class="modal-select" id="edit-step-timerange">${_timeRangeOptions(step.time_range)}</select></div>
+     <div class="modal-field" id="field-edit-categories" style="display:${isSearch ? "block" : "none"}"><div class="modal-label">categories</div><select class="modal-select" id="edit-step-categories">${_categoryOptions(step.categories)}</select></div>
+     <div class="modal-field" id="field-edit-tickerkey" style="display:${isFinance ? "block" : "none"}"><div class="modal-label">ticker_key</div><input class="modal-input" id="edit-step-tickerkey" value="${step.ticker_key || ""}" placeholder="selected_ticker" /></div>
+     <div class="modal-field" style="display:flex;gap:16px;flex-wrap:wrap;">
+       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="edit-step-router" ${step.is_router ? "checked" : ""} /> is_router</label>
+       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="edit-step-output" ${step.is_output ? "checked" : ""} /> is_output</label>
      </div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="savePipelineStep(${agentId}, ${stepIndex}, '${section}')">Speichern</button>`,
@@ -530,6 +565,8 @@ async function savePipelineStep(agentId, stepIndex, section) {
   if (tickerKey) updated.ticker_key = tickerKey;
   if (document.getElementById("edit-step-router").checked)
     updated.is_router = true;
+  if (document.getElementById("edit-step-output").checked)
+    updated.is_output = true;
 
   const newSteps = [...steps];
   newSteps[stepIndex] = updated;
@@ -716,17 +753,18 @@ function addPipelineStep(agentId) {
        </select>
      </div>
      <div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="new-step-id" placeholder="z.B. search_news" /></div>
-     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="new-step-cap">${capOptions}</select></div>
+     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="new-step-cap" onchange="_updateNewStepVisibility()">${capOptions}</select></div>
      <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="new-step-prompt" style="min-height:160px;" placeholder="Anweisung für diesen Step…"></textarea></div>
      <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="new-step-key" placeholder="z.B. search_result" /></div>
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="new-step-route" placeholder="z.B. normal" /></div>
-     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, kurz + präzise, Template-Vars erlaubt)</div><input class="modal-input" id="new-step-searchquery" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
-     <div class="modal-field"><div class="modal-label">time_range (nur für Search-Steps)</div><select class="modal-select" id="new-step-timerange">${_timeRangeOptions("")}</select></div>
-     <div class="modal-field"><div class="modal-label">categories (nur für Search-Steps)</div><select class="modal-select" id="new-step-categories">${_categoryOptions("")}</select></div>
+     <div class="modal-field" id="field-new-searchquery" style="display:none"><div class="modal-label">search_query</div><input class="modal-input" id="new-step-searchquery" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
+     <div class="modal-field" id="field-new-timerange" style="display:none"><div class="modal-label">time_range</div><select class="modal-select" id="new-step-timerange">${_timeRangeOptions("")}</select></div>
+     <div class="modal-field" id="field-new-categories" style="display:none"><div class="modal-label">categories</div><select class="modal-select" id="new-step-categories">${_categoryOptions("")}</select></div>
+     <div class="modal-field" id="field-new-tickerkey" style="display:none"><div class="modal-label">ticker_key</div><input class="modal-input" id="new-step-tickerkey" placeholder="selected_ticker" /></div>
      <div class="modal-field"><div class="modal-label">Position (leer = ans Ende)</div><input class="modal-input" id="new-step-pos" type="number" placeholder="0 = Anfang" /></div>
-     <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
-       <input type="checkbox" id="new-step-router" />
-       <label class="modal-label" style="margin:0;">is_router</label>
+     <div class="modal-field" style="display:flex;gap:16px;flex-wrap:wrap;">
+       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="new-step-router" /> is_router</label>
+       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="new-step-output" /> is_output</label>
      </div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="saveNewPipelineStep(${agentId})">Hinzufügen</button>`,
@@ -768,7 +806,12 @@ async function saveNewPipelineStep(agentId) {
   if (searchQuery) step.search_query = searchQuery;
   if (timeRange) step.time_range = timeRange;
   if (categories) step.categories = categories;
+  const newTickerKey = document
+    .getElementById("new-step-tickerkey")
+    ?.value.trim();
+  if (newTickerKey) step.ticker_key = newTickerKey;
   if (document.getElementById("new-step-router").checked) step.is_router = true;
+  if (document.getElementById("new-step-output").checked) step.is_output = true;
 
   const a = agentsData.find((x) => x.id === agentId);
   const currentSteps =
