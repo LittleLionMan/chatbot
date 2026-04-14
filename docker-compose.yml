@@ -41,6 +41,16 @@ services:
       retries: 20
       start_period: 60s
 
+  finance:
+    build: ./finance
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   searxng:
     image: searxng/searxng:latest
     restart: unless-stopped
@@ -67,6 +77,8 @@ services:
       tts:
         condition: service_healthy
       searxng:
+        condition: service_healthy
+      finance:
         condition: service_healthy
 
   dashboard:

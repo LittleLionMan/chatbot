@@ -49,6 +49,9 @@ async def search(
             resp.raise_for_status()
             data = resp.json()
             results: list[dict] = data.get("results", [])
+            if not results:
+                logger.info("SearXNG query '%s' (time_range=%s, categories=%s): 0 results", query, time_range or "none", params["categories"])
+                return ""
             logger.info(
                 "SearXNG query '%s' (time_range=%s, categories=%s): %d results",
                 query, time_range or "none", params["categories"], len(results),

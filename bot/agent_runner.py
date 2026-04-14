@@ -373,10 +373,30 @@ async def _execute_pipeline(
             continue
 
         is_search_step = capability == CAPABILITY_SEARCH
+        is_finance_step = capability == "finance"
         use_web_search = is_search_step
         web_search_max_uses = 3 if is_search_step else None
         search_time_range: str | None = step.get("time_range") if is_search_step else None
         search_categories: str | None = step.get("categories") if is_search_step else None
+
+        if is_finance_step:
+            from bot import finance as _finance
+            ticker_key = step.get("ticker_key", "selected_ticker")
+            ticker = context.get(ticker_key, "").strip()
+            if not ticker:
+                logger.warning("Agent %d (%s) finance step '%s': no ticker in context key '%s'", agent_id, name, step_id, ticker_key)
+                context[output_key] = "Kein Ticker verfügbar."
+                last_output = context[output_key]
+                continue
+            logger.info("Agent %d (%s) pipeline step '%s' [finance] ticker=%s", agent_id, name, step_id, ticker)
+            finance_result = await _finance.get_quote_summary(ticker)
+            if not finance_result:
+                logger.warning("Agent %d (%s) finance step '%s': no data for %s", agent_id, name, step_id, ticker)
+                finance_result = f"Keine Finanzdaten für {ticker} verfügbar."
+            context[output_key] = finance_result
+            last_output = finance_result
+            logger.info("Agent %d (%s) step '%s' done (%d chars output)", agent_id, name, step_id, len(finance_result))
+            continue
 
         search_queries: list[str] | None = None
         if is_search_step:

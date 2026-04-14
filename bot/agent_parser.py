@@ -73,6 +73,7 @@ Antworte NUR mit einem dieser Werte, kein anderer Text:
 - reasoning: Analysen mit mehreren Abhängigkeiten, Bewertungen die Urteilsvermögen erfordern
 - deep_reasoning: komplexe mehrstufige Schlussfolgerungen mit vielen Interdependenzen — Fundamentalanalysen, strategische Systembewertungen, Entscheidungen mit langfristigen Konsequenzen die schwer rückgängig zu machen sind
 - coding: Code schreiben, debuggen, Codebasen analysieren
+- finance: Aktuelle Kursdaten, Bilanzkennzahlen, KGV, Marktcap für Börsenticker abrufen — nur wenn der Agent hauptsächlich Finanzdaten abruft ohne komplexe Analyse
 
 Wähle deep_reasoning nur wenn die Aufgabe wirklich von tiefem Reasoning profitiert — nicht als Default für alles Komplexe.
 
@@ -144,8 +145,9 @@ Antworte NUR mit einem JSON-Objekt. Kein anderer Text, keine Markdown-Backticks.
 
 Felder in "pipeline" und "pipeline_after_template" — jeder Step:
 - "id": snake_case Bezeichner
-- "capability": "fast", "search", "reasoning", "deep_reasoning"
-- "prompt_template": Anweisung für das LLM. Vorherige Outputs als {{output_key}}, State als {{key}}, Payload als {{trigger_payload.key}}
+- "capability": "fast", "search", "finance", "reasoning", "deep_reasoning"
+- "prompt_template": Anweisung für das LLM. Bei capability=finance wird kein LLM-Call gemacht — der Finance-Service liefert direkt strukturierte Kursdaten. prompt_template kann leer bleiben.
+- "ticker_key": Nur für finance-Steps. Context-Key der den Ticker enthält. Standard: "selected_ticker". Vorherige Outputs als {{output_key}}, State als {{key}}, Payload als {{trigger_payload.key}}
 - "output_key": Speicher-Key
 - "is_router": true nur für Router
 - "only_if_route": Route-Filter (String oder Liste)
@@ -174,6 +176,13 @@ KEIN pipeline_template wenn:
 - Items unterschiedlich behandelt werden
 
 Router einbauen wenn Instruction Modi beschreibt (Trigger-Modus vs Normal-Modus).
+Finance-Steps (capability=finance) rufen direkt den internen Finance-Service auf — kein LLM-Call, keine Suche:
+- Liefern: aktueller Kurs, KGV (trailing/forward), Marktkapitalisierung, 52-Wochen-Range, Margen, Verschuldung, Cashflow, Eigenkapitalrendite, Analyst-Konsens, Kursziel
+- Nutze finance-Steps immer wenn aktuelle Kursdaten oder Bilanzkennzahlen für einen bekannten Börsenticker gebraucht werden
+- prompt_template kann leer bleiben oder eine kurze Beschreibung enthalten — er wird ignoriert
+- ticker_key: Context-Key der den Ticker enthält (Standard: "selected_ticker")
+- Kein time_range, kein search_query, keine categories bei finance-Steps
+
 Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
 Letzter Step ist immer reasoning/deep_reasoning.
 

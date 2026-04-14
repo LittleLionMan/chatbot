@@ -6,6 +6,7 @@ const CAPABILITIES = [
   "fast",
   "balanced",
   "search",
+  "finance",
   "reasoning",
   "deep_reasoning",
   "coding",
@@ -482,6 +483,7 @@ function editPipelineStep(agentId, stepIndex, section) {
      <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="edit-step-key" value="${step.output_key}" /></div>
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer, mehrere mit Komma)</div><input class="modal-input" id="edit-step-route" value="${onlyIfRoute}" placeholder="z.B. normal oder normal, trigger" /></div>
      <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, kurz + präzise, Template-Vars erlaubt)</div><input class="modal-input" id="edit-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
+     <div class="modal-field"><div class="modal-label">ticker_key (nur für Finance-Steps, Standard: selected_ticker)</div><input class="modal-input" id="edit-step-tickerkey" value="${step.ticker_key || ""}" placeholder="selected_ticker" /></div>
      <div class="modal-field"><div class="modal-label">time_range (nur für Search-Steps)</div><select class="modal-select" id="edit-step-timerange">${_timeRangeOptions(step.time_range)}</select></div>
      <div class="modal-field"><div class="modal-label">categories (nur für Search-Steps)</div><select class="modal-select" id="edit-step-categories">${_categoryOptions(step.categories)}</select></div>
      <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
@@ -514,6 +516,7 @@ async function savePipelineStep(agentId, stepIndex, section) {
   const searchQuery = document
     .getElementById("edit-step-searchquery")
     .value.trim();
+  const tickerKey = document.getElementById("edit-step-tickerkey").value.trim();
   const updated = {
     id: document.getElementById("edit-step-id").value.trim(),
     capability: document.getElementById("edit-step-cap").value,
@@ -524,6 +527,7 @@ async function savePipelineStep(agentId, stepIndex, section) {
   if (searchQuery) updated.search_query = searchQuery;
   if (timeRange) updated.time_range = timeRange;
   if (categories) updated.categories = categories;
+  if (tickerKey) updated.ticker_key = tickerKey;
   if (document.getElementById("edit-step-router").checked)
     updated.is_router = true;
 
