@@ -151,6 +151,7 @@ Felder in "pipeline" und "pipeline_after_template" — jeder Step:
 - "only_if_route": Route-Filter (String oder Liste)
 - "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year". Setze "year" für Finance-, News- und Markt-Agents bei denen aktuelle Daten wichtig sind. Weglassen wenn historische oder zeitlose Daten gesucht werden.
 - "search_query": Nur für Search-Steps. Kurze, optimierte Suchanfrage für SearXNG (1-6 Wörter), getrennt vom prompt_template. Template-Variablen wie {{selected_ticker}} sind erlaubt. Beispiel: "{{selected_ticker}} Finanzkennzahlen 2026". Wenn nicht gesetzt, wird prompt_template als Query verwendet — was fast immer schlechte Ergebnisse liefert. Immer setzen bei Search-Steps.
+- "categories": Nur für Search-Steps. Steuert welche SearXNG-Engine-Kategorie genutzt wird. Werte: "general" (Standard), "news" (News-Agents), "finance" (Finanz-Agents, Kurse, Bilanzen), "it" (Tech/Code-Agents), "science" (Research/Paper-Agents). Setze immer die passende Kategorie — nie "general" wenn eine spezifischere passt.
 
 Felder in "pipeline_template":
 - "source": "state", "injected" oder "static"

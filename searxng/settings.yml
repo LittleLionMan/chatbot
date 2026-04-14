@@ -28,6 +28,56 @@ engines:
     engine: duckduckgo
     shortcut: ddg
 
+  - name: brave
+    engine: brave
+    shortcut: br
+    categories: general
+
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    categories: news
+
+  - name: bing news
+    engine: bing_news
+    shortcut: bn
+    categories: news
+
+  - name: yahoo finance
+    engine: yahoo_finance
+    shortcut: yf
+    categories: finance
+
+  - name: seeking alpha
+    engine: seekingalpha
+    shortcut: sa
+    categories: finance
+
+  - name: github
+    engine: github
+    shortcut: gh
+    categories: it
+
+  - name: stackoverflow
+    engine: stackoverflow
+    shortcut: so
+    categories: it
+
+  - name: arxiv
+    engine: arxiv
+    shortcut: arx
+    categories: science
+
+  - name: semantic scholar
+    engine: semantic_scholar
+    shortcut: ss
+    categories: science
+
+  - name: pubmed
+    engine: pubmed
+    shortcut: pm
+    categories: science
+
 outgoing:
   request_timeout: 10.0
   max_request_timeout: 15.0

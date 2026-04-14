@@ -238,7 +238,7 @@ async function selectAgent(id) {
           </div>
         </div>
         <div class="pipeline-step-prompt">${step.prompt_template.slice(0, 120)}${step.prompt_template.length > 120 ? "…" : ""}</div>
-        <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}${step.time_range ? ` · time_range: ${step.time_range}` : ""}${step.search_query ? ` · query: ${step.search_query}` : ""}</div>
+        <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}${step.time_range ? ` · time_range: ${step.time_range}` : ""}${step.search_query ? ` · query: ${step.search_query}` : ""}${step.categories ? ` · cat: ${step.categories}` : ""}</div>
       </div>
     `;
 
@@ -441,6 +441,24 @@ function _timeRangeOptions(selected) {
   ).join("");
 }
 
+function _categoryOptions(selected) {
+  const cats = [
+    "",
+    "general",
+    "news",
+    "finance",
+    "it",
+    "science",
+    "social media",
+  ];
+  return cats
+    .map(
+      (c) =>
+        `<option value="${c}" ${c === (selected || "") ? "selected" : ""}>${c || "— Standard (general) —"}</option>`,
+    )
+    .join("");
+}
+
 function editPipelineStep(agentId, stepIndex, section) {
   section = section || "pipeline";
   const a = agentsData.find((x) => x.id === agentId);
@@ -465,6 +483,7 @@ function editPipelineStep(agentId, stepIndex, section) {
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer, mehrere mit Komma)</div><input class="modal-input" id="edit-step-route" value="${onlyIfRoute}" placeholder="z.B. normal oder normal, trigger" /></div>
      <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, kurz + präzise, Template-Vars erlaubt)</div><input class="modal-input" id="edit-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
      <div class="modal-field"><div class="modal-label">time_range (nur für Search-Steps)</div><select class="modal-select" id="edit-step-timerange">${_timeRangeOptions(step.time_range)}</select></div>
+     <div class="modal-field"><div class="modal-label">categories (nur für Search-Steps)</div><select class="modal-select" id="edit-step-categories">${_categoryOptions(step.categories)}</select></div>
      <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
        <input type="checkbox" id="edit-step-router" ${step.is_router ? "checked" : ""} />
        <label class="modal-label" style="margin:0;">is_router</label>
@@ -491,6 +510,7 @@ async function savePipelineStep(agentId, stepIndex, section) {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
   const timeRange = document.getElementById("edit-step-timerange").value;
+  const categories = document.getElementById("edit-step-categories").value;
   const searchQuery = document
     .getElementById("edit-step-searchquery")
     .value.trim();
@@ -503,6 +523,7 @@ async function savePipelineStep(agentId, stepIndex, section) {
   if (onlyIfRoute !== null) updated.only_if_route = onlyIfRoute;
   if (searchQuery) updated.search_query = searchQuery;
   if (timeRange) updated.time_range = timeRange;
+  if (categories) updated.categories = categories;
   if (document.getElementById("edit-step-router").checked)
     updated.is_router = true;
 
@@ -604,7 +625,8 @@ function editPipelineTemplate(agentId) {
      <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="tmpl-step-cap">${capOptions}</select></div>
      <div class="modal-field"><div class="modal-label">Prompt Template ({{item}} und {{item_id}} verfügbar)</div><textarea class="modal-input" id="tmpl-step-prompt" style="min-height:140px;">${step.prompt_template || ""}</textarea></div>
      <div class="modal-field"><div class="modal-label">Output Key ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-key" value="${step.output_key || "result_{{item_id}}"}" /></div>
-     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, {{item}} verfügbar)</div><input class="modal-input" id="tmpl-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{trigger_payload.ticker}} {{item}}" /></div>`,
+     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, {{item}} verfügbar)</div><input class="modal-input" id="tmpl-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{trigger_payload.ticker}} {{item}}" /></div>
+     <div class="modal-field"><div class="modal-label">categories (nur für Search-Steps)</div><select class="modal-select" id="tmpl-step-categories">${_categoryOptions(step.categories)}</select></div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="savePipelineTemplate(${agentId})">Speichern</button>`,
   );
@@ -636,6 +658,9 @@ async function savePipelineTemplate(agentId) {
               .getElementById("tmpl-step-searchquery")
               .value.trim(),
           }
+        : {}),
+      ...(document.getElementById("tmpl-step-categories").value
+        ? { categories: document.getElementById("tmpl-step-categories").value }
         : {}),
     },
   };
@@ -693,6 +718,7 @@ function addPipelineStep(agentId) {
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="new-step-route" placeholder="z.B. normal" /></div>
      <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, kurz + präzise, Template-Vars erlaubt)</div><input class="modal-input" id="new-step-searchquery" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
      <div class="modal-field"><div class="modal-label">time_range (nur für Search-Steps)</div><select class="modal-select" id="new-step-timerange">${_timeRangeOptions("")}</select></div>
+     <div class="modal-field"><div class="modal-label">categories (nur für Search-Steps)</div><select class="modal-select" id="new-step-categories">${_categoryOptions("")}</select></div>
      <div class="modal-field"><div class="modal-label">Position (leer = ans Ende)</div><input class="modal-input" id="new-step-pos" type="number" placeholder="0 = Anfang" /></div>
      <div class="modal-field" style="display:flex;align-items:center;gap:8px;">
        <input type="checkbox" id="new-step-router" />
@@ -722,6 +748,7 @@ async function saveNewPipelineStep(agentId) {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
   const timeRange = document.getElementById("new-step-timerange").value;
+  const categories = document.getElementById("new-step-categories").value;
   const searchQuery = document
     .getElementById("new-step-searchquery")
     .value.trim();
@@ -736,6 +763,7 @@ async function saveNewPipelineStep(agentId) {
   if (onlyIfRoute !== null) step.only_if_route = onlyIfRoute;
   if (searchQuery) step.search_query = searchQuery;
   if (timeRange) step.time_range = timeRange;
+  if (categories) step.categories = categories;
   if (document.getElementById("new-step-router").checked) step.is_router = true;
 
   const a = agentsData.find((x) => x.id === agentId);

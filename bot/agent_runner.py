@@ -220,9 +220,9 @@ def _resolve_pipeline_template(template: str, context: dict[str, str]) -> str:
     return template
 
 
-_ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad für diesen Agenten-Lauf gilt.
-Antworte NUR mit einem einzigen Wort — dem Namen des Pfades. Kein anderer Text.
-Folge exakt den Bedingungen im Router-Prompt. Der Default ist 'normal' wenn keine Bedingung zutrifft."""
+_ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad gilt.
+Antworte NUR mit einem einzigen Wort. Befolge die Entscheidungslogik im Router-Prompt exakt und in der angegebenen Reihenfolge.
+Wenn keine Bedingung zutrifft: antworte mit 'normal'."""
 
 
 def _expand_pipeline_template(
@@ -242,6 +242,7 @@ def _expand_pipeline_template(
     aggregate_key = template.get("aggregate_key", "template_results")
     only_if_route = template.get("only_if_route")
     step_time_range: str | None = template.get("time_range")
+    step_categories: str | None = template.get("categories")
     foreach_items: list[str] = template.get("foreach_items", [])
 
     if source == "static":
@@ -284,6 +285,8 @@ def _expand_pipeline_template(
             step["only_if_route"] = only_if_route
         if step_time_range:
             step["time_range"] = step_time_range
+        if step_categories:
+            step["categories"] = step_categories
 
         all_output_keys.append(step["output_key"])
         expanded.append(step)
@@ -373,6 +376,7 @@ async def _execute_pipeline(
         use_web_search = is_search_step
         web_search_max_uses = 3 if is_search_step else None
         search_time_range: str | None = step.get("time_range") if is_search_step else None
+        search_categories: str | None = step.get("categories") if is_search_step else None
 
         search_queries: list[str] | None = None
         if is_search_step:
@@ -406,6 +410,7 @@ async def _execute_pipeline(
                 web_search_max_uses=web_search_max_uses,
                 search_queries=search_queries,
                 search_time_range=search_time_range,
+                search_categories=search_categories,
                 capability=capability,
                 force_model=force_model,
                 caller=f"agent_pipeline:{name}:{step_id}",

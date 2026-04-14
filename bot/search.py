@@ -10,6 +10,7 @@ _MAX_RESULTS = 8
 _MAX_SNIPPET_CHARS = 300
 
 _VALID_TIME_RANGES = {"day", "week", "month", "year"}
+_VALID_CATEGORIES = {"general", "news", "finance", "it", "science", "social media"}
 
 
 def _format_results(results: list[dict]) -> str:
@@ -26,14 +27,19 @@ def _format_results(results: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-async def search(query: str, language: str = "de-DE", time_range: str | None = None) -> str:
+async def search(
+    query: str,
+    language: str = "de-DE",
+    time_range: str | None = None,
+    categories: str | None = None,
+) -> str:
     try:
         params: dict[str, str] = {
             "q": query,
             "format": "json",
             "language": language,
             "safesearch": "0",
-            "categories": "general",
+            "categories": categories if categories and categories in _VALID_CATEGORIES else "general",
         }
         if time_range and time_range in _VALID_TIME_RANGES:
             params["time_range"] = time_range
@@ -43,7 +49,10 @@ async def search(query: str, language: str = "de-DE", time_range: str | None = N
             resp.raise_for_status()
             data = resp.json()
             results: list[dict] = data.get("results", [])
-            logger.info("SearXNG query '%s' (time_range=%s): %d results", query, time_range or "none", len(results))
+            logger.info(
+                "SearXNG query '%s' (time_range=%s, categories=%s): %d results",
+                query, time_range or "none", params["categories"], len(results),
+            )
             return _format_results(results)
     except httpx.ConnectError:
         logger.warning("SearXNG not reachable")
