@@ -222,10 +222,7 @@ def _resolve_pipeline_template(template: str, context: dict[str, str]) -> str:
 
 _ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad für diesen Agenten-Lauf gilt.
 Antworte NUR mit einem einzigen Wort — dem Namen des Pfades. Kein anderer Text.
-
-Wichtig: Der Default-Pfad ist immer 'normal'. Wähle einen anderen Pfad NUR wenn ein expliziter Trigger-Payload vorhanden ist der diesen Pfad eindeutig auslöst.
-Wenn kein Payload vorhanden ist oder der Payload leer ist: antworte mit 'normal'.
-Entscheide anhand der verfügbaren Daten — nicht anhand von Vermutungen."""
+Folge exakt den Bedingungen im Router-Prompt. Der Default ist 'normal' wenn keine Bedingung zutrifft."""
 
 
 def _expand_pipeline_template(

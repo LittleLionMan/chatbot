@@ -226,12 +226,16 @@ async function selectAgent(id) {
     const renderStep = (step, i, section) => `
       <div class="pipeline-step">
         <div class="pipeline-step-header">
-          <span class="pipeline-step-id">${step.id}${step.is_router ? " 🔀" : ""}</span>
-          <span class="badge badge-cap">${step.capability}</span>
-          ${step.only_if_route ? `<span class="badge badge-pipeline">${Array.isArray(step.only_if_route) ? step.only_if_route.join("|") : step.only_if_route}</span>` : ""}
-          ${step.time_range ? `<span class="badge badge-pipeline">⏱ ${step.time_range}</span>` : ""}
-          <button class="btn btn-sm" onclick="editPipelineStep(${id}, ${i}, '${section}')">Bearbeiten</button>
-          <button class="btn btn-sm btn-danger" onclick="deletePipelineStep(${id}, ${i}, '${section}')">Löschen</button>
+          <div class="pipeline-step-info">
+            <span class="pipeline-step-id">${step.id}${step.is_router ? " 🔀" : ""}</span>
+            <span class="badge badge-cap">${step.capability}</span>
+            ${step.only_if_route ? `<span class="badge badge-pipeline">${Array.isArray(step.only_if_route) ? step.only_if_route.join("|") : step.only_if_route}</span>` : ""}
+            ${step.time_range ? `<span class="badge badge-pipeline">⏱ ${step.time_range}</span>` : ""}
+          </div>
+          <div class="pipeline-step-actions">
+            <button class="btn btn-sm" onclick="editPipelineStep(${id}, ${i}, '${section}')">Bearbeiten</button>
+            <button class="btn btn-sm btn-danger" onclick="deletePipelineStep(${id}, ${i}, '${section}')">Löschen</button>
+          </div>
         </div>
         <div class="pipeline-step-prompt">${step.prompt_template.slice(0, 120)}${step.prompt_template.length > 120 ? "…" : ""}</div>
         <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}${step.time_range ? ` · time_range: ${step.time_range}` : ""}${step.search_query ? ` · query: ${step.search_query}` : ""}</div>
