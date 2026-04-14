@@ -244,6 +244,7 @@ def _expand_pipeline_template(
     step_template = template.get("step", {})
     aggregate_key = template.get("aggregate_key", "template_results")
     only_if_route = template.get("only_if_route")
+    step_time_range: str | None = template.get("time_range")
     foreach_items: list[str] = template.get("foreach_items", [])
 
     if source == "static":
@@ -284,6 +285,8 @@ def _expand_pipeline_template(
 
         if only_if_route:
             step["only_if_route"] = only_if_route
+        if step_time_range:
+            step["time_range"] = step_time_range
 
         all_output_keys.append(step["output_key"])
         expanded.append(step)

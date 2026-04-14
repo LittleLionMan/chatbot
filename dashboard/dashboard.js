@@ -264,7 +264,7 @@ async function selectAgent(id) {
               <button class="btn btn-sm" onclick="editPipelineTemplate(${id})">Bearbeiten</button>
             </div>
             <div class="pipeline-step-prompt">${a.pipeline_template.step?.prompt_template?.slice(0, 120) || ""}…</div>
-            <div class="pipeline-step-meta">aggregate_key: ${a.pipeline_template.aggregate_key} · batch: ${a.pipeline_template.batch_size || 1}</div>
+            <div class="pipeline-step-meta">aggregate_key: ${a.pipeline_template.aggregate_key} · batch: ${a.pipeline_template.batch_size || 1}${a.pipeline_template.time_range ? " · time_range: " + a.pipeline_template.time_range : ""}</div>
           </div>
         `
             : ""
@@ -432,7 +432,8 @@ async function saveCapability(agentId) {
 
 function _timeRangeOptions(selected) {
   return TIME_RANGES.map(
-    (t) => `<option value="${t}" ${t === (selected || "") ? "selected" : ""}>${t || "— kein Filter —"}</option>`,
+    (t) =>
+      `<option value="${t}" ${t === (selected || "") ? "selected" : ""}>${t || "— kein Filter —"}</option>`,
   ).join("");
 }
 
@@ -486,7 +487,9 @@ async function savePipelineStep(agentId, stepIndex, section) {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
   const timeRange = document.getElementById("edit-step-timerange").value;
-  const searchQuery = document.getElementById("edit-step-searchquery").value.trim();
+  const searchQuery = document
+    .getElementById("edit-step-searchquery")
+    .value.trim();
   const updated = {
     id: document.getElementById("edit-step-id").value.trim(),
     capability: document.getElementById("edit-step-cap").value,
@@ -590,6 +593,7 @@ function editPipelineTemplate(agentId) {
      <div class="modal-field"><div class="modal-label">batch_size</div><input class="modal-input" id="tmpl-batch" type="number" value="${t.batch_size || 1}" /></div>
      <div class="modal-field"><div class="modal-label">aggregate_key</div><input class="modal-input" id="tmpl-agg" value="${t.aggregate_key || ""}" /></div>
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="tmpl-route" value="${t.only_if_route || ""}" /></div>
+     <div class="modal-field"><div class="modal-label">time_range für Search-Steps (leer = kein Filter)</div><select class="modal-select" id="tmpl-timerange">${_timeRangeOptions(t.time_range)}</select></div>
      <hr class="divider">
      <div class="modal-label" style="margin-bottom:8px;">Step Template</div>
      <div class="modal-field"><div class="modal-label">ID ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-id" value="${step.id || "search_{{item_id}}"}" /></div>
@@ -635,6 +639,8 @@ async function savePipelineTemplate(agentId) {
   }
   const routeRaw = document.getElementById("tmpl-route").value.trim();
   if (routeRaw) template.only_if_route = routeRaw;
+  const tmplTimeRange = document.getElementById("tmpl-timerange").value;
+  if (tmplTimeRange) template.time_range = tmplTimeRange;
 
   try {
     await api("/api/agents/" + agentId, {
@@ -704,7 +710,9 @@ async function saveNewPipelineStep(agentId) {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
   const timeRange = document.getElementById("new-step-timerange").value;
-  const searchQuery = document.getElementById("new-step-searchquery").value.trim();
+  const searchQuery = document
+    .getElementById("new-step-searchquery")
+    .value.trim();
   const posRaw = document.getElementById("new-step-pos").value.trim();
   const pos = posRaw !== "" ? parseInt(posRaw) : null;
   const step = {

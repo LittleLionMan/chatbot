@@ -212,6 +212,7 @@
                 border-radius: 99px;
                 font-weight: 500;
                 white-space: nowrap;
+                flex-shrink: 0;
             }
             .badge-active {
                 background: var(--accent-dim);
@@ -299,6 +300,7 @@
                 transition:
                     background 0.1s,
                     color 0.1s;
+                white-space: nowrap;
             }
             .btn:hover {
                 background: var(--bg3);
@@ -347,29 +349,38 @@
                 border-radius: var(--radius-sm);
                 padding: 10px 12px;
                 margin-bottom: 8px;
+                min-width: 0;
             }
             .pipeline-step-header {
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 6px;
                 margin-bottom: 6px;
+                flex-wrap: wrap;
+                row-gap: 6px;
             }
             .pipeline-step-id {
                 font-family: var(--mono);
                 font-size: 11px;
                 color: var(--text);
                 font-weight: 500;
+                min-width: 0;
+                word-break: break-all;
+                flex: 1;
             }
             .pipeline-step-prompt {
                 font-size: 12px;
                 color: var(--text2);
                 line-height: 1.5;
                 margin-bottom: 4px;
+                word-break: break-word;
             }
             .pipeline-step-meta {
                 font-family: var(--mono);
                 font-size: 10px;
                 color: var(--text3);
+                word-break: break-word;
+                white-space: normal;
             }
 
             .agent-tabs {
@@ -422,17 +433,21 @@
                 border: 0.5px solid var(--border);
                 border-radius: var(--radius-sm);
                 padding: 10px 12px;
+                min-width: 0;
             }
             .state-card-header {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
                 margin-bottom: 4px;
+                gap: 8px;
+                flex-wrap: wrap;
             }
             .state-key {
                 font-family: var(--mono);
                 font-size: 10px;
                 color: var(--text3);
+                word-break: break-all;
             }
             .state-val {
                 font-size: 12px;
@@ -446,6 +461,7 @@
                 gap: 4px;
                 opacity: 0;
                 transition: opacity 0.1s;
+                flex-shrink: 0;
             }
             .state-card:hover .state-actions {
                 opacity: 1;
@@ -470,17 +486,22 @@
                 border-radius: var(--radius-sm);
                 padding: 10px 12px;
                 margin-bottom: 6px;
+                min-width: 0;
             }
             .data-card-header {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
                 margin-bottom: 4px;
+                gap: 8px;
+                flex-wrap: wrap;
             }
             .data-key {
                 font-family: var(--mono);
                 font-size: 10px;
                 color: var(--text3);
+                word-break: break-all;
+                min-width: 0;
             }
             .data-val {
                 font-size: 12px;
@@ -496,6 +517,7 @@
                 gap: 4px;
                 opacity: 0;
                 transition: opacity 0.1s;
+                flex-shrink: 0;
             }
             .data-card:hover .data-actions {
                 opacity: 1;
@@ -520,6 +542,8 @@
                 color: var(--text);
                 line-height: 1.5;
                 flex: 1;
+                min-width: 0;
+                word-break: break-word;
             }
             .mem-date {
                 font-size: 10px;
@@ -876,6 +900,9 @@
                 .agent-tab {
                     font-size: 11px;
                     padding: 6px 10px;
+                }
+                .pipeline-step-header .btn {
+                    margin-left: auto;
                 }
             }
         </style>
