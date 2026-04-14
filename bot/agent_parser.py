@@ -1,51 +1,309 @@
 from __future__ import annotations
 import json
 import logging
+import random
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 import asyncpg
-from bot import brain, memory
-from bot.agent_parser import _classify_work_capability, _generate_pipeline
-from bot.models import CAPABILITY_BALANCED, CAPABILITY_DEEP_REASONING
-from bot.utils import clean_llm_json
+from bot import brain, config, memory
+from bot.models import (
+    CAPABILITY_FAST,
+    CAPABILITY_BALANCED,
+    CAPABILITY_SEARCH,
+    CAPABILITY_REASONING,
+    CAPABILITY_DEEP_REASONING,
+    CAPABILITY_CODING,
+)
+from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PARSER_PROMPT = """Du entwirfst ein koordiniertes Multi-Agent-System aus einem Freitext-Prompt.
+_NAMES_BY_TOPIC = {
+    "gpu": ["Linus", "Jensen"],
+    "finance": ["Gordon", "Warren", "Floyd"],
+    "news": ["Wolf", "Peter", "Anna"],
+    "research": ["Ada", "Grace", "Alan"],
+    "market": ["Gordon", "Floyd", "Morgan"],
+    "monitoring": ["Argus", "HAL", "Watcher"],
+    "coding": ["Dennis", "Guido", "Ada"],
+    "default": ["Iris", "Hermes", "Scout", "Remy"],
+}
+
+_AGENT_PARSER_SYSTEM = """Du extrahierst einen persistenten Agenten aus einer Nutzeranfrage.
+Ein Agent läuft nach Plan, erinnert sich an frühere Ergebnisse und handelt nur wenn sich etwas Relevantes ändert oder eine wiederkehrende Aufgabe ansteht.
 
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
 Felder:
-- "agents": Liste von Agent-Konfigurationen. Jeder Agent hat:
-  - "name": Thematisch passender menschlicher Name
-  - "instruction": Vollständige eigenständige Anweisung, maximal 400 Zeichen
-  - "state_keys": Keys die zwischen Läufen im State bleiben. Immer "last_run_summary". Nur kompakte Daten — Listen, Flags, kurze Zusammenfassungen. Keine langen Texte.
-  - "data_reads": Lesevorgänge vor jedem Lauf. Zwei Typen:
-    - {"type": "state", "agent_name": "..."} — liest den State eines anderen Agents
-    - {"type": "namespace", "namespace": "...", "agent_name": "...", "key": "..."} — liest DB-Namespace eines anderen Agents, key optional, Template-Variablen möglich
-    Leer wenn keine fremden Daten nötig.
-  - "type": Schlagwort: monitoring, research, finance, news, coding, market
-  - "schedule": Cron-Expression (5 Felder)
-  - "target": "same" oder "dm"
-- "description": Menschenlesbare Zusammenfassung des geplanten Systems. Erkläre jeden Agent mit Name, Zeitplan und Aufgabe. Benenne explizit welcher Agent wessen State liest und welche Trigger-Beziehungen bestehen. Formuliere so dass Missverständnisse sofort auffallen. Schließe mit "Soll ich das so anlegen?"
+- "instruction": Was soll der Agent tun? Vollständige, eigenständige Anweisung in natürlicher Sprache. So formulieren dass der Agent sie ohne weiteren Kontext ausführen kann. Maximal 400 Zeichen.
+- "state_keys": Liste von Schlüsseln die der Agent zwischen Läufen im Gedächtnis behalten soll. Immer enthalten: "last_run_summary". Weitere nach Bedarf.
+- "data_reads": Liste von Datenbank-Lesevorgängen die vor jedem Lauf automatisch ausgeführt werden. Zwei Typen:
+  - {"type": "state", "agent_name": "..."} — liest den kompletten State eines anderen Agenten. Nutze das wenn dieser Agent die primäre Datenquelle ist.
+  - {"type": "namespace", "namespace": "...", "agent_name": "...", "key": "...", "as": "..."} — liest einen DB-Namespace eines anderen Agenten. Optional "key" für einzelne Einträge, Template-Variablen wie {{trigger_payload.ticker}} möglich. Optionales "as"-Feld setzt einen fixen Context-Key statt des automatisch generierten Labels.
+  Leer wenn der Agent keine fremden Daten braucht.
+- "type": Kurzes Schlagwort für den Bereich. Beispiele: "monitoring", "research", "coding", "finance", "news", "market".
+- "schedule": Cron-Expression (5 Felder). Beispiele: stündlich = "0 * * * *", täglich um 9 = "0 9 * * *", montags = "0 9 * * 1".
+- "target": "same" für denselben Chat, "dm" für Privatnachricht.
+- "wants_name": true wenn der User einen Namen erwähnt oder explizit fragt, false sonst.
+- "suggested_name": Konkreter Name wenn der User einen nennt, sonst null.
 
-Regeln für gute Architektur:
-- Der erste Agent (Sammler/Screener) hat keine data_reads — er ist die primäre Datenquelle
-- Folge-Agents lesen den State des Sammlers via type:state
-- Lange Texte (Analysen, Berichte) gehören in einen Namespace, nicht in den State
-- Trigger-Beziehungen: Ein Agent kann andere Agents via trigger_agent Tool-Call in seinem Output-Step anstoßen — beschreibe diese Beziehungen in der instruction des triggernden Agents
-- Schedules staffeln: Sammler früh, Analyst danach, Monitor abends
-- Namen thematisch passend: Finance → Gordon/Warren, News → Wolf/Anna, Monitoring → Argus/HAL
-- Jede Pipeline endet mit einem is_output-Step der direkt JSON ausgibt — das wird automatisch generiert
+Wenn kein sinnvoller Zeitplan erkennbar ist, setze schedule auf null.
 
-Beispiel-Input: "Beobachte GPU-Preise täglich, analysiere interessante Funde und halte mich über Marktveränderungen auf dem Laufenden"
+Beispiele:
 
-Beispiel-Output:
-{"agents": [{"name": "Linus", "instruction": "Suche täglich nach RTX-GPU-Angeboten unter 300€ auf deutschen Secondhand-Plattformen. Pflege eine Liste aller bekannten Angebote mit Preis, Zustand und Link in deinem State.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 8 * * *", "target": "same"}, {"name": "Gordon", "instruction": "Lies Linus' Angebotsliste. Analysiere ob neue Angebote einen echten Deal darstellen — Preisvergleich, Zustand, Verkäufer-Reputation. Melde nur echte Schnäppchen.", "state_keys": ["last_run_summary", "analyzed_listings"], "data_reads": [{"type": "state", "agent_name": "Linus"}], "type": "market", "schedule": "0 9 * * *", "target": "same"}], "description": "Ich würde das so aufsetzen:\\n\\n**Linus** (täglich 8 Uhr) — sucht GPU-Angebote und pflegt eine Liste in seinem State.\\n\\n**Gordon** (täglich 9 Uhr) — liest Linus' State und bewertet neue Angebote.\\n\\nAbhängigkeiten: Gordon liest Linus.\\n\\nSoll ich das so anlegen?"}"""
+Eingabe: "Überwache meine Docker Container stündlich und sag mir wenn einer down ist"
+Output: {"instruction": "Prüfe den Status der laufenden Docker Container. Vergleiche mit dem letzten bekannten Zustand. Melde nur wenn sich etwas verändert hat.", "state_keys": ["last_run_summary", "known_container_states"], "data_reads": [], "type": "monitoring", "schedule": "0 * * * *", "target": "same", "wants_name": false, "suggested_name": null}
+
+Eingabe: "Erstelle täglich um 9 für jeweils ein Unternehmen aus Gordons Liste eine Fundamentalanalyse"
+Output: {"instruction": "Lies Gordons Unternehmensliste. Wähle ein Unternehmen ohne Fundamentalanalyse und erstelle eine vollständige Analyse.", "state_keys": ["last_run_summary", "analyzed_tickers"], "data_reads": [{"type": "state", "agent_name": "Gordon"}], "type": "finance", "schedule": "0 9 * * *", "target": "same", "wants_name": false, "suggested_name": null}
+
+Eingabe: "Analysiere täglich um 10 das Unternehmen das per Trigger-Payload als ticker übergeben wird"
+Output: {"instruction": "Erstelle eine Fundamentalanalyse für den per trigger_payload.ticker übergebenen Ticker.", "state_keys": ["last_run_summary"], "data_reads": [{"type": "namespace", "namespace": "analyses", "key": "{{trigger_payload.ticker}}", "as": "existing_analysis"}], "type": "finance", "schedule": "0 10 * * *", "target": "same", "wants_name": false, "suggested_name": null}
+
+Eingabe: "Beobachte RTX 4060 Ti Preise täglich unter 220€, nenn ihn Linus"
+Output: {"instruction": "Suche nach Angeboten für RTX 4060 Ti unter 220€ auf deutschen Sekundärmarkt-Plattformen. Vergleiche mit bekannten Fundstücken. Melde nur neue Treffer oder relevante Preisänderungen.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 9 * * *", "target": "same", "wants_name": true, "suggested_name": "Linus"}"""
+
+_CAPABILITY_CLASSIFIER_SYSTEM = """Analysiere diese Agent-Instruction und bestimme welche primäre Fähigkeit der ausführende LLM-Call benötigt.
+
+Antworte NUR mit einem dieser Werte, kein anderer Text:
+- fast: einfache Statusprüfungen, Ja/Nein-Entscheidungen, kurze Transformationen ohne eigenes Urteil
+- balanced: moderate Analyse, Zusammenfassungen, normaler Informationsabruf
+- search: Web-Recherche, Nachrichtenauswertung, große Mengen Text zusammenfassen und bewerten
+- reasoning: Analysen mit mehreren Abhängigkeiten, Bewertungen die Urteilsvermögen erfordern
+- deep_reasoning: komplexe mehrstufige Schlussfolgerungen mit vielen Interdependenzen — Fundamentalanalysen, strategische Systembewertungen, Entscheidungen mit langfristigen Konsequenzen die schwer rückgängig zu machen sind
+- coding: Code schreiben, debuggen, Codebasen analysieren
+- finance: Aktuelle Kursdaten, Bilanzkennzahlen, KGV, Marktcap für Börsenticker abrufen — nur wenn der Agent hauptsächlich Finanzdaten abruft ohne komplexe Analyse
+
+Wähle deep_reasoning nur wenn die Aufgabe wirklich von tiefem Reasoning profitiert — nicht als Default für alles Komplexe.
+
+Beispiele:
+"Überwache Docker Container und melde wenn einer down ist" → fast
+"Suche täglich nach GPU-Angeboten unter 300€ auf Secondhand-Plattformen" → search
+"Prüfe aktuelle Nachrichten zu Unternehmen auf der Watchlist" → search
+"Erstelle vollständige Fundamentalanalysen inkl. Bilanzqualität, Marktposition und Kursziel" → deep_reasoning
+"Bewerte ob neue Quartalszahlen die bestehende Analyse verändern" → reasoning
+"Schreibe und teste neue API-Endpoints für das Projekt" → coding
+"Fasse den täglichen Wetterbericht zusammen" → balanced"""
+
+_NAME_RESOLUTION_SYSTEM = """Identifiziere welcher Agent aus der Liste gemeint ist.
+Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.
+Wenn kein Agent eindeutig zuzuordnen ist, antworte mit 0.
+Beispiel: 3"""
+
+_AGENT_TALK_SYSTEM = """Du bist Bob. Ein Nutzer fragt nach einem deiner laufenden Agenten oder möchte dessen Konfiguration ändern.
+
+Du sprichst ÜBER den Agenten — du bist nicht der Agent und schlüpfst nicht in seine Rolle.
+
+Dir werden Name, Konfiguration, aktueller State, bisherige Beobachtungen und gespeicherte Daten des Agenten übergeben.
+
+Mögliche Anfragen:
+- Statusabfrage ("Wie läuft X?", "Was hat X gefunden?") → fasse State und Beobachtungen in Bobs Stimme zusammen, z.B. "Gecko hat bisher 12 Unternehmen gefunden..."
+- Inhaltliche Konfigurationsänderung (Suchkriterien, Häufigkeit, Fokus, Instruktion) → bestätige knapp was geändert wird, gib das vollständige neue config-Objekt zurück: ```config\n{...}\n```
+- Umbenennung ("nenn ihn X", "er soll jetzt Y heißen") → bestätige knapp, gib den neuen Namen zurück: ```name\nNeuerName\n```
+- Kombination aus mehreren Änderungen → alle zutreffenden Blöcke zurückgeben
+- Allgemeine Frage über den Agenten → antworte in Bobs Stimme, nicht in der des Agenten
+
+Wenn du die Konfiguration änderst, gib immer das vollständige neue config-Objekt zurück — alle Felder, nicht nur die geänderten.
+Das config-Objekt hat die Felder: instruction, state_keys, data_reads, type, work_capability.
+
+Wichtig: Technische Meta-Operationen wie Capability-Klassifizierung oder Pipeline-Generierung werden separat behandelt — du musst sie hier nicht zurückgeben."""
 
 
-async def parse_agent_system(
+def _pick_name_for_topic(topic_type: str) -> str:
+    candidates = _NAMES_BY_TOPIC.get(topic_type.lower(), _NAMES_BY_TOPIC["default"])
+    return random.choice(candidates)
+
+
+async def _classify_work_capability(instruction: str) -> str:
+    valid = {CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
+    try:
+        raw = await brain.chat(
+            system=_CAPABILITY_CLASSIFIER_SYSTEM,
+            messages=[{"role": "user", "content": instruction}],
+            max_tokens=20,
+            capability=CAPABILITY_FAST,
+        )
+        result = raw.strip().lower()
+        if result in valid:
+            return result
+        logger.warning("Capability classifier returned unknown value %r, falling back to balanced", result)
+        return CAPABILITY_BALANCED
+    except Exception as e:
+        logger.warning("Capability classification failed: %s", e)
+        return CAPABILITY_BALANCED
+
+
+_PIPELINE_GENERATOR_SYSTEM = """Du entwirfst eine Ausführungs-Pipeline für einen Agenten.
+
+Die Konfiguration besteht aus drei optionalen Teilen:
+1. "pipeline": Feste Steps (Router, schnelle State-Operationen)
+2. "pipeline_template": Wiederholbarer Step für variable Listen
+3. "pipeline_after_template": Feste Steps nach dem Template (Analyse, Trigger)
+
+Antworte NUR mit einem JSON-Objekt. Kein anderer Text, keine Markdown-Backticks.
+
+Felder in "pipeline" und "pipeline_after_template" — jeder Step:
+- "id": snake_case Bezeichner
+- "capability": "fast", "search", "finance", "reasoning", "deep_reasoning"
+- "prompt_template": Anweisung für das LLM. Bei capability=finance wird kein LLM-Call gemacht — der Finance-Service liefert direkt strukturierte Kursdaten. prompt_template kann leer bleiben.
+- "ticker_key": Nur für finance-Steps. Context-Key der den Ticker enthält. Standard: "selected_ticker". Vorherige Outputs als {{output_key}}, State als {{key}}, Payload als {{trigger_payload.key}}
+- "output_key": Speicher-Key
+- "is_router": true nur für Router
+- "is_output": true für den letzten Step der Pipeline. Dieser Step gibt direkt valides JSON aus und ersetzt den nachgelagerten Structure-Call. Jede Pipeline MUSS genau einen is_output-Step als letzten Step haben. capability="fast". Das JSON enthält: report (max 3 Sätze oder "KEINE_AENDERUNG"), notify_user (bool), state_updates (dict), tool_calls (list). Verfügbare Tools: db_write, db_write_from_work (source_key=Pipeline-Context-Key), trigger_agent (target_agent_name exakt wie genannt), notify_user. Nur Tool-Calls erzeugen die im Prompt explizit angewiesen werden.
+- "only_if_route": Route-Filter (String oder Liste)
+- "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year". Setze "year" für Finance-, News- und Markt-Agents bei denen aktuelle Daten wichtig sind. Weglassen wenn historische oder zeitlose Daten gesucht werden.
+- "search_query": Nur für Search-Steps. Kurze, optimierte Suchanfrage für SearXNG (1-6 Wörter), getrennt vom prompt_template. Template-Variablen wie {{selected_ticker}} sind erlaubt. Beispiel: "{{selected_ticker}} Finanzkennzahlen 2026". Wenn nicht gesetzt, wird prompt_template als Query verwendet — was fast immer schlechte Ergebnisse liefert. Immer setzen bei Search-Steps.
+- "categories": Nur für Search-Steps. Steuert welche SearXNG-Engine-Kategorie genutzt wird. Werte: "general" (Standard), "news" (News-Agents), "finance" (Finanz-Agents, Kurse, Bilanzen), "it" (Tech/Code-Agents), "science" (Research/Paper-Agents). Setze immer die passende Kategorie — nie "general" wenn eine spezifischere passt.
+
+Felder in "pipeline_template":
+- "source": "state", "injected" oder "static"
+- "foreach": State-Key (bei state/injected)
+- "foreach_items": Feste Liste (bei static)
+- "split_by": Trennzeichen (Standard ",")
+- "batch_size": Items pro Step
+- "aggregate_key": Key unter dem alle Template-Outputs gesammelt werden
+- "only_if_route": Route-Filter
+- "step": Template mit {{item}} und {{item_id}}
+
+WANN pipeline_template — NUR wenn:
+- source=state/injected: Eine Liste im State wird verarbeitet deren Länge zur Laufzeit variabel ist. Beispiel: alle Ticker aus "fundamentalanalyse_vorhanden" — Anzahl unbekannt.
+- source=static: Instruction nennt explizit mehr als 3 gleichartige Items die identisch verarbeitet werden. Beispiel: 5 GPU-Modelle mit je gleicher Suche.
+
+KEIN pipeline_template wenn:
+- Die Instruction Themenbereiche/Sektoren auflistet → feste Search-Steps
+- Eine Liste als Ausschlusskriterium dient (z.B. "already known") → kein foreach
+- 3 oder weniger Items → einzelne feste Steps
+- Items unterschiedlich behandelt werden
+
+Router einbauen wenn Instruction Modi beschreibt (Trigger-Modus vs Normal-Modus).
+Finance-Steps (capability=finance) rufen direkt den internen Finance-Service auf — kein LLM-Call, keine Suche:
+- Liefern: aktueller Kurs, KGV (trailing/forward), Marktkapitalisierung, 52-Wochen-Range, Margen, Verschuldung, Cashflow, Eigenkapitalrendite, Analyst-Konsens, Kursziel
+- Nutze finance-Steps immer wenn aktuelle Kursdaten oder Bilanzkennzahlen für einen bekannten Börsenticker gebraucht werden
+- prompt_template kann leer bleiben oder eine kurze Beschreibung enthalten — er wird ignoriert
+- ticker_key: Context-Key der den Ticker enthält (Standard: "selected_ticker")
+- Kein time_range, kein search_query, keine categories bei finance-Steps
+
+Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
+Der letzte Step jeder Pipeline ist IMMER ein is_output-Step mit capability="fast". Er gibt direkt valides JSON aus — kein weiterer LLM-Call folgt. Der vorletzte Step kann reasoning/deep_reasoning sein.
+
+Beispiel "N Themenbereiche recherchieren" (feste Steps, KEIN Template — Bereiche fix in Instruction):
+{
+  "pipeline": [
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob ein Trigger-Payload vorhanden ist der eine sofortige Aktion erfordert. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
+    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe die Trigger-Aktion aus gemäß trigger_payload.", "output_key": "trigger_done"}
+  ],
+  "pipeline_after_template": [
+    {"id": "search_thema_1", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach [erstem Themenbereich aus Instruction]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_1"},
+    {"id": "search_thema_2", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach [zweitem Themenbereich aus Instruction]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_2"},
+    {"id": "analyze", "capability": "deep_reasoning", "only_if_route": "normal", "prompt_template": "Analysiere: {{search_1}} {{search_2}}. Wende Filterkriterien aus Instruction an.", "output_key": "analysis"},
+    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+  ]
+}
+
+Beispiel "Variable Liste aus State verarbeiten" (Template — Listenlänge zur Laufzeit unbekannt):
+{
+  "pipeline": [
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob Trigger-Payload einen sofortigen Sonderfall auslöst. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
+    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe Sonderfall-Logik aus gemäß trigger_payload.", "output_key": "trigger_done"}
+  ],
+  "pipeline_template": {
+    "source": "state", "foreach": "[state_key_mit_liste]", "split_by": ",", "batch_size": 1,
+    "aggregate_key": "all_results", "only_if_route": "normal",
+    "step": {"id": "process_{{item_id}}", "capability": "search", "prompt_template": "Verarbeite {{item}} gemäß Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
+  },
+  "pipeline_after_template": [
+    {"id": "analyze", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}. Erstelle finales Ergebnis gemäß Instruction.", "output_key": "analysis"},
+    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+  ]
+}
+
+Beispiel "Feste Liste gleichartiger Items durchsuchen" (static Template — >3 identisch verarbeitete Items):
+{
+  "pipeline_template": {
+    "source": "static",
+    "foreach_items": ["[Item 1 aus Instruction]", "[Item 2 aus Instruction]", "[Item 3 aus Instruction]", "[Item 4 aus Instruction]"],
+    "batch_size": 1, "aggregate_key": "all_results",
+    "step": {"id": "search_{{item_id}}", "capability": "search", "prompt_template": "Suche nach {{item}} gemäß den Kriterien aus der Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
+  },
+  "pipeline_after_template": [
+    {"id": "analyze", "capability": "reasoning", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}. Wende Bewertungskriterien aus Instruction an.", "output_key": "analysis"},
+    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+  ]
+}"""
+
+
+_PIPELINE_CAPABILITIES = {CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
+
+
+async def _generate_pipeline(instruction: str, work_capability: str, state_keys: list[str]) -> dict | None:
+    if work_capability not in _PIPELINE_CAPABILITIES:
+        return None
+    try:
+        state_hint = f"Verfügbare State-Variablen: {', '.join(state_keys)}" if state_keys else ""
+        content = f"Agent-Instruction: {instruction}"
+        if state_hint:
+            content += f"\n{state_hint}"
+        raw = await brain.chat(
+            system=_PIPELINE_GENERATOR_SYSTEM,
+            messages=[{"role": "user", "content": content}],
+            capability=CAPABILITY_REASONING,
+        )
+        parsed = json.loads(clean_llm_json(raw))
+        if not isinstance(parsed, dict):
+            logger.warning("Pipeline generator returned non-dict")
+            return None
+
+        has_pipeline = isinstance(parsed.get("pipeline"), list)
+        has_template = isinstance(parsed.get("pipeline_template"), dict)
+        has_after = isinstance(parsed.get("pipeline_after_template"), list)
+
+        if not has_pipeline and not has_template and not has_after:
+            logger.warning("Pipeline generator returned empty structure")
+            return None
+
+        logger.info(
+            "Pipeline generated: %d fixed steps, template=%s, %d after-steps",
+            len(parsed.get("pipeline", [])),
+            "yes" if has_template else "no",
+            len(parsed.get("pipeline_after_template", [])),
+        )
+        return parsed
+    except Exception as e:
+        logger.warning("Pipeline generation failed: %s", e)
+        return None
+
+
+async def resolve_agent_by_text(
+    text: str,
+    active_agents: list[dict],
+) -> dict | None:
+    if not active_agents:
+        return None
+    agent_list = "\n".join(
+        f"ID {a['id']}: {a['name']} — {parse_agent_config(a['config']).get('instruction', '')[:80]}"
+        for a in active_agents
+    )
+    try:
+        raw = await brain.chat(
+            system=_NAME_RESOLUTION_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": f"Agenten:\n{agent_list}\n\nNutzeranfrage: {text}",
+            }],
+            max_tokens=10,
+            capability=CAPABILITY_FAST,
+        )
+        resolved_id = int(raw.strip())
+        if resolved_id == 0:
+            return None
+        return next((a for a in active_agents if a["id"] == resolved_id), None)
+    except Exception as e:
+        logger.warning("Agent name resolution failed: %s", e)
+        return None
+
+
+async def parse_agent_creation(
     text: str,
     user_id: int,
     source_chat_id: int,
@@ -53,22 +311,33 @@ async def parse_agent_system(
 ) -> dict | None:
     try:
         raw = await brain.chat(
-            system=_SYSTEM_PARSER_PROMPT,
+            system=_AGENT_PARSER_SYSTEM,
             messages=[{"role": "user", "content": text}],
-            capability=CAPABILITY_DEEP_REASONING,
-            caller="agent_system_parser",
-            pool=pool,
+            capability=CAPABILITY_BALANCED,
         )
-        logger.debug("System parser raw output: %r", raw[:200])
+        logger.debug("Agent parser raw LLM output: %r", raw)
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):
             return None
 
-        agents_raw: list[dict] = parsed.get("agents", [])
-        description: str = parsed.get("description", "")
-
-        if not agents_raw or not description:
+        schedule = parsed.get("schedule")
+        if not schedule or not croniter.is_valid(schedule):
+            logger.warning("Invalid or missing cron from agent parser: %s", schedule)
             return None
+
+        instruction = parsed.get("instruction", "").strip()
+        if not instruction:
+            return None
+
+        work_capability = await _classify_work_capability(instruction)
+        logger.info("Agent work_capability classified as: %s", work_capability)
+
+        state_keys: list[str] = parsed.get("state_keys", ["last_run_summary"])
+        pipeline_result = await _generate_pipeline(instruction, work_capability, state_keys)
+        if pipeline_result:
+            steps_count = len(pipeline_result.get("pipeline", [])) + len(pipeline_result.get("pipeline_after_template", []))
+            has_template = bool(pipeline_result.get("pipeline_template"))
+            logger.info("Agent pipeline generated: %d fixed steps, template=%s", steps_count, has_template)
 
         tz_str = await memory.get_user_timezone(pool, user_id)
         try:
@@ -77,59 +346,115 @@ async def parse_agent_system(
             tz = ZoneInfo("UTC")
 
         now = datetime.now(tz)
-        agents_prepared: list[dict] = []
+        next_run_local = croniter(schedule, now).get_next(datetime)
+        next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
 
-        for agent_raw in agents_raw:
-            schedule = agent_raw.get("schedule")
-            if not schedule or not croniter.is_valid(schedule):
-                logger.warning("System parser: invalid schedule for agent %s: %s", agent_raw.get("name"), schedule)
-                return None
+        target_chat_id = user_id if parsed.get("target") == "dm" else source_chat_id
 
-            instruction = agent_raw.get("instruction", "").strip()
-            if not instruction:
-                return None
+        agent_config = {
+            "instruction": instruction,
+            "state_keys": state_keys,
+            "data_reads": parsed.get("data_reads", []),
+            "type": parsed.get("type", "default"),
+            "work_capability": work_capability,
+        }
+        if pipeline_result:
+            if pipeline_result.get("pipeline"):
+                agent_config["pipeline"] = pipeline_result["pipeline"]
+            if pipeline_result.get("pipeline_template"):
+                agent_config["pipeline_template"] = pipeline_result["pipeline_template"]
+            if pipeline_result.get("pipeline_after_template"):
+                agent_config["pipeline_after_template"] = pipeline_result["pipeline_after_template"]
 
-            work_capability = await _classify_work_capability(instruction)
-            logger.info("Agent '%s' work_capability classified as: %s", agent_raw.get("name"), work_capability)
-
-            state_keys: list[str] = agent_raw.get("state_keys", ["last_run_summary"])
-            pipeline_result = await _generate_pipeline(instruction, work_capability, state_keys)
-            if pipeline_result:
-                has_tmpl = bool(pipeline_result.get("pipeline_template"))
-                total = len(pipeline_result.get("pipeline", [])) + len(pipeline_result.get("pipeline_after_template", []))
-                logger.info("Agent '%s' pipeline: %d fixed steps, template=%s", agent_raw.get("name"), total, has_tmpl)
-
-            next_run_local = croniter(schedule, now).get_next(datetime)
-            next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
-
-            agent_config: dict = {
-                "instruction": instruction,
-                "state_keys": state_keys,
-                "data_reads": agent_raw.get("data_reads", []),
-                "type": agent_raw.get("type", "default"),
-                "work_capability": work_capability,
-            }
-            if pipeline_result:
-                if pipeline_result.get("pipeline"):
-                    agent_config["pipeline"] = pipeline_result["pipeline"]
-                if pipeline_result.get("pipeline_template"):
-                    agent_config["pipeline_template"] = pipeline_result["pipeline_template"]
-                if pipeline_result.get("pipeline_after_template"):
-                    agent_config["pipeline_after_template"] = pipeline_result["pipeline_after_template"]
-
-            agents_prepared.append({
-                "name": agent_raw.get("name", "Agent"),
-                "config": agent_config,
-                "schedule": schedule,
-                "target_chat_id": user_id if agent_raw.get("target") == "dm" else source_chat_id,
-                "next_run_at": next_run_utc,
-            })
+        raw_suggested: str | None = parsed.get("suggested_name")
+        if raw_suggested and raw_suggested.strip().lower() == config.BOT_NAME.lower():
+            raw_suggested = None
 
         return {
-            "agents": agents_prepared,
-            "description": description,
+            "config": agent_config,
+            "schedule": schedule,
+            "target_chat_id": target_chat_id,
+            "next_run_at": next_run_utc,
+            "next_run_display": next_run_local,
+            "wants_name": bool(parsed.get("wants_name", False)),
+            "suggested_name": raw_suggested,
         }
-
     except Exception as e:
-        logger.warning("Agent system parsing failed: %s", e)
+        logger.warning("Agent parsing failed: %s", e)
         return None
+
+
+async def handle_agent_talk(
+    text: str,
+    agent: dict,
+    state: dict[str, str],
+    agent_memories: list[str],
+    pool: asyncpg.Pool | None = None,
+) -> tuple[str, dict | None, str | None]:
+    config_data = parse_agent_config(agent["config"])
+    state_summary = "\n".join(f"{k}: {v}" for k, v in state.items()) if state else "noch kein State"
+    memories_summary = "\n- ".join(agent_memories) if agent_memories else "noch keine Beobachtungen"
+
+    data_summary = ""
+    if pool is not None:
+        try:
+            data_rows = await memory.get_all_agent_data(pool, agent["id"])
+            if data_rows:
+                ns_lines: list[str] = []
+                for row in data_rows[:20]:
+                    preview = row["value"][:120] + "…" if len(row["value"]) > 120 else row["value"]
+                    ns_lines.append(f"{row['namespace']}/{row['key']}: {preview}")
+                data_summary = "\n".join(ns_lines)
+        except Exception as e:
+            logger.warning("Failed to load agent data for talk context: %s", e)
+
+    context = (
+        f"Agent: {agent['name']}\n"
+        f"Konfiguration: {json.dumps(config_data, ensure_ascii=False)}\n\n"
+        f"Aktueller State:\n{state_summary}\n\n"
+        f"Bisherige Beobachtungen:\n- {memories_summary}"
+        + (f"\n\nGespeicherte Daten (Namespace/Key: Vorschau):\n{data_summary}" if data_summary else "")
+    )
+
+    try:
+        response = await brain.chat(
+            system=_AGENT_TALK_SYSTEM,
+            messages=[{"role": "user", "content": f"{context}\n\nNutzeranfrage: {text}"}],
+            capability=CAPABILITY_BALANCED,
+        )
+    except Exception as e:
+        logger.warning("Agent talk LLM call failed: %s", e)
+        return "Konnte den Agenten nicht befragen.", None, None
+
+    new_config: dict | None = None
+    new_name: str | None = None
+
+    if "```config" in response:
+        try:
+            start = response.index("```config") + len("```config")
+            end = response.index("```", start)
+            new_config = json.loads(response[start:end].strip())
+            response = response[:response.index("```config")].strip()
+        except Exception as e:
+            logger.warning("Config extraction from agent talk response failed: %s", e)
+
+    if "```name" in response:
+        try:
+            start = response.index("```name") + len("```name")
+            end = response.index("```", start)
+            new_name = response[start:end].strip()
+            response = response[:response.index("```name")].strip()
+        except Exception as e:
+            logger.warning("Name extraction from agent talk response failed: %s", e)
+
+    return response, new_config, new_name
+
+
+def next_agent_run_after(schedule: str, timezone: str) -> datetime:
+    try:
+        tz = ZoneInfo(timezone)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo(config.BOT_DEFAULT_TIMEZONE)
+    now = datetime.now(tz)
+    next_run_local = croniter(schedule, now).get_next(datetime)
+    return next_run_local.astimezone(ZoneInfo("UTC"))
