@@ -525,13 +525,8 @@ async def execute_agent(
         if pipeline_context:
             long_keys = {k: len(v) for k, v in pipeline_context.items() if len(v) > 200}
             if long_keys:
-                context_summary = "
-
-Verfügbare Pipeline-Context-Keys (output_key → Zeichenlänge):
-" + "
-".join(
-                    f"  {k}: {chars} Zeichen" for k, chars in long_keys.items()
-                )
+                keys_str = "\n".join(f"  {k}: {chars} Zeichen" for k, chars in long_keys.items())
+                context_summary = f"\n\nVerfügbare Pipeline-Context-Keys (output_key → Zeichenlänge):\n{keys_str}"
 
         raw_structured = await brain.chat(
             system=_AGENT_STRUCTURE_SYSTEM,
