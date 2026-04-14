@@ -11,14 +11,6 @@ from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
 
-_AGENT_WORK_SYSTEM = """Du führst einen automatischen Beobachtungsauftrag aus.
-Dir werden die Anweisung des Agenten, sein aktueller Gedächtnisstand und alle relevanten Daten aus der Datenbank übergeben.
-
-Führe die Anweisung vollständig aus. Denke laut nach, recherchiere, analysiere.
-Schreibe dein Ergebnis als klaren Fließtext — was du gefunden hast, was sich geändert hat, was gespeichert werden soll und warum.
-Wichtig: Beschreibe explizit welche Daten du speichern möchtest und unter welchem Key.
-Halte den Gesamtoutput unter 1500 Wörtern. Präzision ist wichtiger als Vollständigkeit — lieber ein klares Fazit als eine erschöpfende Aufzählung."""
-
 _AGENT_STRUCTURE_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
 
 Dir wird das Arbeits-Ergebnis des Agenten übergeben. Extrahiere daraus die strukturierten Ausgaben.
@@ -122,37 +114,6 @@ async def _load_data_reads(
     return result
 
 
-def _build_run_prompt(
-    config_data: dict,
-    state: dict[str, str],
-    injected_data: dict[str, str],
-) -> str:
-    instruction = config_data.get("instruction", "")
-    state_keys: list[str] = config_data.get("state_keys", ["last_run_summary"])
-
-    relevant_state: dict[str, str] = {}
-    for k in state_keys:
-        if k in state and state[k]:
-            value = state[k]
-            if k == "last_run_summary" and len(value) > _MAX_SUMMARY_CHARS:
-                value = value[:_MAX_SUMMARY_CHARS] + "… [gekürzt]"
-            relevant_state[k] = value
-
-    parts = [f"Anweisung: {instruction}"]
-
-    if not relevant_state:
-        parts.append("Erster Lauf — kein vorheriger Stand vorhanden.")
-    else:
-        state_lines = "\n".join(f"{k}: {v}" for k, v in relevant_state.items())
-        parts.append(f"Aktueller Stand aus letztem Lauf:\n{state_lines}")
-
-    if injected_data:
-        data_lines = "\n".join(f"{k}: {v}" for k, v in injected_data.items())
-        parts.append(f"Daten aus der Datenbank:\n{data_lines}")
-
-    return "\n\n".join(parts)
-
-
 async def _execute_tool_calls(
     pool: asyncpg.Pool,
     bot: telegram.Bot,
@@ -219,6 +180,23 @@ def _resolve_pipeline_template(template: str, context: dict[str, str]) -> str:
         template = template.replace(f"{{{{{k}}}}}", v)
     return template
 
+
+_AGENT_OUTPUT_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
+Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der letzte }.
+
+Felder:
+- "report": Zusammenfassung in maximal 3 kurzen Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
+- "notify_user": true wenn der User benachrichtigt werden soll, false sonst.
+- "state_updates": Dict mit Key-Value-Paaren für den Agent-State. Alle Werte müssen Strings sein. Niemals "last_run_summary" setzen.
+- "tool_calls": Liste der Tool-Aufrufe.
+
+Verfügbare Tools:
+- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — kurze Werte (URLs, Datum, Statusmeldungen).
+- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — lange Texte. source_key referenziert einen Pipeline-Context-Key. Nur verwenden wenn im Prompt explizit angewiesen.
+- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — target_agent_name exakt wie in der Instruction genannt.
+- {"tool": "notify_user", "message": "..."} — Nachricht an den User.
+
+Wichtig: Erzeuge NUR Tool-Calls die im Prompt explizit angewiesen werden. Keine eigenen Entscheidungen über was gespeichert oder getriggert werden soll."""
 
 _ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad gilt.
 Antworte NUR mit einem einzigen Wort. Befolge die Entscheidungslogik im Router-Prompt exakt und in der angegebenen Reihenfolge.
@@ -312,7 +290,7 @@ async def _execute_pipeline(
     context.update(injected_data)
 
     instruction = config_data.get("instruction", "")
-    agent_system = f"{_AGENT_WORK_SYSTEM}\n\nGesamtauftrag des Agenten:\n{instruction}"
+    agent_system = f"Gesamtauftrag des Agenten:\n{instruction}"
 
     pipeline_before: list[dict] = config_data.get("pipeline", [])
     template_steps: list[dict] = _expand_pipeline_template(config_data, state, injected_data)
@@ -343,6 +321,26 @@ async def _execute_pipeline(
                 continue
 
         prompt = _resolve_pipeline_template(prompt_template, context)
+
+        is_output_step: bool = step.get("is_output", False)
+
+        if is_output_step:
+            try:
+                output_raw = await brain.chat(
+                    system=_AGENT_OUTPUT_SYSTEM,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=1000,
+                    capability=CAPABILITY_FAST,
+                    caller=f"agent_output:{name}",
+                    pool=pool,
+                )
+                context[output_key] = output_raw
+                last_output = output_raw
+                logger.info("Agent %d (%s) output step '%s' done (%d chars)", agent_id, name, step_id, len(output_raw))
+            except Exception as e:
+                logger.error("Agent %d (%s) output step '%s' failed: %s", agent_id, name, step_id, e)
+                raise
+            continue
 
         if is_router:
             try:
@@ -456,7 +454,8 @@ async def _execute_pipeline(
             existing = context.get(aggregate_key, "")
             context[aggregate_key] = f"{existing}\n\n---\n\n{output_key}:\n{step_output}" if existing else f"{output_key}:\n{step_output}"
 
-    return last_output, context
+    has_output_step = any(s.get("is_output", False) for s in full_pipeline)
+    return last_output, context, has_output_step
 
 
 async def execute_agent(
@@ -495,53 +494,35 @@ async def execute_agent(
             db_data = await _load_data_reads(pool, agent_id, data_reads, flat_payload)
             injected_data.update(db_data)
 
-        prompt = _build_run_prompt(config_data, state, injected_data)
-
         pipeline: list[dict] = config_data.get("pipeline", [])
-        has_template = bool(config_data.get("pipeline_template"))
 
-        if pipeline or has_template:
-            work_result, pipeline_context = await _execute_pipeline(
-                pool, agent_id, name, pipeline, state, injected_data, config_data,
-            )
-        else:
-            pipeline_context: dict[str, str] = {}
-            use_web_search = work_capability in ("search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING)
-            web_search_max_uses = 5 if work_capability == "search" else 2
-
-            work_result = await brain.chat(
-                system=_AGENT_WORK_SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-                use_web_search=use_web_search,
-                web_search_max_uses=web_search_max_uses,
-                capability=work_capability,
-                caller=f"agent_work:{name}",
-                pool=pool,
-            )
+        work_result, pipeline_context, has_output_step = await _execute_pipeline(
+            pool, agent_id, name, pipeline, state, injected_data, config_data,
+        )
 
         logger.warning("Agent %d (%s) work result: %r", agent_id, name, work_result[:300])
 
-        context_summary = ""
-        if pipeline_context:
-            long_keys = {k: len(v) for k, v in pipeline_context.items() if len(v) > 200}
-            if long_keys:
-                keys_str = "\n".join(f"  {k}: {chars} Zeichen" for k, chars in long_keys.items())
-                context_summary = f"\n\nVerfügbare Pipeline-Context-Keys (output_key → Zeichenlänge):\n{keys_str}"
-
-        raw_structured = await brain.chat(
-            system=_AGENT_STRUCTURE_SYSTEM,
-            messages=[{"role": "user", "content": work_result + context_summary}],
-            capability=CAPABILITY_FAST,
-            caller=f"agent_structure:{name}",
-            pool=pool,
-        )
-
-        logger.warning("Agent %d (%s) structure result: %r", agent_id, name, raw_structured[:300])
-        try:
-            parsed_output = json.loads(clean_llm_json(raw_structured))
-        except Exception:
-            logger.warning("Agent %d (%s): structure JSON parse failed: %r", agent_id, name, raw_structured[:300])
-            parsed_output = {"report": work_result, "notify_user": True, "tool_calls": []}
+        if has_output_step:
+            try:
+                parsed_output = json.loads(clean_llm_json(work_result))
+                logger.warning("Agent %d (%s) output parsed directly from pipeline", agent_id, name)
+            except Exception:
+                logger.warning("Agent %d (%s): output step JSON parse failed: %r", agent_id, name, work_result[:300])
+                parsed_output = {"report": work_result, "notify_user": True, "tool_calls": []}
+        else:
+            raw_structured = await brain.chat(
+                system=_AGENT_STRUCTURE_SYSTEM,
+                messages=[{"role": "user", "content": work_result}],
+                capability=CAPABILITY_FAST,
+                caller=f"agent_structure:{name}",
+                pool=pool,
+            )
+            logger.warning("Agent %d (%s) structure result: %r", agent_id, name, raw_structured[:300])
+            try:
+                parsed_output = json.loads(clean_llm_json(raw_structured))
+            except Exception:
+                logger.warning("Agent %d (%s): structure JSON parse failed: %r", agent_id, name, raw_structured[:300])
+                parsed_output = {"report": work_result, "notify_user": True, "tool_calls": []}
 
         report: str = parsed_output.get("report", "")
         notify_user: bool = parsed_output.get("notify_user", False)

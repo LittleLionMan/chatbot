@@ -34,9 +34,10 @@ Regeln für gute Architektur:
 - Der erste Agent (Sammler/Screener) hat keine data_reads — er ist die primäre Datenquelle
 - Folge-Agents lesen den State des Sammlers via type:state
 - Lange Texte (Analysen, Berichte) gehören in einen Namespace, nicht in den State
-- Trigger-Beziehungen entstehen wenn ein Agent einen anderen bei bestimmten Bedingungen anstoßen soll
+- Trigger-Beziehungen: Ein Agent kann andere Agents via trigger_agent Tool-Call in seinem Output-Step anstoßen — beschreibe diese Beziehungen in der instruction des triggernden Agents
 - Schedules staffeln: Sammler früh, Analyst danach, Monitor abends
 - Namen thematisch passend: Finance → Gordon/Warren, News → Wolf/Anna, Monitoring → Argus/HAL
+- Jede Pipeline endet mit einem is_output-Step der direkt JSON ausgibt — das wird automatisch generiert
 
 Beispiel-Input: "Beobachte GPU-Preise täglich, analysiere interessante Funde und halte mich über Marktveränderungen auf dem Laufenden"
 
