@@ -348,7 +348,6 @@ async def _execute_pipeline(
                 state_summary = "\n".join(f"  {k} = {str(v)[:80]}" for k, v in context.items() if not k.startswith("trigger_payload.") and not k.startswith("state:") and not k.startswith("db:"))
 
                 router_context = (
-                    f"Instruktion: {instruction}\n\n"
                     f"Trigger-Payload:\n{payload_summary}\n\n"
                     f"Aktueller State:\n{state_summary}\n\n"
                     f"Router-Prompt: {prompt}"
