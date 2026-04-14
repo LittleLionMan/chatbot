@@ -93,19 +93,22 @@ Beispiel: 3"""
 
 _AGENT_TALK_SYSTEM = """Du bist Bob. Ein Nutzer fragt nach einem deiner laufenden Agenten oder möchte dessen Konfiguration ändern.
 
-Du sprichst ÜBER den Agenten — du bist nicht der Agent und schlüpfst nicht in seine Rolle.
+Du sprichst ÜBER den Agenten in Bobs Stimme — identifiziere dich immer mit dem Agenten-Namen, z.B. "Jordan hat..." oder "Laut Jordan...".
+Du bist nicht der Agent und schlüpfst nicht in seine Rolle.
 
 Dir werden Name, Konfiguration, aktueller State, bisherige Beobachtungen und gespeicherte Daten des Agenten übergeben.
+Wenn vollständige gespeicherte Inhalte vorhanden sind (z.B. eine Analyse), nutze diese für inhaltliche Antworten.
 
 Mögliche Anfragen:
-- Statusabfrage ("Wie läuft X?", "Was hat X gefunden?") → fasse State und Beobachtungen in Bobs Stimme zusammen, z.B. "Gecko hat bisher 12 Unternehmen gefunden..."
+- Statusabfrage ("Wie läuft X?", "Was hat X gefunden?") → fasse State, Beobachtungen und gespeicherte Daten in Bobs Stimme zusammen
+- Inhaltsfrage zu gespeicherten Daten ("Was denkt Jordan über ENPH?") → beantworte auf Basis der vollständigen gespeicherten Inhalte
 - Inhaltliche Konfigurationsänderung (Suchkriterien, Häufigkeit, Fokus, Instruktion) → bestätige knapp was geändert wird, gib das vollständige neue config-Objekt zurück: ```config\n{...}\n```
-- Umbenennung ("nenn ihn X", "er soll jetzt Y heißen") → bestätige knapp, gib den neuen Namen zurück: ```name\nNeuerName\n```
+- Umbenennung → bestätige knapp, gib den neuen Namen zurück: ```name\nNeuerName\n```
 - Kombination aus mehreren Änderungen → alle zutreffenden Blöcke zurückgeben
-- Allgemeine Frage über den Agenten → antworte in Bobs Stimme, nicht in der des Agenten
 
-Wenn du die Konfiguration änderst, gib immer das vollständige neue config-Objekt zurück — alle Felder, nicht nur die geänderten.
-Das config-Objekt hat die Felder: instruction, state_keys, data_reads, type, work_capability.
+Wenn du die Konfiguration änderst: gib das vollständige config-Objekt zurück mit ALLEN bestehenden Feldern.
+Das config-Objekt kann folgende Felder enthalten: instruction, state_keys, data_reads, type, work_capability, pipeline, pipeline_template, pipeline_after_template.
+Ändere NUR instruction, state_keys, data_reads, type oder work_capability — niemals pipeline, pipeline_template oder pipeline_after_template. Diese werden separat verwaltet.
 
 Wichtig: Technische Meta-Operationen wie Capability-Klassifizierung oder Pipeline-Generierung werden separat behandelt — du musst sie hier nicht zurückgeben."""
 
@@ -396,14 +399,26 @@ async def handle_agent_talk(
     memories_summary = "\n- ".join(agent_memories) if agent_memories else "noch keine Beobachtungen"
 
     data_summary = ""
+    full_content_blocks: list[str] = []
+
     if pool is not None:
         try:
             data_rows = await memory.get_all_agent_data(pool, agent["id"])
             if data_rows:
+                text_lower = text.lower()
                 ns_lines: list[str] = []
-                for row in data_rows[:20]:
-                    preview = row["value"][:120] + "…" if len(row["value"]) > 120 else row["value"]
-                    ns_lines.append(f"{row['namespace']}/{row['key']}: {preview}")
+                for row in data_rows[:50]:
+                    key_lower = row["key"].lower()
+                    if key_lower in text_lower or any(
+                        word in text_lower for word in key_lower.replace("_", " ").replace(".", " ").split()
+                        if len(word) > 3
+                    ):
+                        full_content_blocks.append(
+                            f"[Vollständiger Inhalt — {row['namespace']}/{row['key']}]\n{row['value']}"
+                        )
+                    else:
+                        preview = row["value"][:120] + "…" if len(row["value"]) > 120 else row["value"]
+                        ns_lines.append(f"{row['namespace']}/{row['key']}: {preview}")
                 data_summary = "\n".join(ns_lines)
         except Exception as e:
             logger.warning("Failed to load agent data for talk context: %s", e)
@@ -414,6 +429,7 @@ async def handle_agent_talk(
         f"Aktueller State:\n{state_summary}\n\n"
         f"Bisherige Beobachtungen:\n- {memories_summary}"
         + (f"\n\nGespeicherte Daten (Namespace/Key: Vorschau):\n{data_summary}" if data_summary else "")
+        + (f"\n\n{'\n\n'.join(full_content_blocks)}" if full_content_blocks else "")
     )
 
     try:
