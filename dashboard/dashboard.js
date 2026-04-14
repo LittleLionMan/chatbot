@@ -600,7 +600,7 @@ function editPipelineTemplate(agentId) {
      <div class="modal-field"><div class="modal-label">ID ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-id" value="${step.id || "search_{{item_id}}"}" /></div>
      <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="tmpl-step-cap">${capOptions}</select></div>
      <div class="modal-field"><div class="modal-label">Prompt Template ({{item}} und {{item_id}} verfügbar)</div><textarea class="modal-input" id="tmpl-step-prompt" style="min-height:140px;">${step.prompt_template || ""}</textarea></div>
-     <div class="modal-field"><div class="modal-label">Output Key ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-key" value="${step.output_key || "result_{{item_id}}"}" /></div>`,
+     <div class="modal-field"><div class="modal-label">Output Key ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-key" value="${step.output_key || "result_{{item_id}}"}" /></div>
      <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, {{item}} verfügbar)</div><input class="modal-input" id="tmpl-step-searchquery" value="${step.search_query || \"\"}" placeholder="z.B. {{trigger_payload.ticker}} {{item}}" /></div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="savePipelineTemplate(${agentId})">Speichern</button>`,
