@@ -436,7 +436,8 @@ async function saveCapability(agentId) {
 
 function _timeRangeOptions(selected) {
   return TIME_RANGES.map(
-    (t) => `<option value="${t}" ${t === (selected || "") ? "selected" : ""}>${t || "— kein Filter —"}</option>`,
+    (t) =>
+      `<option value="${t}" ${t === (selected || "") ? "selected" : ""}>${t || "— kein Filter —"}</option>`,
   ).join("");
 }
 
@@ -490,7 +491,9 @@ async function savePipelineStep(agentId, stepIndex, section) {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
   const timeRange = document.getElementById("edit-step-timerange").value;
-  const searchQuery = document.getElementById("edit-step-searchquery").value.trim();
+  const searchQuery = document
+    .getElementById("edit-step-searchquery")
+    .value.trim();
   const updated = {
     id: document.getElementById("edit-step-id").value.trim(),
     capability: document.getElementById("edit-step-cap").value,
@@ -601,7 +604,7 @@ function editPipelineTemplate(agentId) {
      <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="tmpl-step-cap">${capOptions}</select></div>
      <div class="modal-field"><div class="modal-label">Prompt Template ({{item}} und {{item_id}} verfügbar)</div><textarea class="modal-input" id="tmpl-step-prompt" style="min-height:140px;">${step.prompt_template || ""}</textarea></div>
      <div class="modal-field"><div class="modal-label">Output Key ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-key" value="${step.output_key || "result_{{item_id}}"}" /></div>
-     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, {{item}} verfügbar)</div><input class="modal-input" id="tmpl-step-searchquery" value="${step.search_query || \"\"}" placeholder="z.B. {{trigger_payload.ticker}} {{item}}" /></div>`,
+     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, {{item}} verfügbar)</div><input class="modal-input" id="tmpl-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{trigger_payload.ticker}} {{item}}" /></div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="savePipelineTemplate(${agentId})">Speichern</button>`,
   );
@@ -627,7 +630,13 @@ async function savePipelineTemplate(agentId) {
       capability: document.getElementById("tmpl-step-cap").value,
       prompt_template: document.getElementById("tmpl-step-prompt").value,
       output_key: document.getElementById("tmpl-step-key").value.trim(),
-      ...(document.getElementById("tmpl-step-searchquery").value.trim() ? { search_query: document.getElementById("tmpl-step-searchquery").value.trim() } : {}),
+      ...(document.getElementById("tmpl-step-searchquery").value.trim()
+        ? {
+            search_query: document
+              .getElementById("tmpl-step-searchquery")
+              .value.trim(),
+          }
+        : {}),
     },
   };
   if (source === "static") {
@@ -713,7 +722,9 @@ async function saveNewPipelineStep(agentId) {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
   const timeRange = document.getElementById("new-step-timerange").value;
-  const searchQuery = document.getElementById("new-step-searchquery").value.trim();
+  const searchQuery = document
+    .getElementById("new-step-searchquery")
+    .value.trim();
   const posRaw = document.getElementById("new-step-pos").value.trim();
   const pos = posRaw !== "" ? parseInt(posRaw) : null;
   const step = {
