@@ -7,7 +7,7 @@ from croniter import croniter
 import asyncpg
 from bot import brain, memory
 from bot.agent_parser import _classify_work_capability, _generate_pipeline
-from bot.models import CAPABILITY_BALANCED, CAPABILITY_DEEP_REASONING
+from bot.models import CAPABILITY_DEEP_REASONING
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
