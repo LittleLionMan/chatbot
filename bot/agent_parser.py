@@ -66,24 +66,24 @@ Output: {"instruction": "Suche nach Angeboten für RTX 4060 Ti unter 220€ auf 
 _CAPABILITY_CLASSIFIER_SYSTEM = """Analysiere diese Agent-Instruction und bestimme welche primäre Fähigkeit der ausführende LLM-Call benötigt.
 
 Antworte NUR mit einem dieser Werte, kein anderer Text:
-- simple_tasks: einfache Statusprüfungen, Ja/Nein-Entscheidungen, kurze Transformationen ohne eigenes Urteil
-- chat: moderate Analyse, Zusammenfassungen, normaler Informationsabruf, Web-Recherche mit Zusammenfassung
+- fast: einfache Statusprüfungen, Ja/Nein-Entscheidungen, kurze Transformationen ohne eigenes Urteil
+- balanced: moderate Analyse, Zusammenfassungen, normaler Informationsabruf
+- search: Web-Recherche, Nachrichtenauswertung, große Mengen Text zusammenfassen und bewerten
 - reasoning: Analysen mit mehreren Abhängigkeiten, Bewertungen die Urteilsvermögen erfordern
 - deep_reasoning: komplexe mehrstufige Schlussfolgerungen mit vielen Interdependenzen — Fundamentalanalysen, strategische Systembewertungen, Entscheidungen mit langfristigen Konsequenzen die schwer rückgängig zu machen sind
-- math: quantitative Analysen, Statistik, formale Berechnungen, Optimierungsprobleme
 - coding: Code schreiben, debuggen, Codebasen analysieren
+- finance: Aktuelle Kursdaten, Bilanzkennzahlen, KGV, Marktcap für Börsenticker abrufen — nur wenn der Agent hauptsächlich Finanzdaten abruft ohne komplexe Analyse
 
 Wähle deep_reasoning nur wenn die Aufgabe wirklich von tiefem Reasoning profitiert — nicht als Default für alles Komplexe.
 
 Beispiele:
-"Überwache Docker Container und melde wenn einer down ist" → simple_tasks
-"Suche täglich nach GPU-Angeboten unter 300€ auf Secondhand-Plattformen" → chat
-"Prüfe aktuelle Nachrichten zu Unternehmen auf der Watchlist" → chat
+"Überwache Docker Container und melde wenn einer down ist" → fast
+"Suche täglich nach GPU-Angeboten unter 300€ auf Secondhand-Plattformen" → search
+"Prüfe aktuelle Nachrichten zu Unternehmen auf der Watchlist" → search
 "Erstelle vollständige Fundamentalanalysen inkl. Bilanzqualität, Marktposition und Kursziel" → deep_reasoning
 "Bewerte ob neue Quartalszahlen die bestehende Analyse verändern" → reasoning
-"Berechne optimale Portfolio-Gewichtung nach Sharpe-Ratio" → math
 "Schreibe und teste neue API-Endpoints für das Projekt" → coding
-"Fasse den täglichen Wetterbericht zusammen" → chat"""
+"Fasse den täglichen Wetterbericht zusammen" → balanced"""
 
 _NAME_RESOLUTION_SYSTEM = """Identifiziere welcher Agent aus der Liste gemeint ist.
 Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.
@@ -118,7 +118,7 @@ def _pick_name_for_topic(topic_type: str) -> str:
 
 
 async def _classify_work_capability(instruction: str) -> str:
-    valid = {CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
+    valid = {CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, "search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
     try:
         raw = await brain.chat(
             system=_CAPABILITY_CLASSIFIER_SYSTEM,
@@ -129,7 +129,7 @@ async def _classify_work_capability(instruction: str) -> str:
         result = raw.strip().lower()
         if result in valid:
             return result
-        logger.warning("Capability classifier returned unknown value %r, falling back to chat", result)
+        logger.warning("Capability classifier returned unknown value %r, falling back to balanced", result)
         return CAPABILITY_CHAT
     except Exception as e:
         logger.warning("Capability classification failed: %s", e)
@@ -147,16 +147,16 @@ Antworte NUR mit einem JSON-Objekt. Kein anderer Text, keine Markdown-Backticks.
 
 Felder in "pipeline" und "pipeline_after_template" — jeder Step:
 - "id": snake_case Bezeichner
-- "capability": "simple_tasks", "chat", "reasoning", "deep_reasoning", "math", "coding"
+- "capability": "fast", "search", "finance", "reasoning", "deep_reasoning"
 - "prompt_template": Anweisung für das LLM. Bei capability=finance wird kein LLM-Call gemacht — der Finance-Service liefert direkt strukturierte Kursdaten. prompt_template kann leer bleiben.
 - "ticker_key": Nur für finance-Steps. Context-Key der den Ticker enthält. Standard: "selected_ticker". Vorherige Outputs als {{output_key}}, State als {{key}}, Payload als {{trigger_payload.key}}
 - "output_key": Speicher-Key
 - "is_router": true nur für Router
-- "is_output": true für den letzten Step der Pipeline. Dieser Step gibt direkt valides JSON aus und ersetzt den nachgelagerten Structure-Call. Jede Pipeline MUSS genau einen is_output-Step als letzten Step haben. capability="simple_tasks". Das JSON enthält: report (max 3 Sätze oder "KEINE_AENDERUNG"), notify_user (bool), state_updates (dict), tool_calls (list). Verfügbare Tools: db_write, db_write_from_work (source_key=Pipeline-Context-Key), trigger_agent (target_agent_name exakt wie genannt), notify_user. Nur Tool-Calls erzeugen die im Prompt explizit angewiesen werden.
+- "is_output": true für den letzten Step der Pipeline. Dieser Step gibt direkt valides JSON aus und ersetzt den nachgelagerten Structure-Call. Jede Pipeline MUSS genau einen is_output-Step als letzten Step haben. capability="fast". Das JSON enthält: report (max 3 Sätze oder "KEINE_AENDERUNG"), notify_user (bool), state_updates (dict), tool_calls (list). Verfügbare Tools: db_write, db_write_from_work (source_key=Pipeline-Context-Key), trigger_agent (target_agent_name exakt wie genannt), notify_user. Nur Tool-Calls erzeugen die im Prompt explizit angewiesen werden.
 - "only_if_route": Route-Filter (String oder Liste)
-- "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year".
-- "search_query": Nur für Search-Steps. Kurze, optimierte Suchanfrage für SearXNG (1-6 Wörter). Template-Variablen wie {{selected_ticker}} sind erlaubt.
-- "categories": Nur für Search-Steps. Werte: "general", "news", "finance", "it", "science".
+- "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year". Setze "year" für Finance-, News- und Markt-Agents bei denen aktuelle Daten wichtig sind. Weglassen wenn historische oder zeitlose Daten gesucht werden.
+- "search_query": Nur für Search-Steps. Kurze, optimierte Suchanfrage für SearXNG (1-6 Wörter), getrennt vom prompt_template. Template-Variablen wie {{selected_ticker}} sind erlaubt. Beispiel: "{{selected_ticker}} Finanzkennzahlen 2026". Wenn nicht gesetzt, wird prompt_template als Query verwendet — was fast immer schlechte Ergebnisse liefert. Immer setzen bei Search-Steps.
+- "categories": Nur für Search-Steps. Steuert welche SearXNG-Engine-Kategorie genutzt wird. Werte: "general" (Standard), "news" (News-Agents), "finance" (Finanz-Agents, Kurse, Bilanzen), "it" (Tech/Code-Agents), "science" (Research/Paper-Agents). Setze immer die passende Kategorie — nie "general" wenn eine spezifischere passt.
 
 Felder in "pipeline_template":
 - "source": "state", "injected" oder "static"
@@ -168,11 +168,74 @@ Felder in "pipeline_template":
 - "only_if_route": Route-Filter
 - "step": Template mit {{item}} und {{item_id}}
 
-Search-Steps (capability=chat mit use_web_search) enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
-Der letzte Step jeder Pipeline ist IMMER ein is_output-Step mit capability="simple_tasks"."""
+WANN pipeline_template — NUR wenn:
+- source=state/injected: Eine Liste im State wird verarbeitet deren Länge zur Laufzeit variabel ist. Beispiel: alle Ticker aus "fundamentalanalyse_vorhanden" — Anzahl unbekannt.
+- source=static: Instruction nennt explizit mehr als 3 gleichartige Items die identisch verarbeitet werden. Beispiel: 5 GPU-Modelle mit je gleicher Suche.
+
+KEIN pipeline_template wenn:
+- Die Instruction Themenbereiche/Sektoren auflistet → feste Search-Steps
+- Eine Liste als Ausschlusskriterium dient (z.B. "already known") → kein foreach
+- 3 oder weniger Items → einzelne feste Steps
+- Items unterschiedlich behandelt werden
+
+Router einbauen wenn Instruction Modi beschreibt (Trigger-Modus vs Normal-Modus).
+Finance-Steps (capability=finance) rufen direkt den internen Finance-Service auf — kein LLM-Call, keine Suche:
+- Liefern: aktueller Kurs, KGV (trailing/forward), Marktkapitalisierung, 52-Wochen-Range, Margen, Verschuldung, Cashflow, Eigenkapitalrendite, Analyst-Konsens, Kursziel
+- Nutze finance-Steps immer wenn aktuelle Kursdaten oder Bilanzkennzahlen für einen bekannten Börsenticker gebraucht werden
+- prompt_template kann leer bleiben oder eine kurze Beschreibung enthalten — er wird ignoriert
+- ticker_key: Context-Key der den Ticker enthält (Standard: "selected_ticker")
+- Kein time_range, kein search_query, keine categories bei finance-Steps
+
+Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
+Der letzte Step jeder Pipeline ist IMMER ein is_output-Step mit capability="fast". Er gibt direkt valides JSON aus — kein weiterer LLM-Call folgt. Der vorletzte Step kann reasoning/deep_reasoning sein.
+
+Beispiel "N Themenbereiche recherchieren" (feste Steps, KEIN Template — Bereiche fix in Instruction):
+{
+  "pipeline": [
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob ein Trigger-Payload vorhanden ist der eine sofortige Aktion erfordert. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
+    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe die Trigger-Aktion aus gemäß trigger_payload.", "output_key": "trigger_done"}
+  ],
+  "pipeline_after_template": [
+    {"id": "search_thema_1", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach [erstem Themenbereich aus Instruction]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_1"},
+    {"id": "search_thema_2", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach [zweitem Themenbereich aus Instruction]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_2"},
+    {"id": "analyze", "capability": "deep_reasoning", "only_if_route": "normal", "prompt_template": "Analysiere: {{search_1}} {{search_2}}. Wende Filterkriterien aus Instruction an.", "output_key": "analysis"},
+    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+  ]
+}
+
+Beispiel "Variable Liste aus State verarbeiten" (Template — Listenlänge zur Laufzeit unbekannt):
+{
+  "pipeline": [
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob Trigger-Payload einen sofortigen Sonderfall auslöst. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
+    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe Sonderfall-Logik aus gemäß trigger_payload.", "output_key": "trigger_done"}
+  ],
+  "pipeline_template": {
+    "source": "state", "foreach": "[state_key_mit_liste]", "split_by": ",", "batch_size": 1,
+    "aggregate_key": "all_results", "only_if_route": "normal",
+    "step": {"id": "process_{{item_id}}", "capability": "search", "prompt_template": "Verarbeite {{item}} gemäß Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
+  },
+  "pipeline_after_template": [
+    {"id": "analyze", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}. Erstelle finales Ergebnis gemäß Instruction.", "output_key": "analysis"},
+    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+  ]
+}
+
+Beispiel "Feste Liste gleichartiger Items durchsuchen" (static Template — >3 identisch verarbeitete Items):
+{
+  "pipeline_template": {
+    "source": "static",
+    "foreach_items": ["[Item 1 aus Instruction]", "[Item 2 aus Instruction]", "[Item 3 aus Instruction]", "[Item 4 aus Instruction]"],
+    "batch_size": 1, "aggregate_key": "all_results",
+    "step": {"id": "search_{{item_id}}", "capability": "search", "prompt_template": "Suche nach {{item}} gemäß den Kriterien aus der Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
+  },
+  "pipeline_after_template": [
+    {"id": "analyze", "capability": "reasoning", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}. Wende Bewertungskriterien aus Instruction an.", "output_key": "analysis"},
+    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+  ]
+}"""
 
 
-_PIPELINE_CAPABILITIES = {CAPABILITY_CHAT, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
+_PIPELINE_CAPABILITIES = {"search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
 
 
 async def _generate_pipeline(instruction: str, work_capability: str, state_keys: list[str]) -> dict | None:
@@ -211,6 +274,33 @@ async def _generate_pipeline(instruction: str, work_capability: str, state_keys:
     except Exception as e:
         logger.warning("Pipeline generation failed: %s", e)
         return None
+
+
+_MONITOR_SUGGESTION_TYPES = {"news", "market", "monitoring"}
+
+_MONITOR_TEMPLATES: dict[str, dict] = {
+    "rss": {
+        "monitor_type": "rss",
+        "feed_templates": [
+            "https://news.google.com/rss/search?q={query}+stock&hl=en&gl=US&ceid=US:en",
+            "https://news.google.com/rss/search?q={query}&hl=de&gl=DE&ceid=DE:de",
+        ],
+        "poll_interval_seconds": 900,
+        "source_format": "comma_list",
+    }
+}
+
+
+def suggest_monitor_for_agent(agent_config: dict, agent_name: str) -> str | None:
+    agent_type = agent_config.get("type", "")
+    if agent_type not in _MONITOR_SUGGESTION_TYPES:
+        return None
+    return (
+        f"Tipp: Für {agent_name} könnte ein RSS-Monitor-Service sinnvoll sein, "
+        f"der den Agenten automatisch triggert wenn neue relevante Artikel erscheinen — "
+        f"statt dass er selbst täglich pollt. Sag mir 'Richte den RSS-Monitor für {agent_name} ein' "
+        f"und ich erkläre wie."
+    )
 
 
 async def resolve_agent_by_text(

@@ -16,6 +16,7 @@ Kategorien:
 - agent_config: Nutzer möchte technische Meta-Eigenschaften eines Agenten ändern die kein Gespräch erfordern — Capability neu klassifizieren, Pipeline generieren oder regenerieren, work_capability direkt setzen. Erkennungsmerkmale: "analysiere seine Capability", "klassifiziere neu", "generiere eine Pipeline", "setze work_capability", "optimiere seinen Workflow".
 - agent_stop: Nutzer möchte einen laufenden Agenten stoppen oder deaktivieren.
 - agent_list: Nutzer möchte explizit eine Liste seiner laufenden Agenten sehen.
+- monitor_create: Nutzer möchte einen Monitor-Service einrichten der einen Agenten automatisch triggert. Erkennungsmerkmale: "richte den RSS-Monitor ein", "richte einen Monitor ein", "überwache News für", "erstelle einen News-Monitor", "richte Benachrichtigungen ein für". Nur wenn explizit ein Monitor-Service gemeint ist, nicht ein normaler Agent.
 - agent_talk: Nutzer möchte die Konfiguration oder Instruktion eines Agenten inhaltlich ändern, fragt nach seinem Status, oder möchte gespeicherte Ergebnisse und Daten abfragen. Erkennungsmerkmale: "mach das in Zukunft so", "ändere dein Suchkriterium", "wie läuft X", "was hat X gefunden", "zeig mir", "was weißt du über", "gib mir den Bericht", "wie schätzt du ein", "was ist deine Meinung zu". NICHT wenn eine sofortige Ausführung gemeint ist.
 - task_create: Nutzer möchte eine neue stateless wiederkehrende Aufgabe erstellen. Jeder Lauf ist unabhängig, kein Vergleich mit früheren Ergebnissen.
 - task_stop: Nutzer möchte eine wiederkehrende Aufgabe beenden oder löschen.
@@ -84,6 +85,43 @@ Beispiele:
 "Jordan, setze work_capability auf deep_reasoning" → {"agent_name": "Jordan", "reclassify_capability": false, "regenerate_pipeline": false, "set_capability": "deep_reasoning"}"""
 
 
+_MONITOR_CREATE_SYSTEM = """Extrahiere aus einer Nutzeranfrage die Parameter für einen neuen Monitor-Service.
+
+Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
+
+Felder:
+- "monitor_type": Typ des Monitors. Aktuell verfügbar: "rss"
+- "source_agent": Name des Agents dessen State als Watchlist genutzt wird (z.B. "Jordan")
+- "source_state_key": State-Key der die zu überwachenden Items enthält (z.B. "analyses_overview")
+- "source_format": Format des State-Werts. Werte: "pipe_delimited_overview" (TICKER|NAME|...|DATUM), "comma_list" (kommagetrennte Liste), "pipe_name_map" (TICKER|NAME pro Zeile)
+- "target_agent": Name des Agents der getriggert werden soll (z.B. "Jim Cramer")
+- "name": Beschreibender Name für diesen Monitor
+- "poll_interval_seconds": Polling-Intervall in Sekunden (Standard: 900)
+
+Beispiele:
+"Richte den RSS-Monitor für Jim Cramer ein" → {"monitor_type": "rss", "source_agent": "Jordan", "source_state_key": "analyses_overview", "source_format": "pipe_delimited_overview", "target_agent": "Jim Cramer", "name": "Finanz-News für Jim Cramer", "poll_interval_seconds": 900}
+"Erstelle einen News-Monitor der Jen-Hsun Huang triggert wenn es News zu seinen Watchlist-Modellen gibt" → {"monitor_type": "rss", "source_agent": "Jen-Hsun Huang", "source_state_key": "watched_models", "source_format": "comma_list", "target_agent": "Jen-Hsun Huang", "name": "GPU-News für Jen-Hsun Huang", "poll_interval_seconds": 900}"""
+
+
+async def extract_monitor_create_params(text: str, pool: asyncpg.Pool) -> dict:
+    try:
+        raw = await brain.chat(
+            system=_MONITOR_CREATE_SYSTEM,
+            messages=[{"role": "user", "content": text}],
+            max_tokens=256,
+            capability=CAPABILITY_SIMPLE_TASKS,
+            caller="monitor_create_extractor",
+            pool=pool,
+        )
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+    except Exception as e:
+        logger.warning("Monitor create extraction failed: %s", e)
+        return {}
+
+
 async def classify(
     text: str,
     pool: asyncpg.Pool,
@@ -111,7 +149,8 @@ async def classify(
         )
         intent = result.strip().lower()
         valid = {"agent_system", "agent_create", "agent_trigger", "agent_stop", "agent_list",
-                 "agent_talk", "agent_config", "task_create", "task_stop", "task_list", "none"}
+                 "agent_talk", "agent_config", "monitor_create",
+                 "task_create", "task_stop", "task_list", "none"}
         if intent not in valid:
             logger.warning("Classifier returned unknown intent %r, falling back to none", intent)
             return "none"

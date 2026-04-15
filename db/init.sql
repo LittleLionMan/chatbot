@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS agent_trigger_queue (
     processed_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS agent_trigger_queue_pending_idx ON agent_trigger_queue (processed_at) WHERE processed_at IS NULL;
+CREATE INDEX IF NOT EXISTS agent_trigger_queue_pending_idx ON agent_trigger_queue (scheduled_for) WHERE processed_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS llm_usage (
     id SERIAL PRIMARY KEY,
@@ -155,3 +155,42 @@ CREATE TABLE IF NOT EXISTS model_availability (
     error_message TEXT,
     PRIMARY KEY (provider, model_id)
 );
+
+CREATE TABLE IF NOT EXISTS monitor_configs (
+    id SERIAL PRIMARY KEY,
+    monitor_type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    source_agent TEXT NOT NULL,
+    source_state_key TEXT NOT NULL,
+    source_format TEXT NOT NULL,
+    target_agent TEXT NOT NULL,
+    feed_templates TEXT[] NOT NULL DEFAULT '{}',
+    poll_interval_seconds INT NOT NULL DEFAULT 900,
+    extra_config JSONB DEFAULT '{}',
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS monitor_seen (
+    config_id INT NOT NULL REFERENCES monitor_configs(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    seen_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (config_id, fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS monitor_seen_config_idx ON monitor_seen (config_id);
+
+INSERT INTO monitor_configs (monitor_type, name, source_agent, source_state_key, source_format, target_agent, feed_templates, poll_interval_seconds)
+VALUES (
+    'rss',
+    'Finanz-News für Jim Cramer',
+    'Jordan',
+    'analyses_overview',
+    'pipe_delimited_overview',
+    'Jim Cramer',
+    ARRAY[
+        'https://news.google.com/rss/search?q={query}+stock&hl=en&gl=US&ceid=US:en',
+        'https://news.google.com/rss/search?q={query}&hl=de&gl=DE&ceid=DE:de'
+    ],
+    900
+) ON CONFLICT DO NOTHING;

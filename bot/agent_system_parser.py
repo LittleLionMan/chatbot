@@ -1,4 +1,3 @@
-# agent_system_parser.py
 from __future__ import annotations
 import json
 import logging
@@ -8,7 +7,7 @@ from croniter import croniter
 import asyncpg
 from bot import brain, memory
 from bot.agent_parser import _classify_work_capability, _generate_pipeline
-from bot.models import CAPABILITY_CHAT, CAPABILITY_DEEP_REASONING
+from bot.models import CAPABILITY_BALANCED, CAPABILITY_DEEP_REASONING
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -39,6 +38,13 @@ Regeln für gute Architektur:
 - Schedules staffeln: Sammler früh, Analyst danach, Monitor abends
 - Namen thematisch passend: Finance → Gordon/Warren, News → Wolf/Anna, Monitoring → Argus/HAL
 - Jede Pipeline endet mit einem is_output-Step der direkt JSON ausgibt — das wird automatisch generiert
+
+Externe Monitor-Services:
+Wenn ein Agent kontinuierlich auf neue Ereignisse reagieren soll (News, Preisänderungen, API-Updates), kann ein Monitor-Service helfen der den Agent automatisch triggert statt dass er selbst pollt.
+Verfügbare Monitor-Typen:
+- "rss": Überwacht RSS/Google-News-Feeds für Items aus einem Agent-State. Triggert den Ziel-Agent wenn neue Artikel erscheinen. Ideal für: News-Monitoring, Marktbeobachtung, Themen-Tracking.
+Wenn ein Agent dieses Muster braucht, füge in der description einen Hinweis ein: "Hinweis: Für [Agent-Name] wird ein RSS-Monitor-Service empfohlen. Bob erklärt nach dem Anlegen wie er eingerichtet wird."
+Erkennungsmerkmale für Monitor-Bedarf: "überwache kontinuierlich", "reagiere auf News", "benachrichtige sofort wenn", "halte mich auf dem neuesten Stand zu".
 
 Beispiel-Input: "Beobachte GPU-Preise täglich, analysiere interessante Funde und halte mich über Marktveränderungen auf dem Laufenden"
 

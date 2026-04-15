@@ -1,3 +1,5 @@
+from __future__ import annotations
+import json
 import asyncpg
 from datetime import datetime
 from bot import config
@@ -285,7 +287,6 @@ async def create_agent(
     schedule: str,
     next_run_at: datetime,
 ) -> int:
-    import json
     row = await pool.fetchrow(
         """
         INSERT INTO agents (user_id, target_chat_id, name, config, schedule, next_run_at)
@@ -350,7 +351,6 @@ async def rename_agent(pool: asyncpg.Pool, agent_id: int, new_name: str) -> None
 
 
 async def update_agent_config(pool: asyncpg.Pool, agent_id: int, config_json: dict) -> None:
-    import json
     await pool.execute(
         "UPDATE agents SET config = $1 WHERE id = $2",
         json.dumps(config_json), agent_id,
@@ -494,7 +494,6 @@ async def enqueue_agent_trigger(
     payload: dict,
     delay_minutes: int = 0,
 ) -> None:
-    import json
     await pool.execute(
         """
         INSERT INTO agent_trigger_queue (source_agent_id, target_agent_name, payload, scheduled_for)
@@ -608,3 +607,37 @@ async def clear_pending_agent_system(pool: asyncpg.Pool, user_id: int) -> None:
         """,
         user_id,
     )
+
+
+async def create_monitor_config(
+    pool: asyncpg.Pool,
+    monitor_type: str,
+    name: str,
+    source_agent: str,
+    source_state_key: str,
+    source_format: str,
+    target_agent: str,
+    feed_templates: list[str],
+    poll_interval_seconds: int = 900,
+    extra_config: dict | None = None,
+) -> int:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO monitor_configs
+            (monitor_type, name, source_agent, source_state_key, source_format,
+             target_agent, feed_templates, poll_interval_seconds, extra_config)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id
+        """,
+        monitor_type, name, source_agent, source_state_key, source_format,
+        target_agent, feed_templates, poll_interval_seconds,
+        json.dumps(extra_config or {}),
+    )
+    return row["id"]
+
+
+async def get_monitor_configs(pool: asyncpg.Pool) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT * FROM monitor_configs ORDER BY id"
+    )
+    return [dict(r) for r in rows]

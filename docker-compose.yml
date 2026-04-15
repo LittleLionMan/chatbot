@@ -65,6 +65,15 @@ services:
       retries: 10
       start_period: 30s
 
+  monitor:
+    build: ./monitor
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+
   bot:
     build: .
     restart: unless-stopped
