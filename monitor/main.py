@@ -109,7 +109,8 @@ async def _fetch_feed(client: httpx.AsyncClient, url: str) -> list[dict]:
 async def _run_rss_config(pool: asyncpg.Pool, config: dict) -> None:
     config_id: int = config["id"]
     target_agent: str = config["target_agent"]
-    feed_templates: list[str] = config["feed_templates"]
+    feed_templates_raw = config["feed_templates"]
+    feed_templates: list[str] = list(feed_templates_raw) if not isinstance(feed_templates_raw, str) else [feed_templates_raw]
     extra_raw = config.get("extra_config") or {}
     extra: dict = extra_raw if isinstance(extra_raw, dict) else {}
 
@@ -128,6 +129,8 @@ async def _run_rss_config(pool: asyncpg.Pool, config: dict) -> None:
                 url = template.format(query=query, key=item_key, name=item_name)
                 articles = await _fetch_feed(client, url)
                 for article in articles:
+                    if not isinstance(article, dict):
+                        continue
                     fp = _fingerprint(article["url"])
                     if fp in seen:
                         continue
@@ -158,7 +161,8 @@ async def _run_cycle(pool: asyncpg.Pool) -> None:
             else:
                 logger.warning("Unknown monitor_type: %s", config["monitor_type"])
         except Exception as e:
-            logger.error("Config %d failed: %s", config["id"], e)
+            import traceback
+            logger.error("Config %d failed: %s\n%s", config["id"], e, traceback.format_exc())
 
 
 async def main() -> None:
