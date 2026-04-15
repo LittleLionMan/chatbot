@@ -3,7 +3,7 @@ import json
 import logging
 import asyncpg
 from bot import brain
-from bot.models import CAPABILITY_FAST
+from bot.models import CAPABILITY_SIMPLE_TASKS
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ Felder:
 - "agent_name": Name des Agenten.
 - "reclassify_capability": true wenn Capability neu klassifiziert werden soll, false sonst.
 - "regenerate_pipeline": true wenn Pipeline neu generiert werden soll, false sonst.
-- "set_capability": Direkt gesetzter Capability-Wert wenn der Nutzer einen expliziten Wert nennt (z.B. "search", "reasoning", "deep_reasoning"), sonst null.
+- "set_capability": Direkt gesetzter Capability-Wert wenn der Nutzer einen expliziten Wert nennt (z.B. "chat", "reasoning", "deep_reasoning"), sonst null.
 
 Beispiele:
 "Gecko, analysiere deine Capability neu" → {"agent_name": "Gecko", "reclassify_capability": true, "regenerate_pipeline": false, "set_capability": null}
@@ -99,7 +99,7 @@ async def classify(
             system=_CLASSIFIER_SYSTEM,
             messages=[{"role": "user", "content": content}],
             max_tokens=20,
-            capability=CAPABILITY_FAST,
+            capability=CAPABILITY_SIMPLE_TASKS,
             caller="intent_classifier",
             pool=pool,
         )
@@ -122,7 +122,7 @@ async def extract_trigger_payload(text: str, pool: asyncpg.Pool) -> dict:
             system=_TRIGGER_PAYLOAD_SYSTEM,
             messages=[{"role": "user", "content": text}],
             max_tokens=256,
-            capability=CAPABILITY_FAST,
+            capability=CAPABILITY_SIMPLE_TASKS,
             caller="trigger_payload_extractor",
             pool=pool,
         )
@@ -141,7 +141,7 @@ async def extract_agent_config_request(text: str, pool: asyncpg.Pool) -> dict:
             system=_AGENT_CONFIG_SYSTEM,
             messages=[{"role": "user", "content": text}],
             max_tokens=128,
-            capability=CAPABILITY_FAST,
+            capability=CAPABILITY_SIMPLE_TASKS,
             caller="agent_config_extractor",
             pool=pool,
         )

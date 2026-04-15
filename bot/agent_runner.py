@@ -6,7 +6,7 @@ import telegram
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
 from bot.brain import ProviderRateLimitError
-from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING
+from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -284,7 +284,7 @@ async def _execute_pipeline(
     state: dict[str, str],
     injected_data: dict[str, str],
     config_data: dict,
-) -> tuple[str, dict[str, str]]:
+) -> tuple[str, dict[str, str], bool]:
     context: dict[str, str] = {}
     context.update({k: v for k, v in state.items() if v})
     context.update(injected_data)
@@ -330,7 +330,7 @@ async def _execute_pipeline(
                     system=_AGENT_OUTPUT_SYSTEM,
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=1000,
-                    capability=CAPABILITY_FAST,
+                    capability=CAPABILITY_SIMPLE_TASKS,
                     caller=f"agent_output:{name}",
                     pool=pool,
                 )
@@ -357,7 +357,7 @@ async def _execute_pipeline(
                     system=_ROUTER_SYSTEM,
                     messages=[{"role": "user", "content": router_context}],
                     max_tokens=20,
-                    capability=CAPABILITY_FAST,
+                    capability=CAPABILITY_SIMPLE_TASKS,
                     caller=f"agent_router:{name}",
                     pool=pool,
                 )
@@ -370,7 +370,7 @@ async def _execute_pipeline(
                 raise
             continue
 
-        is_search_step = capability == CAPABILITY_SEARCH
+        is_search_step = capability == CAPABILITY_CHAT
         is_finance_step = capability == "finance"
         use_web_search = is_search_step
         web_search_max_uses = 3 if is_search_step else None
@@ -471,7 +471,7 @@ async def execute_agent(
     config_data: dict = parse_agent_config(agent["config"])
     schedule: str = agent["schedule"]
 
-    work_capability: str = config_data.get("work_capability", CAPABILITY_BALANCED)
+    work_capability: str = config_data.get("work_capability", CAPABILITY_CHAT)
 
     logger.info("Executing agent %d (%s) for user %d with capability=%s", agent_id, name, user_id, work_capability)
 
@@ -513,7 +513,7 @@ async def execute_agent(
             raw_structured = await brain.chat(
                 system=_AGENT_STRUCTURE_SYSTEM,
                 messages=[{"role": "user", "content": work_result}],
-                capability=CAPABILITY_FAST,
+                capability=CAPABILITY_SIMPLE_TASKS,
                 caller=f"agent_structure:{name}",
                 pool=pool,
             )
@@ -552,7 +552,7 @@ async def execute_agent(
             message_text = await brain.chat(
                 system=relay_system,
                 messages=[{"role": "user", "content": report}],
-                capability=CAPABILITY_FAST,
+                capability=CAPABILITY_SIMPLE_TASKS,
                 caller=f"agent_relay:{name}",
                 pool=pool,
             )

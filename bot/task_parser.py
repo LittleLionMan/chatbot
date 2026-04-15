@@ -7,7 +7,7 @@ from croniter import croniter
 import asyncpg
 from bot import brain, config, memory
 from bot.utils import clean_llm_json
-from bot.models import CAPABILITY_FAST
+from bot.models import CAPABILITY_SIMPLE_TASKS
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ async def parse_task(
             system=_TASK_PARSER_SYSTEM,
             messages=[{"role": "user", "content": text}],
             max_tokens=256,
-            capability=CAPABILITY_FAST,
+            capability=CAPABILITY_SIMPLE_TASKS,
         )
         logger.debug("Task parser raw LLM output: %r", raw)
         parsed = json.loads(clean_llm_json(raw))
@@ -106,7 +106,7 @@ async def parse_stop_request(
                 "content": f"Aktive Tasks:\n{task_list}\n\nNutzeranfrage: {text}",
             }],
             max_tokens=64,
-            capability=CAPABILITY_FAST,
+            capability=CAPABILITY_SIMPLE_TASKS,
         )
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):

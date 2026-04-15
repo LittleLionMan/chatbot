@@ -1,7 +1,8 @@
+# decider.py
 import asyncpg
 from bot import config, brain, memory
 from bot.soul import SOUL
-from bot.models import CAPABILITY_FAST
+from bot.models import CAPABILITY_SIMPLE_TASKS
 
 
 DECIDER_SYSTEM = """Entscheide ob ein Bot spontan auf eine Gruppennachricht reagieren soll.
@@ -29,6 +30,6 @@ async def should_respond_spontaneously(
             }
         ],
         max_tokens=5,
-        capability=CAPABILITY_FAST,
+        capability=CAPABILITY_SIMPLE_TASKS,
     )
     return decision.strip().lower().startswith("ja")

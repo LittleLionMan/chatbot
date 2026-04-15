@@ -9,21 +9,21 @@ logger = logging.getLogger(__name__)
 
 Capability = str
 
-CAPABILITY_FAST = "fast"
-CAPABILITY_BALANCED = "balanced"
-CAPABILITY_SEARCH = "search"
+CAPABILITY_SIMPLE_TASKS = "simple_tasks"
+CAPABILITY_CHAT = "chat"
 CAPABILITY_REASONING = "reasoning"
 CAPABILITY_DEEP_REASONING = "deep_reasoning"
+CAPABILITY_MATH = "math"
 CAPABILITY_CODING = "coding"
 CAPABILITY_MULTIMODAL = "multimodal"
 CAPABILITY_LONG_CONTEXT = "long_context"
 
 ALL_CAPABILITIES = [
-    CAPABILITY_FAST,
-    CAPABILITY_BALANCED,
-    CAPABILITY_SEARCH,
+    CAPABILITY_SIMPLE_TASKS,
+    CAPABILITY_CHAT,
     CAPABILITY_REASONING,
     CAPABILITY_DEEP_REASONING,
+    CAPABILITY_MATH,
     CAPABILITY_CODING,
     CAPABILITY_MULTIMODAL,
     CAPABILITY_LONG_CONTEXT,
@@ -36,6 +36,9 @@ _PROVIDER_ENV_KEYS: dict[str, str] = {
     "mistral": "MISTRAL_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "xai": "XAI_API_KEY",
+    "qwen": "DASHSCOPE_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "kimi": "MOONSHOT_API_KEY",
 }
 
 _PROVIDER_BASE_URLS: dict[str, str] = {
@@ -44,6 +47,9 @@ _PROVIDER_BASE_URLS: dict[str, str] = {
     "mistral": "https://api.mistral.ai/v1",
     "deepseek": "https://api.deepseek.com/v1",
     "xai": "https://api.x.ai/v1",
+    "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "minimax": "https://api.minimax.io/v1",
+    "kimi": "https://api.moonshot.ai/v1",
 }
 
 _available_models: list[dict] = []
@@ -152,11 +158,14 @@ async def run_availability_check(pool: asyncpg.Pool) -> None:
     available_providers.update(anthropic_providers)
 
     _PROVIDER_TEST_MODELS: dict[str, str] = {
-        "openai": "gpt-4o-mini",
-        "google": "gemini-2.0-flash",
+        "openai": "gpt-4.1-nano",
+        "google": "gemini-2.5-flash",
         "mistral": "mistral-small-latest",
         "deepseek": "deepseek-chat",
         "xai": "grok-3-mini-beta",
+        "qwen": "qwen-turbo",
+        "minimax": "MiniMax-M2.5",
+        "kimi": "moonshot-v1-8k",
     }
 
     for provider, base_url in _PROVIDER_BASE_URLS.items():
@@ -164,7 +173,10 @@ async def run_availability_check(pool: asyncpg.Pool) -> None:
         if not key:
             logger.info("Provider %s: no API key configured, skipping", provider)
             continue
-        ok = await _check_openai_compatible(provider, base_url, key, _PROVIDER_TEST_MODELS[provider])
+        test_model = _PROVIDER_TEST_MODELS.get(provider, "")
+        if not test_model:
+            continue
+        ok = await _check_openai_compatible(provider, base_url, key, test_model)
         if ok:
             available_providers.add(provider)
             logger.info("Provider %s: available", provider)

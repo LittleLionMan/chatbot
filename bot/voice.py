@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import httpx
 from bot import brain
-from bot.models import CAPABILITY_FAST
+from bot.models import CAPABILITY_SIMPLE_TASKS
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ async def parse_voice_request(text: str) -> bool:
             system=_VOICE_REQUEST_SYSTEM,
             messages=[{"role": "user", "content": text}],
             max_tokens=3,
-            capability=CAPABILITY_FAST
+            capability=CAPABILITY_SIMPLE_TASKS,
         )
         return result.strip().lower().startswith("ja")
     except Exception as e:

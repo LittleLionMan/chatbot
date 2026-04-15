@@ -5,7 +5,7 @@ import logging
 import asyncpg
 import telegram
 from bot import config, memory, brain, extractor, ratelimit, task_runner, agent_runner
-from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED
+from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ async def _extract_reflections_for_session(
             system=extractor._REFLECTION_SYSTEM,
             messages=[{"role": "user", "content": f"Interaktion:\n{snippet}"}],
             max_tokens=1024,
-            capability=CAPABILITY_FAST
+            capability=CAPABILITY_SIMPLE_TASKS,
         )
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):
@@ -111,7 +111,7 @@ async def _maybe_send_proactive(
             system=_PROACTIVE_SYSTEM,
             messages=[{"role": "user", "content": f"Neue Beobachtungen:\n- {reflection_text}"}],
             max_tokens=5,
-            capability=CAPABILITY_FAST
+            capability=CAPABILITY_SIMPLE_TASKS,
         )
         if not decision.strip().lower().startswith("ja"):
             return
@@ -132,7 +132,7 @@ async def _maybe_send_proactive(
         response = await brain.chat(
             system=system,
             messages=[{"role": "user", "content": f"Schreib eine proaktive Nachricht basierend auf diesen Beobachtungen:\n- {reflection_text}"}],
-            capability=CAPABILITY_BALANCED
+            capability=CAPABILITY_CHAT,
         )
 
         await bot.send_message(chat_id=group_id, text=response)

@@ -5,7 +5,7 @@ import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import asyncpg
 from bot import brain, memory
-from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED
+from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ async def _store_if_new(pool: asyncpg.Pool, subject_type: str, subject_id: int, 
 
 
 async def _extract_via_llm(system: str, content: str) -> list[str]:
-    raw = await brain.chat(system=system, messages=[{"role": "user", "content": content}], max_tokens=256, capability=CAPABILITY_FAST,)
+    raw = await brain.chat(system=system, messages=[{"role": "user", "content": content}], max_tokens=256, capability=CAPABILITY_SIMPLE_TASKS,)
     parsed = json.loads(clean_llm_json(raw))
     if not isinstance(parsed, list):
         return []
@@ -98,7 +98,7 @@ async def _should_reflect(conversation_snippet: str) -> bool:
             system=_REFLECTION_DECISION_SYSTEM,
             messages=[{"role": "user", "content": conversation_snippet}],
             max_tokens=5,
-            capability=CAPABILITY_FAST,
+            capability=CAPABILITY_SIMPLE_TASKS,
         )
         return decision.strip().lower().startswith("ja")
     except Exception as e:
@@ -135,7 +135,7 @@ async def extract_and_store_reflection(
             system=_REFLECTION_SYSTEM,
             messages=[{"role": "user", "content": f"Interaktion:\n{conversation_snippet}"}],
             max_tokens=256,
-            capability=CAPABILITY_BALANCED,
+            capability=CAPABILITY_CHAT,
         )
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, list):

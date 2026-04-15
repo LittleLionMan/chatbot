@@ -5,7 +5,7 @@ import telegram
 from bot import brain, memory
 from bot.task_parser import next_run_after
 from bot.soul import SOUL
-from bot.models import CAPABILITY_BALANCED, CAPABILITY_SEARCH
+from bot.models import CAPABILITY_CHAT
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ async def execute_task(
             messages=[{"role": "user", "content": description}],
             max_tokens=2048,
             use_web_search=True,
-            capability=CAPABILITY_SEARCH,
+            capability=CAPABILITY_CHAT,
         )
 
         await bot.send_message(chat_id=target_chat_id, text=response)

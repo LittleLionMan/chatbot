@@ -2,19 +2,9 @@ function getBase() {
   return window.__API_URL__ || "";
 }
 
-const CAPABILITIES = [
-  "fast",
-  "balanced",
-  "search",
-  "finance",
-  "reasoning",
-  "deep_reasoning",
-  "coding",
-  "multimodal",
-  "long_context",
-];
-
 const TIME_RANGES = ["", "day", "week", "month", "year"];
+
+let CAPABILITIES = [];
 
 let memMode = "users";
 let memData = { users: [], groups: [] };
@@ -127,6 +117,13 @@ function switchSection(name) {
   goBack();
 }
 
+function _capabilityOptions(selected) {
+  return CAPABILITIES.map(
+    (c) =>
+      `<option value="${c}" ${c === selected ? "selected" : ""}>${c}</option>`,
+  ).join("");
+}
+
 document.querySelectorAll(".nav-btn[data-section]").forEach((btn) => {
   btn.addEventListener("click", function () {
     switchSection(this.dataset.section);
@@ -143,6 +140,24 @@ document.getElementById("agents-search").addEventListener("input", function () {
 document.getElementById("memory-search").addEventListener("input", function () {
   renderMemoryList(this.value);
 });
+
+async function loadCapabilities() {
+  try {
+    CAPABILITIES = await api("/api/capabilities");
+  } catch (e) {
+    CAPABILITIES = [
+      "chat",
+      "coding",
+      "deep_reasoning",
+      "finance",
+      "long_context",
+      "math",
+      "multimodal",
+      "reasoning",
+      "simple_tasks",
+    ];
+  }
+}
 
 async function loadAgents() {
   try {
@@ -174,7 +189,7 @@ function renderAgentsList(filter) {
         <span class="badge ${a.is_active ? "badge-active" : "badge-inactive"}">${a.is_active ? "aktiv" : "inaktiv"}</span>
         ${a.pipeline && a.pipeline.length ? '<span class="badge badge-pipeline">pipeline</span>' : ""}
       </div>
-      <div class="si-meta">${a.type || "—"} · ${a.work_capability || "balanced"} · ${a.schedule}</div>
+      <div class="si-meta">${a.type || "—"} · ${a.work_capability || "chat"} · ${a.schedule}</div>
     </div>
   `,
     )
@@ -208,10 +223,7 @@ async function selectAgent(id) {
       nsMap[d.namespace].push({ ...d, _idx: i });
     });
 
-    const capabilityOptions = CAPABILITIES.map(
-      (c) =>
-        `<option value="${c}" ${c === a.work_capability ? "selected" : ""}>${c}</option>`,
-    ).join("");
+    const capabilityOptions = _capabilityOptions(a.work_capability);
 
     const allSteps = [
       ...(a.pipeline || []).map((s) => ({ ...s, _section: "pipeline" })),
@@ -460,9 +472,13 @@ function _categoryOptions(selected) {
     .join("");
 }
 
+function _isSearchCapability(cap) {
+  return cap === "chat";
+}
+
 function _updateEditStepVisibility() {
   const cap = document.getElementById("edit-step-cap")?.value || "";
-  const isSearch = cap === "search";
+  const isSearch = _isSearchCapability(cap);
   const isFinance = cap === "finance";
   const fields = {
     "field-edit-searchquery": isSearch,
@@ -478,7 +494,7 @@ function _updateEditStepVisibility() {
 
 function _updateNewStepVisibility() {
   const cap = document.getElementById("new-step-cap")?.value || "";
-  const isSearch = cap === "search";
+  const isSearch = _isSearchCapability(cap);
   const isFinance = cap === "finance";
   const fields = {
     "field-new-searchquery": isSearch,
@@ -500,16 +516,12 @@ function editPipelineStep(agentId, stepIndex, section) {
       ? a.pipeline_after_template || []
       : a.pipeline || [];
   const step = steps[stepIndex];
-  const capOptions = CAPABILITIES.map(
-    (c) =>
-      `<option value="${c}" ${c === step.capability ? "selected" : ""}>${c}</option>`,
-  ).join("");
+  const capOptions = _capabilityOptions(step.capability);
   const onlyIfRoute = Array.isArray(step.only_if_route)
     ? step.only_if_route.join(", ")
     : step.only_if_route || "";
-  const cap = step.capability || "";
-  const isSearch = cap === "search";
-  const isFinance = cap === "finance";
+  const isSearch = _isSearchCapability(step.capability || "");
+  const isFinance = step.capability === "finance";
   openModal(
     "Pipeline-Step bearbeiten",
     `<div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="edit-step-id" value="${step.id}" /></div>
@@ -630,10 +642,7 @@ function editPipelineTemplate(agentId) {
   const a = agentsData.find((x) => x.id === agentId);
   const t = a.pipeline_template || {};
   const step = t.step || {};
-  const capOptions = CAPABILITIES.map(
-    (c) =>
-      `<option value="${c}" ${c === step.capability ? "selected" : ""}>${c}</option>`,
-  ).join("");
+  const capOptions = _capabilityOptions(step.capability);
   const itemsList = Array.isArray(t.foreach_items)
     ? t.foreach_items.join("\n")
     : "";
@@ -659,15 +668,15 @@ function editPipelineTemplate(agentId) {
      <div class="modal-field"><div class="modal-label">batch_size</div><input class="modal-input" id="tmpl-batch" type="number" value="${t.batch_size || 1}" /></div>
      <div class="modal-field"><div class="modal-label">aggregate_key</div><input class="modal-input" id="tmpl-agg" value="${t.aggregate_key || ""}" /></div>
      <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="tmpl-route" value="${t.only_if_route || ""}" /></div>
-     <div class="modal-field"><div class="modal-label">time_range für Search-Steps (leer = kein Filter)</div><select class="modal-select" id="tmpl-timerange">${_timeRangeOptions(t.time_range)}</select></div>
+     <div class="modal-field"><div class="modal-label">time_range für Chat-Steps (leer = kein Filter)</div><select class="modal-select" id="tmpl-timerange">${_timeRangeOptions(t.time_range)}</select></div>
      <hr class="divider">
      <div class="modal-label" style="margin-bottom:8px;">Step Template</div>
      <div class="modal-field"><div class="modal-label">ID ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-id" value="${step.id || "search_{{item_id}}"}" /></div>
      <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="tmpl-step-cap">${capOptions}</select></div>
      <div class="modal-field"><div class="modal-label">Prompt Template ({{item}} und {{item_id}} verfügbar)</div><textarea class="modal-input" id="tmpl-step-prompt" style="min-height:140px;">${step.prompt_template || ""}</textarea></div>
      <div class="modal-field"><div class="modal-label">Output Key ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-key" value="${step.output_key || "result_{{item_id}}"}" /></div>
-     <div class="modal-field"><div class="modal-label">search_query (nur für Search-Steps, {{item}} verfügbar)</div><input class="modal-input" id="tmpl-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{trigger_payload.ticker}} {{item}}" /></div>
-     <div class="modal-field"><div class="modal-label">categories (nur für Search-Steps)</div><select class="modal-select" id="tmpl-step-categories">${_categoryOptions(step.categories)}</select></div>`,
+     <div class="modal-field"><div class="modal-label">search_query (nur für Chat-Steps, {{item}} verfügbar)</div><input class="modal-input" id="tmpl-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{trigger_payload.ticker}} {{item}}" /></div>
+     <div class="modal-field"><div class="modal-label">categories (nur für Chat-Steps)</div><select class="modal-select" id="tmpl-step-categories">${_categoryOptions(step.categories)}</select></div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="savePipelineTemplate(${agentId})">Speichern</button>`,
   );
@@ -740,9 +749,7 @@ function addPipelineStep(agentId) {
   const a = agentsData.find((x) => x.id === agentId);
   const hasAfterTemplate =
     a.pipeline_after_template && a.pipeline_after_template.length > 0;
-  const capOptions = CAPABILITIES.map(
-    (c) => `<option value="${c}">${c}</option>`,
-  ).join("");
+  const capOptions = _capabilityOptions("");
   openModal(
     "Neuen Pipeline-Step hinzufügen",
     `<div class="modal-field">
@@ -1599,7 +1606,8 @@ async function loadTriggers() {
   }
 }
 
-function loadAll() {
+async function loadAll() {
+  await loadCapabilities();
   loadAgents();
   loadMemory();
   loadUsage();

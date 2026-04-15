@@ -8,7 +8,7 @@ import asyncpg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -110,6 +110,18 @@ class AgentDataPatch(BaseModel):
     value: str
 
 
+@app.get("/api/capabilities")
+async def get_capabilities() -> list[str]:
+    rows = await pool().fetch(
+        "SELECT DISTINCT unnest(capabilities) as cap FROM model_registry ORDER BY cap"
+    )
+    caps = [r["cap"] for r in rows]
+    if "finance" not in caps:
+        caps.append("finance")
+        caps.sort()
+    return caps
+
+
 @app.get("/api/agents")
 async def get_agents() -> list[dict]:
     rows = await pool().fetch(
@@ -131,7 +143,7 @@ async def get_agents() -> list[dict]:
             "schedule": r["schedule"],
             "instruction": config.get("instruction", ""),
             "type": config.get("type", ""),
-            "work_capability": config.get("work_capability", "balanced"),
+            "work_capability": config.get("work_capability", "chat"),
             "pipeline": config.get("pipeline", []),
             "pipeline_template": config.get("pipeline_template"),
             "pipeline_after_template": config.get("pipeline_after_template", []),

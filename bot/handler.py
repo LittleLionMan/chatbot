@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner, intent_classifier, agent_system_parser
 from bot.brain import ProviderRateLimitError, ProviderAuthError
-from bot.models import CAPABILITY_BALANCED, CAPABILITY_MULTIMODAL
+from bot.models import CAPABILITY_CHAT, CAPABILITY_MULTIMODAL
 from bot.agent_parser import _classify_work_capability, _generate_pipeline
 from bot.utils import parse_agent_config
 
@@ -26,12 +26,12 @@ Beispiele: "Was kostet Bitcoin?" → ja, "Was denkst du über KI?" → nein, "Wi
 async def _should_search(text: str) -> bool:
     try:
         from bot import brain as _brain
-        from bot.models import CAPABILITY_FAST
+        from bot.models import CAPABILITY_SIMPLE_TASKS
         result = await _brain.chat(
             system=_SEARCH_DECISION_SYSTEM,
             messages=[{"role": "user", "content": text}],
             max_tokens=5,
-            capability=CAPABILITY_FAST,
+            capability=CAPABILITY_SIMPLE_TASKS,
             caller="search_decision",
         )
         return result.strip().lower().startswith("ja")
@@ -298,7 +298,7 @@ async def _reply(
         if extracted.get("regenerate_pipeline"):
             new_pipeline = await _generate_pipeline(
                 current_config.get("instruction", ""),
-                current_config.get("work_capability", "balanced"),
+                current_config.get("work_capability", "chat"),
                 current_config.get("state_keys", ["last_run_summary"]),
             )
             current_config.pop("pipeline", None)
@@ -470,7 +470,7 @@ async def _reply(
             system=system,
             messages=llm_messages,
             use_web_search=needs_search,
-            capability=CAPABILITY_BALANCED,
+            capability=CAPABILITY_CHAT,
             caller="handler",
             pool=pool,
         )
