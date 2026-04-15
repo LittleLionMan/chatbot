@@ -110,7 +110,8 @@ async def _run_rss_config(pool: asyncpg.Pool, config: dict) -> None:
     config_id: int = config["id"]
     target_agent: str = config["target_agent"]
     feed_templates: list[str] = config["feed_templates"]
-    extra: dict = config.get("extra_config") or {}
+    extra_raw = config.get("extra_config") or {}
+    extra: dict = extra_raw if isinstance(extra_raw, dict) else {}
 
     watchlist = await _resolve_watchlist(pool, config)
     if not watchlist:
