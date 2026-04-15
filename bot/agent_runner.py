@@ -6,7 +6,7 @@ import telegram
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
 from bot.brain import ProviderRateLimitError
-from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING
+from bot.models import CAPABILITY_FAST, CAPABILITY_BALANCED, CAPABILITY_SEARCH, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -45,11 +45,10 @@ _MAX_SUMMARY_CHARS = 800
 
 
 def _build_relay_system(agent_name: str) -> str:
-    return f"""Du bist Bob. Formuliere den folgenden Agenten-Bericht als kurze Nachricht in der dritten Person.
-Beginne die Nachricht immer mit dem Namen des Agenten.
-Beispiele: "{agent_name} meldet: ...", "{agent_name} hat etwas gefunden: ...", "Laut {agent_name}: ..."
-Keine Einleitung, kein Abschluss — nur die Weiterleitung in Bobs Stimme.
-Behalte alle konkreten Fakten, Preise und Links vollständig bei."""
+    return f"""Du bist {agent_name}. Formuliere den folgenden Bericht als direkte Nachricht in der ersten Person.
+Beginne immer mit "{agent_name}:" — nie mit "Bob" oder einem anderen Namen.
+Keine Einleitung, kein Abschluss — nur die Nachricht direkt.
+Behalte alle konkreten Fakten, Kurse, Kursziele und Empfehlungen vollständig bei."""
 
 
 def _resolve_template(template: str, trigger_payload: dict[str, str]) -> str:
@@ -284,7 +283,7 @@ async def _execute_pipeline(
     state: dict[str, str],
     injected_data: dict[str, str],
     config_data: dict,
-) -> tuple[str, dict[str, str], bool]:
+) -> tuple[str, dict[str, str]]:
     context: dict[str, str] = {}
     context.update({k: v for k, v in state.items() if v})
     context.update(injected_data)
@@ -330,7 +329,7 @@ async def _execute_pipeline(
                     system=_AGENT_OUTPUT_SYSTEM,
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=1000,
-                    capability=CAPABILITY_SIMPLE_TASKS,
+                    capability=CAPABILITY_FAST,
                     caller=f"agent_output:{name}",
                     pool=pool,
                 )
@@ -357,7 +356,7 @@ async def _execute_pipeline(
                     system=_ROUTER_SYSTEM,
                     messages=[{"role": "user", "content": router_context}],
                     max_tokens=20,
-                    capability=CAPABILITY_SIMPLE_TASKS,
+                    capability=CAPABILITY_FAST,
                     caller=f"agent_router:{name}",
                     pool=pool,
                 )
@@ -370,7 +369,7 @@ async def _execute_pipeline(
                 raise
             continue
 
-        is_search_step = capability == CAPABILITY_CHAT
+        is_search_step = capability == CAPABILITY_SEARCH
         is_finance_step = capability == "finance"
         use_web_search = is_search_step
         web_search_max_uses = 3 if is_search_step else None
@@ -471,7 +470,7 @@ async def execute_agent(
     config_data: dict = parse_agent_config(agent["config"])
     schedule: str = agent["schedule"]
 
-    work_capability: str = config_data.get("work_capability", CAPABILITY_CHAT)
+    work_capability: str = config_data.get("work_capability", CAPABILITY_BALANCED)
 
     logger.info("Executing agent %d (%s) for user %d with capability=%s", agent_id, name, user_id, work_capability)
 
@@ -513,7 +512,7 @@ async def execute_agent(
             raw_structured = await brain.chat(
                 system=_AGENT_STRUCTURE_SYSTEM,
                 messages=[{"role": "user", "content": work_result}],
-                capability=CAPABILITY_SIMPLE_TASKS,
+                capability=CAPABILITY_FAST,
                 caller=f"agent_structure:{name}",
                 pool=pool,
             )
@@ -552,7 +551,7 @@ async def execute_agent(
             message_text = await brain.chat(
                 system=relay_system,
                 messages=[{"role": "user", "content": report}],
-                capability=CAPABILITY_SIMPLE_TASKS,
+                capability=CAPABILITY_FAST,
                 caller=f"agent_relay:{name}",
                 pool=pool,
             )
