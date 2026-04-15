@@ -12,11 +12,11 @@ _CLASSIFIER_SYSTEM = """Klassifiziere die Nutzeranfrage in genau eine der folgen
 Kategorien:
 - agent_system: Nutzer beschreibt mehrere koordinierte Aufgaben die zusammen ein System bilden — Sammeln + Analysieren, Beobachten + Melden + Aktualisieren, mehrere abhängige Schritte. Erkennungsmerkmale: mehrere Verben mit impliziter Reihenfolge oder Abhängigkeit, "und dann", "falls", "für jedes gefundene", "lasse laufen".
 - agent_create: Nutzer möchte einen einzelnen persistenten Agenten erstellen. Erkennungsmerkmale: "beobachte", "verfolge", "überwache", "halte mich auf dem Laufenden", "melde wenn", "analysiere laufend". Nur wenn es klar eine einzelne Aufgabe ist.
-- agent_trigger: Nutzer möchte einen existierenden Agenten JETZT oder einmalig außer der Reihe ausführen — unabhängig davon ob ein konkreter Auftrag dabei ist. Erkennungsmerkmale: "jetzt", "sofort", "einmal", "starte", "lauf", "außerhalb des Schedules", "außer der Reihe", Agentenname + einmalige Aufgabe oder direkter Ausführungsbefehl. Auch ohne explizites "jetzt" wenn klar eine Ausführung gemeint ist.
+- agent_trigger: Nutzer möchte einen existierenden Agenten JETZT oder einmalig außer der Reihe ausführen. Erkennungsmerkmale: "jetzt", "sofort", "einmal", "starte", "lauf", "außerhalb des Schedules", "außer der Reihe", Agentenname + expliziter Ausführungsbefehl. Nur wenn klar eine Ausführung gemeint ist — nicht bei Abfragen oder Statusfragen.
 - agent_config: Nutzer möchte technische Meta-Eigenschaften eines Agenten ändern die kein Gespräch erfordern — Capability neu klassifizieren, Pipeline generieren oder regenerieren, work_capability direkt setzen. Erkennungsmerkmale: "analysiere seine Capability", "klassifiziere neu", "generiere eine Pipeline", "setze work_capability", "optimiere seinen Workflow".
 - agent_stop: Nutzer möchte einen laufenden Agenten stoppen oder deaktivieren.
 - agent_list: Nutzer möchte explizit eine Liste seiner laufenden Agenten sehen.
-- agent_talk: Nutzer möchte die Konfiguration oder Instruktion eines Agenten inhaltlich ändern, oder fragt nach seinem Status. Erkennungsmerkmale: "mach das in Zukunft so", "ändere dein Suchkriterium", "analysiere in Zukunft auch X", "wie läuft X", "was hat X gefunden", "zeig mir den Status". NICHT wenn eine sofortige Ausführung gemeint ist.
+- agent_talk: Nutzer möchte die Konfiguration oder Instruktion eines Agenten inhaltlich ändern, fragt nach seinem Status, oder möchte gespeicherte Ergebnisse und Daten abfragen. Erkennungsmerkmale: "mach das in Zukunft so", "ändere dein Suchkriterium", "wie läuft X", "was hat X gefunden", "zeig mir", "was weißt du über", "gib mir den Bericht", "wie schätzt du ein", "was ist deine Meinung zu". NICHT wenn eine sofortige Ausführung gemeint ist.
 - task_create: Nutzer möchte eine neue stateless wiederkehrende Aufgabe erstellen. Jeder Lauf ist unabhängig, kein Vergleich mit früheren Ergebnissen.
 - task_stop: Nutzer möchte eine wiederkehrende Aufgabe beenden oder löschen.
 - task_list: Nutzer möchte seine aktiven Aufgaben sehen.
@@ -26,23 +26,29 @@ Trennlinie agent_trigger vs agent_talk:
 - Ausführung jetzt/einmalig → agent_trigger
 - Inhaltliche Konfigurationsänderung für zukünftige Läufe → agent_talk
 - Technische Meta-Änderung (Capability, Pipeline) → agent_config
+- Abfrage von gespeicherten Daten, Status oder Ergebnissen → agent_talk
+  ("zeig mir", "was weißt du über", "wie schätzt du ein", "gib mir den Bericht", "was hast du gefunden")
 
 Beispiele:
-"Jordan, analysiere BE neu" → agent_trigger
 "Lass Gecko jetzt laufen" → agent_trigger
-"Gecko, starte außerhalb des Schedules" → agent_trigger
-"Jordan soll EOSE überprüfen, aktueller Kurs $5.70" → agent_trigger
-"Gecko, starte eine Suche genau jetzt" → agent_trigger
-"Wie läuft Jordan?" → agent_talk
-"Jordan, ändere dein Suchkriterium auf Small Caps" → agent_talk
-"Jordan, analysiere in Zukunft auch Dividendenrendite" → agent_talk
-"Gecko, analysiere deine Capability neu" → agent_config
-"Jordan, generiere eine Pipeline" → agent_config
-"Gecko, setze work_capability auf search" → agent_config
+"Starte den Agenten außer der Reihe" → agent_trigger
+"Lauf mal kurz durch" → agent_trigger
+"Führe eine einmalige Analyse durch" → agent_trigger
+"Wie läuft der Agent?" → agent_talk
+"Was hast du bisher gefunden?" → agent_talk
+"Zeig mir deinen letzten Bericht" → agent_talk
+"Was weißt du über das Thema?" → agent_talk
+"Gib mir eine Zusammenfassung deiner Ergebnisse" → agent_talk
+"Wie schätzt du die aktuelle Lage ein?" → agent_talk
+"Ändere dein Suchkriterium auf Small Caps" → agent_talk
+"Analysiere in Zukunft auch Dividendenrendite" → agent_talk
+"Analysiere deine Capability neu" → agent_config
+"Generiere eine Pipeline" → agent_config
+"Setze work_capability auf deep_reasoning" → agent_config
 "Sammle Unternehmen nach Kriterien, analysiere jedes und beobachte News" → agent_system
 "Überwache meine Docker Container stündlich" → agent_create
 "Erinnere mich jeden Montag an den Standup" → task_create
-"Stopp Linus" → agent_stop
+"Stopp den Agenten" → agent_stop
 "Zeig meine Agenten" → agent_list
 "Was läuft gerade" → task_list
 "Was denkst du über KI?" → none"""
