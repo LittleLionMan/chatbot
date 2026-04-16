@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import asyncpg
 import httpx
@@ -13,10 +15,66 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 DB_URL = os.getenv("DATABASE_URL", "")
+ARTICLE_FETCH_TIMEOUT = 8.0
+ARTICLE_MAX_CHARS = 8000
 
 
 def _fingerprint(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()[:16]
+
+
+def _parse_pub_date(pub: str) -> datetime | None:
+    if not pub:
+        return None
+    try:
+        return parsedate_to_datetime(pub).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _parse_since_date(since: str) -> datetime | None:
+    if not since:
+        return None
+    try:
+        return datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+async def _fetch_article_text(client: httpx.AsyncClient, url: str) -> str:
+    import re
+
+    try:
+        resp = await client.get(url, timeout=ARTICLE_FETCH_TIMEOUT, follow_redirects=True)
+        resp.raise_for_status()
+        html = resp.text
+
+        html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r"<nav[^>]*>.*?</nav>", "", html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r"<header[^>]*>.*?</header>", "", html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r"<footer[^>]*>.*?</footer>", "", html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r"<aside[^>]*>.*?</aside>", "", html, flags=re.DOTALL | re.IGNORECASE)
+
+        for pattern in [
+            r"<article[^>]*>(.*?)</article>",
+            r'<main[^>]*>(.*?)</main>',
+            r'<div[^>]*role=["\']main["\'][^>]*>(.*?)</div>',
+            r'<div[^>]*class=["\'][^"\']*(?:article|content|story|post|body)[^"\']*["\'][^>]*>(.*?)</div>',
+        ]:
+            match = re.search(pattern, html, flags=re.DOTALL | re.IGNORECASE)
+            if match:
+                html = match.group(1)
+                break
+
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"&[a-zA-Z]+;", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+
+        return text[:ARTICLE_MAX_CHARS]
+    except Exception as e:
+        logger.debug("Article fetch failed for %s: %s", url[:80], e)
+        return ""
 
 
 async def _get_pool() -> asyncpg.Pool:
@@ -83,7 +141,7 @@ async def _enqueue_trigger(pool: asyncpg.Pool, target_agent: str, payload: dict)
         """,
         target_agent, json.dumps(payload),
     )
-    logger.info("Trigger → %s: %s", target_agent, str(payload)[:80])
+    logger.info("Trigger → %s: [%s] %s", target_agent, payload.get("key"), payload.get("reason", "")[:60])
 
 
 async def _fetch_feed(client: httpx.AsyncClient, url: str) -> list[dict]:
@@ -124,28 +182,47 @@ async def _run_rss_config(pool: asyncpg.Pool, config: dict) -> None:
 
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0 (compatible; BobMonitor/1.0)"}) as client:
         for item_key, (item_name, item_date) in watchlist.items():
+            since_dt = _parse_since_date(item_date)
             query = f"{item_key} {item_name}".strip().replace(" ", "+")
+
             for template in feed_templates:
                 url = template.format(query=query, key=item_key, name=item_name)
                 articles = await _fetch_feed(client, url)
+
                 for article in articles:
                     if not isinstance(article, dict):
                         continue
+
+                    # Artikel filtern die älter als die letzte Analyse sind
+                    pub_dt = _parse_pub_date(article["published"])
+                    if since_dt and pub_dt and pub_dt < since_dt:
+                        logger.debug("Skipping old article for %s: %s (%s)", item_key, article["title"][:50], article["published"])
+                        fp = _fingerprint(article["url"])
+                        seen.add(fp)
+                        await _mark_seen(pool, config_id, fp)
+                        continue
+
                     fp = _fingerprint(article["url"])
                     if fp in seen:
                         continue
                     seen.add(fp)
                     await _mark_seen(pool, config_id, fp)
+
+                    # Artikel-Content fetchen
+                    article_text = await _fetch_article_text(client, article["url"])
+
                     payload: dict = {
                         "key": item_key,
                         "name": item_name,
                         "reason": f"{article['title']} ({article['source']})",
+                        "article_text": article_text,
                         "article_url": article["url"],
                         "published": article["published"],
                         "since_date": item_date,
                     }
                     payload.update(extra.get("payload_extra", {}))
                     await _enqueue_trigger(pool, target_agent, payload)
+
             await asyncio.sleep(1)
 
 
