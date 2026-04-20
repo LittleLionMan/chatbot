@@ -38,30 +38,32 @@ Felder:
 - "instruction": Was soll der Agent tun? Vollständige, eigenständige Anweisung in natürlicher Sprache. So formulieren dass der Agent sie ohne weiteren Kontext ausführen kann. Maximal 400 Zeichen.
 - "state_keys": Liste von Schlüsseln die der Agent zwischen Läufen im Gedächtnis behalten soll. Immer enthalten: "last_run_summary". Weitere nach Bedarf.
 - "data_reads": Liste von Datenbank-Lesevorgängen die vor jedem Lauf automatisch ausgeführt werden. Zwei Typen:
-  - {"type": "state", "agent_name": "..."} — liest den kompletten State eines anderen Agenten. Nutze das wenn dieser Agent die primäre Datenquelle ist.
-  - {"type": "namespace", "namespace": "...", "agent_name": "...", "key": "...", "as": "..."} — liest einen DB-Namespace eines anderen Agenten. Optional "key" für einzelne Einträge, Template-Variablen wie {{trigger_payload.ticker}} möglich. Optionales "as"-Feld setzt einen fixen Context-Key statt des automatisch generierten Labels.
+  - {"type": "state", "agent_name": "..."} — liest den kompletten State eines anderen Agenten.
+  - {"type": "namespace", "namespace": "...", "agent_name": "...", "key": "...", "as": "..."} — liest einen DB-Namespace eines anderen Agenten. Optional "key" für einzelne Einträge, Template-Variablen wie {{trigger_payload.ticker}} möglich. Optionales "as"-Feld setzt einen fixen Context-Key.
   Leer wenn der Agent keine fremden Daten braucht.
 - "type": Kurzes Schlagwort für den Bereich. Beispiele: "monitoring", "research", "coding", "finance", "news", "market".
 - "schedule": Cron-Expression (5 Felder). Beispiele: stündlich = "0 * * * *", täglich um 9 = "0 9 * * *", montags = "0 9 * * 1".
 - "target": "same" für denselben Chat, "dm" für Privatnachricht.
 - "wants_name": true wenn der User einen Namen erwähnt oder explizit fragt, false sonst.
 - "suggested_name": Konkreter Name wenn der User einen nennt, sonst null.
+- "wants_monitor": true wenn der Agent kontinuierlich auf neue externe Ereignisse reagieren soll und ein RSS-Monitor sinnvoll wäre — News-Monitoring, Artikel-Tracking. False sonst.
+- "wants_scraper": true wenn der Agent Listings von Marktplätzen oder Jobportalen verarbeiten soll und ein Scraper-Service sinnvoll wäre — Gebrauchtmarkt, Immobilien, Stellenanzeigen. False sonst.
 
 Wenn kein sinnvoller Zeitplan erkennbar ist, setze schedule auf null.
 
 Beispiele:
 
 Eingabe: "Überwache meine Docker Container stündlich und sag mir wenn einer down ist"
-Output: {"instruction": "Prüfe den Status der laufenden Docker Container. Vergleiche mit dem letzten bekannten Zustand. Melde nur wenn sich etwas verändert hat.", "state_keys": ["last_run_summary", "known_container_states"], "data_reads": [], "type": "monitoring", "schedule": "0 * * * *", "target": "same", "wants_name": false, "suggested_name": null}
+Output: {"instruction": "Prüfe den Status der laufenden Docker Container. Vergleiche mit dem letzten bekannten Zustand. Melde nur wenn sich etwas verändert hat.", "state_keys": ["last_run_summary", "known_container_states"], "data_reads": [], "type": "monitoring", "schedule": "0 * * * *", "target": "same", "wants_name": false, "suggested_name": null, "wants_monitor": false}
 
-Eingabe: "Erstelle täglich um 9 für jeweils ein Unternehmen aus Gordons Liste eine Fundamentalanalyse"
-Output: {"instruction": "Lies Gordons Unternehmensliste. Wähle ein Unternehmen ohne Fundamentalanalyse und erstelle eine vollständige Analyse.", "state_keys": ["last_run_summary", "analyzed_tickers"], "data_reads": [{"type": "state", "agent_name": "Gordon"}], "type": "finance", "schedule": "0 9 * * *", "target": "same", "wants_name": false, "suggested_name": null}
+Eingabe: "Beobachte täglich Nachrichten zu meiner Aktien-Watchlist und melde relevante Entwicklungen"
+Output: {"instruction": "Prüfe neue Nachrichten zu den Unternehmen in der Watchlist. Melde nur relevante Entwicklungen die den Kurs oder die Fundamentaldaten beeinflussen könnten.", "state_keys": ["last_run_summary", "watchlist"], "data_reads": [], "type": "news", "schedule": "0 9 * * *", "target": "same", "wants_name": false, "suggested_name": null, "wants_monitor": true}
 
-Eingabe: "Analysiere täglich um 10 das Unternehmen das per Trigger-Payload als ticker übergeben wird"
-Output: {"instruction": "Erstelle eine Fundamentalanalyse für den per trigger_payload.ticker übergebenen Ticker.", "state_keys": ["last_run_summary"], "data_reads": [{"type": "namespace", "namespace": "analyses", "key": "{{trigger_payload.ticker}}", "as": "existing_analysis"}], "type": "finance", "schedule": "0 10 * * *", "target": "same", "wants_name": false, "suggested_name": null}
+Eingabe: "Analysiere täglich ein Unternehmen aus der Liste die ein anderer Agent sammelt"
+Output: {"instruction": "Lies die Unternehmensliste aus dem State des Sammler-Agenten. Wähle ein Unternehmen ohne bestehende Analyse und erstelle eine vollständige Fundamentalanalyse.", "state_keys": ["last_run_summary", "analyzed_companies"], "data_reads": [{"type": "state", "agent_name": "Sammler"}], "type": "finance", "schedule": "0 9 * * *", "target": "same", "wants_name": false, "suggested_name": null, "wants_monitor": false}
 
-Eingabe: "Beobachte RTX 4060 Ti Preise täglich unter 220€, nenn ihn Linus"
-Output: {"instruction": "Suche nach Angeboten für RTX 4060 Ti unter 220€ auf deutschen Sekundärmarkt-Plattformen. Vergleiche mit bekannten Fundstücken. Melde nur neue Treffer oder relevante Preisänderungen.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 9 * * *", "target": "same", "wants_name": true, "suggested_name": "Linus"}"""
+Eingabe: "Verfolge täglich Open-Source-Projekte auf GitHub die zu meinen Interessen passen, nenn ihn Scout"
+Output: {"instruction": "Suche nach neuen interessanten Open-Source-Projekten auf GitHub. Vergleiche mit bereits bekannten Projekten. Melde nur neue relevante Funde.", "state_keys": ["last_run_summary", "known_projects"], "data_reads": [], "type": "research", "schedule": "0 9 * * *", "target": "same", "wants_name": true, "suggested_name": "Scout", "wants_monitor": false}"""
 
 _CAPABILITY_CLASSIFIER_SYSTEM = """Analysiere diese Agent-Instruction und bestimme welche primäre Fähigkeit der ausführende LLM-Call benötigt.
 
@@ -70,18 +72,18 @@ Antworte NUR mit einem dieser Werte, kein anderer Text:
 - balanced: moderate Analyse, Zusammenfassungen, normaler Informationsabruf
 - search: Web-Recherche, Nachrichtenauswertung, große Mengen Text zusammenfassen und bewerten
 - reasoning: Analysen mit mehreren Abhängigkeiten, Bewertungen die Urteilsvermögen erfordern
-- deep_reasoning: komplexe mehrstufige Schlussfolgerungen mit vielen Interdependenzen — Fundamentalanalysen, strategische Systembewertungen, Entscheidungen mit langfristigen Konsequenzen die schwer rückgängig zu machen sind
+- deep_reasoning: komplexe mehrstufige Schlussfolgerungen mit vielen Interdependenzen — strategische Systembewertungen, Entscheidungen mit langfristigen Konsequenzen
 - coding: Code schreiben, debuggen, Codebasen analysieren
-- finance: Aktuelle Kursdaten, Bilanzkennzahlen, KGV, Marktcap für Börsenticker abrufen — nur wenn der Agent hauptsächlich Finanzdaten abruft ohne komplexe Analyse
+- finance: Aktuelle Kursdaten, Bilanzkennzahlen für Börsenticker abrufen — nur wenn der Agent hauptsächlich Finanzdaten abruft ohne komplexe Analyse
 
 Wähle deep_reasoning nur wenn die Aufgabe wirklich von tiefem Reasoning profitiert — nicht als Default für alles Komplexe.
 
 Beispiele:
-"Überwache Docker Container und melde wenn einer down ist" → fast
-"Suche täglich nach GPU-Angeboten unter 300€ auf Secondhand-Plattformen" → search
+"Prüfe den Status der laufenden Docker Container und melde wenn einer down ist" → fast
+"Suche täglich nach neuen Open-Source-Projekten auf relevanten Plattformen" → search
 "Prüfe aktuelle Nachrichten zu Unternehmen auf der Watchlist" → search
 "Erstelle vollständige Fundamentalanalysen inkl. Bilanzqualität, Marktposition und Kursziel" → deep_reasoning
-"Bewerte ob neue Quartalszahlen die bestehende Analyse verändern" → reasoning
+"Bewerte ob neue Quartalszahlen die bestehende Einschätzung verändern" → reasoning
 "Schreibe und teste neue API-Endpoints für das Projekt" → coding
 "Fasse den täglichen Wetterbericht zusammen" → balanced"""
 
@@ -100,16 +102,91 @@ Wenn vollständige gespeicherte Inhalte vorhanden sind (z.B. eine Analyse), nutz
 
 Mögliche Anfragen:
 - Statusabfrage ("Wie läuft X?", "Was hat X gefunden?") → fasse State, Beobachtungen und gespeicherte Daten in Bobs Stimme zusammen
-- Inhaltsfrage zu gespeicherten Daten ("Was denkt Jordan über ENPH?") → beantworte auf Basis der vollständigen gespeicherten Inhalte
+- Inhaltsfrage zu gespeicherten Daten → beantworte auf Basis der vollständigen gespeicherten Inhalte
 - Inhaltliche Konfigurationsänderung (Suchkriterien, Häufigkeit, Fokus, Instruktion) → bestätige knapp was geändert wird, gib das vollständige neue config-Objekt zurück: ```config\n{...}\n```
 - Umbenennung → bestätige knapp, gib den neuen Namen zurück: ```name\nNeuerName\n```
 - Kombination aus mehreren Änderungen → alle zutreffenden Blöcke zurückgeben
 
 Wenn du die Konfiguration änderst: gib das vollständige config-Objekt zurück mit ALLEN bestehenden Feldern.
 Das config-Objekt kann folgende Felder enthalten: instruction, state_keys, data_reads, type, work_capability, pipeline, pipeline_template, pipeline_after_template.
-Ändere NUR instruction, state_keys, data_reads, type oder work_capability — niemals pipeline, pipeline_template oder pipeline_after_template. Diese werden separat verwaltet.
+Ändere NUR instruction, state_keys, data_reads, type oder work_capability — niemals pipeline, pipeline_template oder pipeline_after_template."""
 
-Wichtig: Technische Meta-Operationen wie Capability-Klassifizierung oder Pipeline-Generierung werden separat behandelt — du musst sie hier nicht zurückgeben."""
+_PIPELINE_GENERATOR_SYSTEM = """Du entwirfst eine Ausführungs-Pipeline für einen Agenten.
+
+Die Konfiguration besteht aus drei optionalen Teilen:
+1. "pipeline": Feste Steps (Router, schnelle State-Operationen)
+2. "pipeline_template": Wiederholbarer Step für variable Listen
+3. "pipeline_after_template": Feste Steps nach dem Template (Analyse, Trigger)
+
+Antworte NUR mit einem JSON-Objekt. Kein anderer Text, keine Markdown-Backticks.
+
+Felder in "pipeline" und "pipeline_after_template" — jeder Step:
+- "id": snake_case Bezeichner
+- "capability": "fast", "search", "finance", "reasoning", "deep_reasoning"
+- "prompt_template": Anweisung für das LLM. Bei capability=finance wird kein LLM-Call gemacht — der Finance-Service liefert direkt strukturierte Kursdaten. prompt_template kann leer bleiben.
+- "ticker_key": Nur für finance-Steps. Context-Key der den Ticker enthält. Standard: "selected_ticker".
+- "output_key": Speicher-Key
+- "is_router": true nur für Router
+- "is_output": true für den letzten Step der Pipeline. Dieser Step gibt direkt valides JSON aus. Jede Pipeline MUSS genau einen is_output-Step als letzten Step haben. capability="fast". Das JSON enthält: report (max 3 Sätze oder "KEINE_AENDERUNG"), notify_user (bool), state_updates (dict), tool_calls (list). Verfügbare Tools: db_write, db_write_from_work (source_key=Pipeline-Context-Key), trigger_agent (target_agent_name exakt wie genannt), notify_user.
+- "only_if_route": Route-Filter (String oder Liste)
+- "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year".
+- "search_query": Nur für Search-Steps. Kurze optimierte Suchanfrage (1-6 Wörter). Template-Variablen erlaubt.
+- "categories": Nur für Search-Steps. Werte: "general", "news", "finance", "it", "science".
+
+Felder in "pipeline_template":
+- "source": "state", "injected" oder "static"
+- "foreach": State-Key (bei state/injected)
+- "foreach_items": Feste Liste (bei static)
+- "split_by": Trennzeichen (Standard ",")
+- "batch_size": Items pro Step
+- "aggregate_key": Key unter dem alle Template-Outputs gesammelt werden
+- "only_if_route": Route-Filter
+- "step": Template mit {{item}} und {{item_id}}
+
+WANN pipeline_template — NUR wenn:
+- source=state/injected: Eine Liste im State wird verarbeitet deren Länge zur Laufzeit variabel ist.
+- source=static: Instruction nennt explizit mehr als 3 gleichartige Items die identisch verarbeitet werden.
+
+KEIN pipeline_template wenn:
+- Die Instruction Themenbereiche auflistet → feste Search-Steps
+- 3 oder weniger Items → einzelne feste Steps
+- Items unterschiedlich behandelt werden
+
+Router einbauen wenn Instruction Modi beschreibt (Trigger-Modus vs Normal-Modus).
+
+Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
+Der letzte Step jeder Pipeline ist IMMER ein is_output-Step mit capability="fast".
+
+Beispiel "Themenbereiche recherchieren" (feste Steps):
+{
+  "pipeline": [
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob ein Trigger-Payload vorhanden ist der eine sofortige Aktion erfordert. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
+    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe die Trigger-Aktion aus gemäß trigger_payload.", "output_key": "trigger_done"}
+  ],
+  "pipeline_after_template": [
+    {"id": "search_thema_1", "capability": "search", "only_if_route": "normal", "search_query": "...", "categories": "...", "prompt_template": "Suche nach [Thema]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_1"},
+    {"id": "analyze", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Analysiere: {{search_1}}. Wende Filterkriterien aus Instruction an.", "output_key": "analysis"},
+    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+  ]
+}
+
+Beispiel "Variable Liste aus State verarbeiten" (Template):
+{
+  "pipeline": [
+    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob Trigger-Payload einen sofortigen Sonderfall auslöst. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"}
+  ],
+  "pipeline_template": {
+    "source": "state", "foreach": "[state_key_mit_liste]", "split_by": ",", "batch_size": 1,
+    "aggregate_key": "all_results", "only_if_route": "normal",
+    "step": {"id": "process_{{item_id}}", "capability": "search", "search_query": "{{item}}", "prompt_template": "Verarbeite {{item}} gemäß Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
+  },
+  "pipeline_after_template": [
+    {"id": "analyze", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}.", "output_key": "analysis"},
+    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+  ]
+}"""
+
+_PIPELINE_CAPABILITIES = {"search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
 
 
 def _pick_name_for_topic(topic_type: str) -> str:
@@ -134,108 +211,6 @@ async def _classify_work_capability(instruction: str) -> str:
     except Exception as e:
         logger.warning("Capability classification failed: %s", e)
         return CAPABILITY_CHAT
-
-
-_PIPELINE_GENERATOR_SYSTEM = """Du entwirfst eine Ausführungs-Pipeline für einen Agenten.
-
-Die Konfiguration besteht aus drei optionalen Teilen:
-1. "pipeline": Feste Steps (Router, schnelle State-Operationen)
-2. "pipeline_template": Wiederholbarer Step für variable Listen
-3. "pipeline_after_template": Feste Steps nach dem Template (Analyse, Trigger)
-
-Antworte NUR mit einem JSON-Objekt. Kein anderer Text, keine Markdown-Backticks.
-
-Felder in "pipeline" und "pipeline_after_template" — jeder Step:
-- "id": snake_case Bezeichner
-- "capability": "fast", "search", "finance", "reasoning", "deep_reasoning"
-- "prompt_template": Anweisung für das LLM. Bei capability=finance wird kein LLM-Call gemacht — der Finance-Service liefert direkt strukturierte Kursdaten. prompt_template kann leer bleiben.
-- "ticker_key": Nur für finance-Steps. Context-Key der den Ticker enthält. Standard: "selected_ticker". Vorherige Outputs als {{output_key}}, State als {{key}}, Payload als {{trigger_payload.key}}
-- "output_key": Speicher-Key
-- "is_router": true nur für Router
-- "is_output": true für den letzten Step der Pipeline. Dieser Step gibt direkt valides JSON aus und ersetzt den nachgelagerten Structure-Call. Jede Pipeline MUSS genau einen is_output-Step als letzten Step haben. capability="fast". Das JSON enthält: report (max 3 Sätze oder "KEINE_AENDERUNG"), notify_user (bool), state_updates (dict), tool_calls (list). Verfügbare Tools: db_write, db_write_from_work (source_key=Pipeline-Context-Key), trigger_agent (target_agent_name exakt wie genannt), notify_user. Nur Tool-Calls erzeugen die im Prompt explizit angewiesen werden.
-- "only_if_route": Route-Filter (String oder Liste)
-- "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year". Setze "year" für Finance-, News- und Markt-Agents bei denen aktuelle Daten wichtig sind. Weglassen wenn historische oder zeitlose Daten gesucht werden.
-- "search_query": Nur für Search-Steps. Kurze, optimierte Suchanfrage für SearXNG (1-6 Wörter), getrennt vom prompt_template. Template-Variablen wie {{selected_ticker}} sind erlaubt. Beispiel: "{{selected_ticker}} Finanzkennzahlen 2026". Wenn nicht gesetzt, wird prompt_template als Query verwendet — was fast immer schlechte Ergebnisse liefert. Immer setzen bei Search-Steps.
-- "categories": Nur für Search-Steps. Steuert welche SearXNG-Engine-Kategorie genutzt wird. Werte: "general" (Standard), "news" (News-Agents), "finance" (Finanz-Agents, Kurse, Bilanzen), "it" (Tech/Code-Agents), "science" (Research/Paper-Agents). Setze immer die passende Kategorie — nie "general" wenn eine spezifischere passt.
-
-Felder in "pipeline_template":
-- "source": "state", "injected" oder "static"
-- "foreach": State-Key (bei state/injected)
-- "foreach_items": Feste Liste (bei static)
-- "split_by": Trennzeichen (Standard ",")
-- "batch_size": Items pro Step
-- "aggregate_key": Key unter dem alle Template-Outputs gesammelt werden
-- "only_if_route": Route-Filter
-- "step": Template mit {{item}} und {{item_id}}
-
-WANN pipeline_template — NUR wenn:
-- source=state/injected: Eine Liste im State wird verarbeitet deren Länge zur Laufzeit variabel ist. Beispiel: alle Ticker aus "fundamentalanalyse_vorhanden" — Anzahl unbekannt.
-- source=static: Instruction nennt explizit mehr als 3 gleichartige Items die identisch verarbeitet werden. Beispiel: 5 GPU-Modelle mit je gleicher Suche.
-
-KEIN pipeline_template wenn:
-- Die Instruction Themenbereiche/Sektoren auflistet → feste Search-Steps
-- Eine Liste als Ausschlusskriterium dient (z.B. "already known") → kein foreach
-- 3 oder weniger Items → einzelne feste Steps
-- Items unterschiedlich behandelt werden
-
-Router einbauen wenn Instruction Modi beschreibt (Trigger-Modus vs Normal-Modus).
-Finance-Steps (capability=finance) rufen direkt den internen Finance-Service auf — kein LLM-Call, keine Suche:
-- Liefern: aktueller Kurs, KGV (trailing/forward), Marktkapitalisierung, 52-Wochen-Range, Margen, Verschuldung, Cashflow, Eigenkapitalrendite, Analyst-Konsens, Kursziel
-- Nutze finance-Steps immer wenn aktuelle Kursdaten oder Bilanzkennzahlen für einen bekannten Börsenticker gebraucht werden
-- prompt_template kann leer bleiben oder eine kurze Beschreibung enthalten — er wird ignoriert
-- ticker_key: Context-Key der den Ticker enthält (Standard: "selected_ticker")
-- Kein time_range, kein search_query, keine categories bei finance-Steps
-
-Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
-Der letzte Step jeder Pipeline ist IMMER ein is_output-Step mit capability="fast". Er gibt direkt valides JSON aus — kein weiterer LLM-Call folgt. Der vorletzte Step kann reasoning/deep_reasoning sein.
-
-Beispiel "N Themenbereiche recherchieren" (feste Steps, KEIN Template — Bereiche fix in Instruction):
-{
-  "pipeline": [
-    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob ein Trigger-Payload vorhanden ist der eine sofortige Aktion erfordert. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
-    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe die Trigger-Aktion aus gemäß trigger_payload.", "output_key": "trigger_done"}
-  ],
-  "pipeline_after_template": [
-    {"id": "search_thema_1", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach [erstem Themenbereich aus Instruction]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_1"},
-    {"id": "search_thema_2", "capability": "search", "only_if_route": "normal", "prompt_template": "Suche nach [zweitem Themenbereich aus Instruction]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_2"},
-    {"id": "analyze", "capability": "deep_reasoning", "only_if_route": "normal", "prompt_template": "Analysiere: {{search_1}} {{search_2}}. Wende Filterkriterien aus Instruction an.", "output_key": "analysis"},
-    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
-  ]
-}
-
-Beispiel "Variable Liste aus State verarbeiten" (Template — Listenlänge zur Laufzeit unbekannt):
-{
-  "pipeline": [
-    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob Trigger-Payload einen sofortigen Sonderfall auslöst. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
-    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe Sonderfall-Logik aus gemäß trigger_payload.", "output_key": "trigger_done"}
-  ],
-  "pipeline_template": {
-    "source": "state", "foreach": "[state_key_mit_liste]", "split_by": ",", "batch_size": 1,
-    "aggregate_key": "all_results", "only_if_route": "normal",
-    "step": {"id": "process_{{item_id}}", "capability": "search", "prompt_template": "Verarbeite {{item}} gemäß Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
-  },
-  "pipeline_after_template": [
-    {"id": "analyze", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}. Erstelle finales Ergebnis gemäß Instruction.", "output_key": "analysis"},
-    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
-  ]
-}
-
-Beispiel "Feste Liste gleichartiger Items durchsuchen" (static Template — >3 identisch verarbeitete Items):
-{
-  "pipeline_template": {
-    "source": "static",
-    "foreach_items": ["[Item 1 aus Instruction]", "[Item 2 aus Instruction]", "[Item 3 aus Instruction]", "[Item 4 aus Instruction]"],
-    "batch_size": 1, "aggregate_key": "all_results",
-    "step": {"id": "search_{{item_id}}", "capability": "search", "prompt_template": "Suche nach {{item}} gemäß den Kriterien aus der Instruction. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "result_{{item_id}}"}
-  },
-  "pipeline_after_template": [
-    {"id": "analyze", "capability": "reasoning", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}. Wende Bewertungskriterien aus Instruction an.", "output_key": "analysis"},
-    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
-  ]
-}"""
-
-
-_PIPELINE_CAPABILITIES = {"search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
 
 
 async def _generate_pipeline(instruction: str, work_capability: str, state_keys: list[str]) -> dict | None:
@@ -274,33 +249,6 @@ async def _generate_pipeline(instruction: str, work_capability: str, state_keys:
     except Exception as e:
         logger.warning("Pipeline generation failed: %s", e)
         return None
-
-
-_MONITOR_SUGGESTION_TYPES = {"news", "market", "monitoring"}
-
-_MONITOR_TEMPLATES: dict[str, dict] = {
-    "rss": {
-        "monitor_type": "rss",
-        "feed_templates": [
-            "https://news.google.com/rss/search?q={query}+stock&hl=en&gl=US&ceid=US:en",
-            "https://news.google.com/rss/search?q={query}&hl=de&gl=DE&ceid=DE:de",
-        ],
-        "poll_interval_seconds": 900,
-        "source_format": "comma_list",
-    }
-}
-
-
-def suggest_monitor_for_agent(agent_config: dict, agent_name: str) -> str | None:
-    agent_type = agent_config.get("type", "")
-    if agent_type not in _MONITOR_SUGGESTION_TYPES:
-        return None
-    return (
-        f"Tipp: Für {agent_name} könnte ein RSS-Monitor-Service sinnvoll sein, "
-        f"der den Agenten automatisch triggert wenn neue relevante Artikel erscheinen — "
-        f"statt dass er selbst täglich pollt. Sag mir 'Richte den RSS-Monitor für {agent_name} ein' "
-        f"und ich erkläre wie."
-    )
 
 
 async def resolve_agent_by_text(
@@ -407,6 +355,8 @@ async def parse_agent_creation(
             "next_run_display": next_run_local,
             "wants_name": bool(parsed.get("wants_name", False)),
             "suggested_name": raw_suggested,
+            "wants_monitor": bool(parsed.get("wants_monitor", False)),
+            "wants_scraper": bool(parsed.get("wants_scraper", False)),
         }
     except Exception as e:
         logger.warning("Agent parsing failed: %s", e)
@@ -455,7 +405,7 @@ async def handle_agent_talk(
         f"Aktueller State:\n{state_summary}\n\n"
         f"Bisherige Beobachtungen:\n- {memories_summary}"
         + (f"\n\nGespeicherte Daten (Namespace/Key: Vorschau):\n{data_summary}" if data_summary else "")
-        + (f"\n\n{'\n\n'.join(full_content_blocks)}" if full_content_blocks else "")
+        + (f"\n\n{chr(10).join(full_content_blocks)}" if full_content_blocks else "")
     )
 
     try:

@@ -180,17 +180,41 @@ CREATE TABLE IF NOT EXISTS monitor_seen (
 
 CREATE INDEX IF NOT EXISTS monitor_seen_config_idx ON monitor_seen (config_id);
 
-INSERT INTO monitor_configs (monitor_type, name, source_agent, source_state_key, source_format, target_agent, feed_templates, poll_interval_seconds)
-VALUES (
-    'rss',
-    'Finanz-News für Jim Cramer',
-    'Jordan',
-    'analyses_overview',
-    'pipe_delimited_overview',
-    'Jim Cramer',
-    ARRAY[
-        'https://news.google.com/rss/search?q={query}+stock&hl=en&gl=US&ceid=US:en',
-        'https://news.google.com/rss/search?q={query}&hl=de&gl=DE&ceid=DE:de'
-    ],
-    900
-) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS scraper_configs (
+    id SERIAL PRIMARY KEY,
+    platform TEXT NOT NULL,
+    category TEXT NOT NULL,
+    query TEXT NOT NULL,
+    filters JSONB NOT NULL DEFAULT '{}',
+    target_agent TEXT NOT NULL,
+    poll_interval_seconds INT NOT NULL DEFAULT 3600,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    last_scraped_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS scraper_configs_active_idx ON scraper_configs (is_active, last_scraped_at);
+
+CREATE TABLE IF NOT EXISTS listings (
+    id SERIAL PRIMARY KEY,
+    platform TEXT NOT NULL,
+    category TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    price NUMERIC,
+    currency TEXT,
+    location TEXT,
+    condition TEXT,
+    seller_name TEXT,
+    seller_rating NUMERIC,
+    attributes JSONB NOT NULL DEFAULT '{}',
+    raw_text TEXT,
+    first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (platform, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS listings_platform_category_idx ON listings (platform, category);
+CREATE INDEX IF NOT EXISTS listings_first_seen_idx ON listings (first_seen_at DESC);
+CREATE INDEX IF NOT EXISTS listings_category_idx ON listings (category, first_seen_at DESC);

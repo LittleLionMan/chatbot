@@ -1,0 +1,20 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    asyncpg \
+    httpx \
+    playwright \
+    beautifulsoup4 \
+    lxml
+
+RUN playwright install chromium --with-deps
+
+WORKDIR /app
+COPY main.py .
+COPY platforms/ ./platforms/
+
+CMD ["python", "-u", "main.py"]

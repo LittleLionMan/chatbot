@@ -933,6 +933,7 @@
                     Agenten
                 </button>
                 <button class="nav-btn" data-section="memory">Memory</button>
+                <button class="nav-btn" data-section="scrapers">Scraper</button>
                 <button class="nav-btn" data-section="usage">Usage</button>
                 <button class="nav-btn" data-section="registry">
                     Registry
@@ -1006,6 +1007,25 @@
                 </div>
                 <div class="detail" id="memory-detail">
                     <div class="empty-state">← Eintrag auswählen</div>
+                </div>
+            </div>
+
+            <div class="section" id="section-scrapers">
+                <div class="sidebar" id="scrapers-sidebar">
+                    <div id="scrapers-list">
+                        <div
+                            style="
+                                font-size: 13px;
+                                color: var(--text3);
+                                padding: 8px;
+                            "
+                        >
+                            Lade…
+                        </div>
+                    </div>
+                </div>
+                <div class="detail" id="scrapers-detail">
+                    <div class="empty-state">← Scraper auswählen</div>
                 </div>
             </div>
 
@@ -1090,6 +1110,13 @@
                     <circle cx="12" cy="9" r="2.5" />
                 </svg>
                 <span class="bottom-nav-label">Memory</span>
+            </button>
+            <button class="bottom-nav-item" data-section="scrapers">
+                <svg viewBox="0 0 24 24">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.35-4.35" />
+                </svg>
+                <span class="bottom-nav-label">Scraper</span>
             </button>
             <button class="bottom-nav-item" data-section="usage">
                 <svg viewBox="0 0 24 24">

@@ -560,55 +560,6 @@ async def log_llm_usage(
     )
 
 
-async def set_pending_agent_system(pool: asyncpg.Pool, user_id: int, plan_json: str) -> None:
-    await pool.execute(
-        """
-        INSERT INTO agent_state (agent_id, key, value, updated_at)
-        SELECT id, 'pending_system_plan', $2, NOW()
-        FROM agents WHERE user_id = $1 AND is_active = TRUE
-        LIMIT 1
-        ON CONFLICT (agent_id, key) DO NOTHING
-        """,
-        user_id, plan_json,
-    )
-    await pool.execute(
-        """
-        INSERT INTO users (telegram_id, username, first_name, last_name, timezone)
-        VALUES ($1, NULL, NULL, NULL, 'UTC')
-        ON CONFLICT (telegram_id) DO UPDATE SET last_seen_at = NOW()
-        """,
-        user_id,
-    )
-    await pool.execute(
-        "UPDATE users SET last_seen_at = NOW() WHERE telegram_id = $1",
-        user_id,
-    )
-
-
-async def get_pending_agent_system(pool: asyncpg.Pool, user_id: int) -> str | None:
-    row = await pool.fetchrow(
-        """
-        SELECT as2.value FROM agent_state as2
-        JOIN agents a ON a.id = as2.agent_id
-        WHERE a.user_id = $1 AND as2.key = 'pending_system_plan'
-        LIMIT 1
-        """,
-        user_id,
-    )
-    return row["value"] if row else None
-
-
-async def clear_pending_agent_system(pool: asyncpg.Pool, user_id: int) -> None:
-    await pool.execute(
-        """
-        DELETE FROM agent_state
-        WHERE key = 'pending_system_plan'
-          AND agent_id IN (SELECT id FROM agents WHERE user_id = $1)
-        """,
-        user_id,
-    )
-
-
 async def create_monitor_config(
     pool: asyncpg.Pool,
     monitor_type: str,
@@ -641,3 +592,86 @@ async def get_monitor_configs(pool: asyncpg.Pool) -> list[dict]:
         "SELECT * FROM monitor_configs ORDER BY id"
     )
     return [dict(r) for r in rows]
+
+
+async def create_scraper_config(
+    pool: asyncpg.Pool,
+    platform: str,
+    category: str,
+    query: str,
+    target_agent: str,
+    filters: dict | None = None,
+    poll_interval_seconds: int = 3600,
+) -> int:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO scraper_configs
+            (platform, category, query, filters, target_agent, poll_interval_seconds)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id
+        """,
+        platform, category, query,
+        json.dumps(filters or {}),
+        target_agent, poll_interval_seconds,
+    )
+    return row["id"]
+
+
+async def get_scraper_configs(pool: asyncpg.Pool, active_only: bool = True) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, platform, category, query, filters, target_agent,
+               poll_interval_seconds, is_active, last_scraped_at, created_at
+        FROM scraper_configs
+        WHERE ($1 = FALSE OR is_active = TRUE)
+        ORDER BY created_at DESC
+        """,
+        active_only,
+    )
+    return [dict(r) for r in rows]
+
+
+async def deactivate_scraper_config(pool: asyncpg.Pool, config_id: int) -> None:
+    await pool.execute(
+        "UPDATE scraper_configs SET is_active = FALSE WHERE id = $1",
+        config_id,
+    )
+
+
+async def get_listings(
+    pool: asyncpg.Pool,
+    category: str | None = None,
+    platform: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, platform, category, external_id, url, title, price, currency,
+               location, condition, seller_name, seller_rating, attributes, raw_text,
+               first_seen_at, last_seen_at
+        FROM listings
+        WHERE ($1::text IS NULL OR category = $1)
+          AND ($2::text IS NULL OR platform = $2)
+        ORDER BY first_seen_at DESC
+        LIMIT $3
+        """,
+        category, platform, limit,
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_listing_by_id(pool: asyncpg.Pool, listing_id: int) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT id, platform, category, external_id, url, title, price, currency,
+               location, condition, seller_name, seller_rating, attributes, raw_text,
+               first_seen_at, last_seen_at
+        FROM listings WHERE id = $1
+        """,
+        listing_id,
+    )
+    return dict(row) if row else None
+
+
+async def delete_listing(pool: asyncpg.Pool, listing_id: int) -> None:
+    await pool.execute("DELETE FROM listings WHERE id = $1", listing_id)

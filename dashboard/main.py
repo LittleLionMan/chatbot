@@ -482,14 +482,6 @@ async def get_usage() -> dict:
         ORDER BY (SUM(u.input_tokens) + SUM(u.output_tokens)) DESC
         """
     )
-    daily = await pool().fetch(
-        """
-        SELECT DATE(created_at) as day, SUM(input_tokens) as input, SUM(output_tokens) as output
-        FROM llm_usage WHERE created_at > NOW() - INTERVAL '14 days'
-        GROUP BY DATE(created_at) ORDER BY day ASC
-        """
-    )
-
     model_stats = []
     for r in by_model:
         input_cost = float(r["input_cost_per_mtok"] or 0)
@@ -504,13 +496,11 @@ async def get_usage() -> dict:
             "output_cost_per_mtok": output_cost,
             "estimated_cost_usd": round(total_cost, 4),
         })
-
     return {
         "total_input": total["input"] or 0,
         "total_output": total["output"] or 0,
         "by_caller": [{"caller": r["caller"], "input": r["input"], "output": r["output"], "calls": r["calls"]} for r in by_caller],
         "by_model": model_stats,
-        "daily": [{"day": str(r["day"]), "input": r["input"], "output": r["output"]} for r in daily],
     }
 
 
@@ -630,3 +620,90 @@ async def get_registry() -> dict:
             for r in routing
         ],
     }
+
+
+@app.get("/api/scrapers")
+async def get_scrapers() -> list[dict]:
+    rows = await pool().fetch(
+        """
+        SELECT id, platform, category, query, filters, target_agent,
+               poll_interval_seconds, is_active, last_scraped_at, created_at
+        FROM scraper_configs
+        ORDER BY is_active DESC, created_at DESC
+        """
+    )
+    result = []
+    for r in rows:
+        filters = r["filters"]
+        if isinstance(filters, str):
+            filters = json.loads(filters or "{}")
+        result.append({
+            "id": r["id"],
+            "platform": r["platform"],
+            "category": r["category"],
+            "query": r["query"],
+            "filters": filters,
+            "target_agent": r["target_agent"],
+            "poll_interval_seconds": r["poll_interval_seconds"],
+            "is_active": r["is_active"],
+            "last_scraped_at": r["last_scraped_at"].isoformat() if r["last_scraped_at"] else None,
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        })
+    return result
+
+
+@app.delete("/api/scrapers/{config_id}")
+async def deactivate_scraper(config_id: int) -> dict:
+    await pool().execute(
+        "UPDATE scraper_configs SET is_active = FALSE WHERE id = $1", config_id
+    )
+    return {"ok": True}
+
+
+@app.get("/api/listings")
+async def get_listings(
+    category: str | None = None,
+    platform: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    rows = await pool().fetch(
+        """
+        SELECT id, platform, category, external_id, url, title, price, currency,
+               location, condition, seller_name, seller_rating, attributes,
+               first_seen_at, last_seen_at
+        FROM listings
+        WHERE ($1::text IS NULL OR category = $1)
+          AND ($2::text IS NULL OR platform = $2)
+        ORDER BY first_seen_at DESC
+        LIMIT $3
+        """,
+        category, platform, limit,
+    )
+    result = []
+    for r in rows:
+        attrs = r["attributes"]
+        if isinstance(attrs, str):
+            attrs = json.loads(attrs or "{}")
+        result.append({
+            "id": r["id"],
+            "platform": r["platform"],
+            "category": r["category"],
+            "url": r["url"],
+            "title": r["title"],
+            "price": float(r["price"]) if r["price"] is not None else None,
+            "currency": r["currency"],
+            "location": r["location"],
+            "condition": r["condition"],
+            "seller_name": r["seller_name"],
+            "seller_rating": float(r["seller_rating"]) if r["seller_rating"] is not None else None,
+            "attributes": attrs,
+            "first_seen_at": r["first_seen_at"].isoformat() if r["first_seen_at"] else None,
+            "last_seen_at": r["last_seen_at"].isoformat() if r["last_seen_at"] else None,
+        })
+    return result
+
+
+@app.delete("/api/listings/{listing_id}")
+async def delete_listing(listing_id: int) -> dict:
+    await pool().execute("DELETE FROM listings WHERE id = $1", listing_id)
+    return {"ok": True}
