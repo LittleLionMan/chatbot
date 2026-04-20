@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import re
 from bs4 import BeautifulSoup
-from platforms.base import fetch_with_httpx, listing
+from platforms.base import fetch_with_playwright, listing
 
 logger = logging.getLogger(__name__)
 
@@ -10,9 +10,21 @@ _SEARCH_URL = "https://www.ebay.com/sch/i.html"
 
 
 def _parse_price(text: str) -> float | None:
-    cleaned = re.sub(r"[^\d.]", "", text.replace(",", ""))
+    text = re.sub(r"[^\d.,]", "", text.strip())
+    if "," in text and "." in text:
+        parts_dot = text.split(".")
+        if len(parts_dot[-1]) == 2:
+            text = text.replace(",", "")
+        else:
+            text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        parts = text.split(",")
+        if len(parts) == 2 and len(parts[1]) == 3:
+            text = text.replace(",", "")
+        else:
+            text = text.replace(",", ".")
     try:
-        return float(cleaned)
+        return float(text) if text else None
     except ValueError:
         return None
 
@@ -40,15 +52,12 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
         params["_udlo"] = str(price_min)
     if price_max:
         params["_udhi"] = str(price_max)
-    if filters.get("location") == "DE":
-        params["_sacat"] = "0"
-        params["LH_PrefLoc"] = "3"
 
     url = _SEARCH_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
     logger.info("eBay scraping: %s", url)
 
     try:
-        html = await fetch_with_httpx(url)
+        html = await fetch_with_playwright(url, wait_selector=".s-item")
     except Exception as e:
         logger.warning("eBay fetch failed: %s", e)
         return []
@@ -61,7 +70,7 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
             link_el = item.select_one(".s-item__link")
             if not link_el:
                 continue
-            href = link_el.get("href", "")
+            href = link_el.get("href", "").split("?")[0]
             ext_id_match = re.search(r"/itm/(\d+)", href)
             if not ext_id_match:
                 continue
@@ -89,7 +98,7 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
             seller_name = seller_el.get_text(strip=True)[:60] if seller_el else None
             results.append(listing(
                 external_id=ext_id,
-                url=href.split("?")[0],
+                url=href,
                 title=title,
                 price=price,
                 currency=currency,
