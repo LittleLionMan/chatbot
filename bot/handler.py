@@ -479,6 +479,20 @@ async def _handle_scraper_intent(
 
 
 async def _handle_chat(
+    update: Update,
+    pool: asyncpg.Pool,
+    text: str,
+    user_id: int,
+    chat_id: int,
+    is_group: bool,
+    triggered_by_mention: bool,
+    needs_search: bool,
+    wants_voice: bool,
+    detected_language: str,
+    active_agents: list[dict],
+    display: str,
+    group_title: str | None,
+) -> None:
     message = update.effective_message
     user_memories = await memory.get_memories(pool, "user", user_id)
     group_memories = await memory.get_memories(pool, "group", chat_id) if is_group else []
