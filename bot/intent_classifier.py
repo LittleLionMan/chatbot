@@ -5,6 +5,7 @@ from typing import TypedDict
 import asyncpg
 from bot import brain
 from bot.models import CAPABILITY_SIMPLE_TASKS
+from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -153,12 +154,13 @@ async def classify(
         raw = await brain.chat(
             system=_CLASSIFIER_SYSTEM,
             messages=[{"role": "user", "content": content}],
-            max_tokens=60,
+            max_tokens=150,
             capability=CAPABILITY_SIMPLE_TASKS,
             caller="intent_classifier",
             pool=pool,
         )
-        parsed = json.loads(raw)
+        logger.debug("Classifier raw output: %r", raw[:200])
+        parsed = json.loads(clean_llm_json(raw))
         intent = parsed.get("intent", "none").strip().lower()
         if intent not in _VALID_INTENTS:
             logger.warning("Classifier returned unknown intent %r, falling back to none", intent)
@@ -172,7 +174,7 @@ async def classify(
         return result
     except Exception as e:
         logger.warning("Intent classification failed: %s", e)
-        return {"intent": "none", "needs_search": False, "wants_voice": False}
+        return {"intent": "none", "needs_search": True, "wants_voice": False}
 
 
 async def extract_trigger_payload(text: str, pool: asyncpg.Pool) -> dict:
@@ -185,7 +187,7 @@ async def extract_trigger_payload(text: str, pool: asyncpg.Pool) -> dict:
             caller="trigger_payload_extractor",
             pool=pool,
         )
-        parsed = json.loads(raw)
+        parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):
             return {"agent_name": "", "action": "run", "payload": {}}
         return parsed
@@ -204,7 +206,7 @@ async def extract_agent_talk(text: str, pool: asyncpg.Pool) -> dict:
             caller="agent_talk_extractor",
             pool=pool,
         )
-        parsed = json.loads(raw)
+        parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):
             return {"agent_name": "", "talk_type": "query", "set_capability": None, "reclassify_capability": False, "regenerate_pipeline": False}
         return parsed
@@ -223,7 +225,7 @@ async def extract_monitor_create_params(text: str, pool: asyncpg.Pool) -> dict:
             caller="monitor_create_extractor",
             pool=pool,
         )
-        parsed = json.loads(raw)
+        parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):
             return {}
         return parsed
@@ -264,7 +266,7 @@ async def extract_scraper_create_params(text: str, pool: asyncpg.Pool) -> dict:
             caller="scraper_create_extractor",
             pool=pool,
         )
-        parsed = json.loads(raw)
+        parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):
             return {}
         return parsed
