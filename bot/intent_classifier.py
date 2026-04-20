@@ -56,7 +56,7 @@ Beispiele:
 {"intent": "none", "needs_search": true, "wants_voice": true} # "Lies mir die aktuellen Nachrichten vor"
 {"intent": "none", "needs_search": false, "wants_voice": false} # "Was denkst du über KI?"
 {"intent": "agent_list", "needs_search": false, "wants_voice": false} # "Zeig meine Agenten"
-{"intent": "task_list", "needs_search": false, "wants_voice": false} # "Was läuft gerade alles?""""
+{"intent": "task_list", "needs_search": false, "wants_voice": false} # "Was läuft gerade alles?" """
 
 _VALID_INTENTS = {
     "agent_system", "agent_create", "agent_trigger", "agent_talk",
