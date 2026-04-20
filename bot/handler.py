@@ -269,14 +269,15 @@ async def _handle_agent_intent(
             if parsed_agent.get("wants_scraper"):
                 scraper_params = await intent_classifier.extract_scraper_create_params(text, pool)
                 platforms: list[str] = scraper_params.get("platforms", [])
-                if platforms and scraper_params.get("query"):
+                query: str = scraper_params.get("query", "") or parsed_agent["config"].get("type", "")
+                if platforms and query:
                     created_ids: list[int] = []
                     for platform in platforms:
                         config_id = await memory.create_scraper_config(
                             pool,
                             platform=platform,
-                            category=scraper_params.get("category", "general"),
-                            query=scraper_params["query"],
+                            category=scraper_params.get("category", parsed_agent["config"].get("type", "general")),
+                            query=query,
                             target_agent=name,
                             filters=scraper_params.get("filters", {}),
                             poll_interval_seconds=scraper_params.get("poll_interval_seconds", 3600),
@@ -285,8 +286,13 @@ async def _handle_agent_intent(
                     platform_list = ", ".join(platforms)
                     interval_display = f"{scraper_params.get('poll_interval_seconds', 3600) // 60} Minuten"
                     await message.reply_text(
-                        f"Scraper eingerichtet: suche nach '{scraper_params['query']}' auf {platform_list} "
+                        f"Scraper eingerichtet: suche nach '{query}' auf {platform_list} "
                         f"alle {interval_display} und triggere {name} bei neuen Listings."
+                    )
+                else:
+                    await message.reply_text(
+                        f"Ich konnte die Scraper-Parameter nicht vollständig erkennen — "
+                        f"richte den Scraper für {name} manuell ein oder beschreib es konkreter."
                     )
         else:
             await message.reply_text("Ich konnte keinen sinnvollen Beobachtungsauftrag erkennen. Versuch's konkreter.")
