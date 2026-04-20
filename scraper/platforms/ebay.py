@@ -57,7 +57,7 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
     logger.info("eBay scraping: %s", url)
 
     try:
-        html = await fetch_with_playwright(url, wait_selector=".s-item")
+        html = await fetch_with_playwright(url, wait_selector=".srp-results")
     except Exception as e:
         logger.warning("eBay fetch failed: %s", e)
         return []
@@ -65,9 +65,9 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
     soup = BeautifulSoup(html, "lxml")
     results: list[dict] = []
 
-    for item in soup.select(".s-item")[:40]:
+    for item in soup.select("li.s-card")[:40]:
         try:
-            link_el = item.select_one(".s-item__link")
+            link_el = item.select_one("a[href*='/itm/']")
             if not link_el:
                 continue
             href = link_el.get("href", "").split("?")[0]
@@ -75,17 +75,17 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
             if not ext_id_match:
                 continue
             ext_id = ext_id_match.group(1)
-            title_el = item.select_one(".s-item__title")
+            title_el = item.select_one(".s-card__title, h3, .s-item__title")
             title = title_el.get_text(strip=True) if title_el else ""
-            if not title or title.lower() == "shop on ebay":
+            if not title or "shop on ebay" in title.lower():
                 continue
-            price_el = item.select_one(".s-item__price")
+            price_el = item.select_one(".s-card__price, .s-item__price, [class*='price']")
             price_text = price_el.get_text(strip=True) if price_el else ""
             price = _parse_price(price_text)
             currency = _detect_currency(price_text)
-            location_el = item.select_one(".s-item__location")
+            location_el = item.select_one(".s-card__location, .s-item__location, [class*='location']")
             location = location_el.get_text(strip=True).replace("From ", "")[:60] if location_el else None
-            condition_el = item.select_one(".SECONDARY_INFO")
+            condition_el = item.select_one(".s-card__subtitle, .SECONDARY_INFO, [class*='subtitle']")
             condition_text = condition_el.get_text(strip=True).lower() if condition_el else ""
             condition = None
             if "very good" in condition_text or "sehr gut" in condition_text:
@@ -94,8 +94,6 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
                 condition = "good"
             elif "acceptable" in condition_text or "akzeptabel" in condition_text:
                 condition = "acceptable"
-            seller_el = item.select_one(".s-item__seller-info-text")
-            seller_name = seller_el.get_text(strip=True)[:60] if seller_el else None
             results.append(listing(
                 external_id=ext_id,
                 url=href,
@@ -104,7 +102,6 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
                 currency=currency,
                 location=location,
                 condition=condition,
-                seller_name=seller_name,
                 attributes={"source_query": query},
             ))
         except Exception as e:
