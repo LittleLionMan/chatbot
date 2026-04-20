@@ -41,22 +41,22 @@ Trennlinien:
 - agent_system vs agent_create: Mehrere abhängige Agents → system. Einer → create.
 
 Beispiele:
-{"intent": "agent_trigger", "needs_search": false, "wants_voice": false} ← "Lass Jordan jetzt laufen"
-{"intent": "agent_trigger", "needs_search": false, "wants_voice": false} ← "Stopp den Agenten"
-{"intent": "agent_talk", "needs_search": false, "wants_voice": false} ← "Was hat Jordan bisher gefunden?"
-{"intent": "agent_talk", "needs_search": false, "wants_voice": false} ← "Ändere Jordans Suchkriterium auf Small Caps"
-{"intent": "agent_talk", "needs_search": false, "wants_voice": false} ← "Generiere eine neue Pipeline für Jordan"
-{"intent": "agent_create", "needs_search": false, "wants_voice": false} ← "Überwache meine Docker Container stündlich"
-{"intent": "agent_system", "needs_search": false, "wants_voice": false} ← "Sammle täglich Unternehmen nach Kriterien, analysiere jeden Fund dann einzeln"
-{"intent": "task_create", "needs_search": false, "wants_voice": false} ← "Erinnere mich jeden Montag an den Standup"
-{"intent": "scraper_create", "needs_search": false, "wants_voice": false} ← "Richte einen Scraper auf Kleinanzeigen ein der GPUs sucht und Linus triggert"
-{"intent": "scraper_create", "needs_search": false, "wants_voice": false} ← "Durchsuche eBay und Kleinanzeigen nach RTX 4090 Angeboten für meinen GPU-Agent"
-{"intent": "none", "needs_search": true, "wants_voice": false} ← "Was kostet Bitcoin gerade?"
-{"intent": "none", "needs_search": false, "wants_voice": true} ← "Kannst du das vorlesen?"
-{"intent": "none", "needs_search": true, "wants_voice": true} ← "Lies mir die aktuellen Nachrichten vor"
-{"intent": "none", "needs_search": false, "wants_voice": false} ← "Was denkst du über KI?"
-{"intent": "agent_list", "needs_search": false, "wants_voice": false} ← "Zeig meine Agenten"
-{"intent": "task_list", "needs_search": false, "wants_voice": false} ← "Was läuft gerade alles?""""
+{"intent": "agent_trigger", "needs_search": false, "wants_voice": false} # "Lass Jordan jetzt laufen"
+{"intent": "agent_trigger", "needs_search": false, "wants_voice": false} # "Stopp den Agenten"
+{"intent": "agent_talk", "needs_search": false, "wants_voice": false} # "Was hat Jordan bisher gefunden?"
+{"intent": "agent_talk", "needs_search": false, "wants_voice": false} # "Ändere Jordans Suchkriterium auf Small Caps"
+{"intent": "agent_talk", "needs_search": false, "wants_voice": false} # "Generiere eine neue Pipeline für Jordan"
+{"intent": "agent_create", "needs_search": false, "wants_voice": false} # "Überwache meine Docker Container stündlich"
+{"intent": "agent_system", "needs_search": false, "wants_voice": false} # "Sammle täglich Unternehmen nach Kriterien, analysiere jeden Fund dann einzeln"
+{"intent": "task_create", "needs_search": false, "wants_voice": false} # "Erinnere mich jeden Montag an den Standup"
+{"intent": "scraper_create", "needs_search": false, "wants_voice": false} # "Richte einen Scraper auf Kleinanzeigen ein der GPUs sucht und Linus triggert"
+{"intent": "scraper_create", "needs_search": false, "wants_voice": false} # "Durchsuche eBay und Kleinanzeigen nach RTX 4090 Angeboten für meinen GPU-Agent"
+{"intent": "none", "needs_search": true, "wants_voice": false} # "Was kostet Bitcoin gerade?"
+{"intent": "none", "needs_search": false, "wants_voice": true} # "Kannst du das vorlesen?"
+{"intent": "none", "needs_search": true, "wants_voice": true} # "Lies mir die aktuellen Nachrichten vor"
+{"intent": "none", "needs_search": false, "wants_voice": false} # "Was denkst du über KI?"
+{"intent": "agent_list", "needs_search": false, "wants_voice": false} # "Zeig meine Agenten"
+{"intent": "task_list", "needs_search": false, "wants_voice": false} # "Was läuft gerade alles?""""
 
 _VALID_INTENTS = {
     "agent_system", "agent_create", "agent_trigger", "agent_talk",
