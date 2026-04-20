@@ -19,7 +19,7 @@ Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 Felder:
 - "agents": Liste von Agent-Konfigurationen. Jeder Agent hat:
   - "name": Thematisch passender menschlicher Name
-  - "instruction": Vollständige eigenständige Anweisung, maximal 400 Zeichen
+  - "instruction": Vollständige eigenständige Anweisung in natürlicher Sprache. So formulieren dass der Agent sie ohne weiteren Kontext ausführen kann.
   - "state_keys": Keys die zwischen Läufen im State bleiben. Immer "last_run_summary". Nur kompakte Daten — Listen, Flags, kurze Zusammenfassungen. Keine langen Texte.
   - "data_reads": Lesevorgänge vor jedem Lauf. Zwei Typen:
     - {"type": "state", "agent_name": "..."} — liest den State eines anderen Agents
@@ -49,7 +49,7 @@ Erkennungsmerkmale für Monitor-Bedarf: "überwache kontinuierlich", "reagiere a
 Beispiel-Input: "Beobachte GPU-Preise täglich, analysiere interessante Funde und halte mich über Marktveränderungen auf dem Laufenden"
 
 Beispiel-Output:
-{"agents": [{"name": "Linus", "instruction": "Suche täglich nach RTX-GPU-Angeboten unter 300€ auf deutschen Secondhand-Plattformen. Pflege eine Liste aller bekannten Angebote mit Preis, Zustand und Link in deinem State.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 8 * * *", "target": "same"}, {"name": "Gordon", "instruction": "Lies Linus' Angebotsliste. Analysiere ob neue Angebote einen echten Deal darstellen — Preisvergleich, Zustand, Verkäufer-Reputation. Melde nur echte Schnäppchen.", "state_keys": ["last_run_summary", "analyzed_listings"], "data_reads": [{"type": "state", "agent_name": "Linus"}], "type": "market", "schedule": "0 9 * * *", "target": "same"}], "description": "Ich würde das so aufsetzen:\\n\\n**Linus** (täglich 8 Uhr) — sucht GPU-Angebote und pflegt eine Liste in seinem State.\\n\\n**Gordon** (täglich 9 Uhr) — liest Linus' State und bewertet neue Angebote.\\n\\nAbhängigkeiten: Gordon liest Linus.\\n\\nSoll ich das so anlegen?"}"""
+{"agents": [{"name": "Linus", "instruction": "Suche täglich nach Grafikkarten-Angeboten auf deutschen und internationalen Secondhand-Plattformen. Pflege eine Liste aller bekannten Angebote mit Preis, Zustand und Link in deinem State.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 8 * * *", "target": "same"}, {"name": "Gordon", "instruction": "Lies Linus' Angebotsliste. Analysiere ob neue Angebote einen echten Deal darstellen — Preisvergleich, Zustand, Verkäufer-Reputation. Melde nur echte Schnäppchen.", "state_keys": ["last_run_summary", "analyzed_listings"], "data_reads": [{"type": "state", "agent_name": "Linus"}], "type": "market", "schedule": "0 9 * * *", "target": "same"}], "description": "Ich würde das so aufsetzen:\\n\\n**Linus** (täglich 8 Uhr) — sucht GPU-Angebote und pflegt eine Liste in seinem State.\\n\\n**Gordon** (täglich 9 Uhr) — liest Linus' State und bewertet neue Angebote.\\n\\nAbhängigkeiten: Gordon liest Linus.\\n\\nSoll ich das so anlegen?"}"""
 
 
 async def parse_agent_system(

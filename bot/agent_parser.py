@@ -35,7 +35,7 @@ Ein Agent läuft nach Plan, erinnert sich an frühere Ergebnisse und handelt nur
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
 Felder:
-- "instruction": Was soll der Agent tun? Vollständige, eigenständige Anweisung in natürlicher Sprache. So formulieren dass der Agent sie ohne weiteren Kontext ausführen kann. Maximal 400 Zeichen.
+- "instruction": Was soll der Agent tun? Vollständige, eigenständige Anweisung in natürlicher Sprache. So formulieren dass der Agent sie ohne weiteren Kontext ausführen kann.
 - "state_keys": Liste von Schlüsseln die der Agent zwischen Läufen im Gedächtnis behalten soll. Immer enthalten: "last_run_summary". Weitere nach Bedarf.
 - "data_reads": Liste von Datenbank-Lesevorgängen die vor jedem Lauf automatisch ausgeführt werden. Zwei Typen:
   - {"type": "state", "agent_name": "..."} — liest den kompletten State eines anderen Agenten.
