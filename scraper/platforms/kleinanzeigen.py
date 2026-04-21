@@ -74,17 +74,17 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
                 if not ext_id_match:
                     continue
                 ext_id = ext_id_match.group(1)
-            title_el = item.select_one(".aditem-main--top--left, h2.text-module-begin, .aditem-main h2")
+            title_el = item.select_one("h2.text-module-begin, .aditem-main h2")
             title = title_el.get_text(strip=True) if title_el else ""
             if not title:
-                title_el = item.select_one("a[href*='/s-anzeige/']")
+                title_el = item.select_one("a.ellipsis")
                 title = title_el.get_text(strip=True) if title_el else ""
             if not title:
                 continue
             price_el = item.select_one("p.aditem-main--middle--price-shipping--price")
             price_text = price_el.get_text(strip=True) if price_el else ""
             price = _parse_price(price_text) if "€" in price_text else None
-            location_el = item.select_one(".aditem-main--top--left .text-module-end, .aditem-details, .aditem-main--top--left span")
+            location_el = item.select_one(".aditem-main--top--left")
             location = location_el.get_text(strip=True)[:60] if location_el else None
             desc_el = item.select_one(".aditem-main--middle--description, p.aditem-main--middle--description")
             raw_text = desc_el.get_text(strip=True)[:500] if desc_el else None
