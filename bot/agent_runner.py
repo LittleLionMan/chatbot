@@ -17,22 +17,17 @@ Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der le
 Felder:
 - "report": Zusammenfassung des Laufs in maximal 3 kurzen Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
 - "notify_user": true wenn der User benachrichtigt werden soll, false sonst.
-- "state_updates": Dict mit Key-Value-Paaren die im Agent-State gespeichert werden. Für kompakte persistente Daten: Listen, Flags, kurze Zusammenfassungen die andere Agents lesen sollen. Alle Werte müssen Strings sein.
+- "state_updates": Dict mit Key-Value-Paaren die im Agent-State gespeichert werden. Alle Werte müssen Strings sein.
 - "tool_calls": Liste aller Tool-Aufrufe für große Dokumente oder Koordination.
 Verfügbare Tools:
-- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — für kurze Werte die sicher in JSON passen (URLs, Datum, kurze Statusmeldungen).
-- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — für lange Texte, Analysen, Berichte. Das "source_key"-Feld referenziert einen Pipeline-Context-Key dessen Inhalt gespeichert werden soll — nicht den work_result. Wenn der work_result eine Speicheranweisung mit source_key enthält (z.B. "Speichern: db_write_from_work namespace=X key=Y source_key=full_analysis"), MUSS dieser Tool-Call mit exakt diesem source_key erzeugt werden. Wenn verfügbare Pipeline-Context-Keys am Ende des work_result aufgelistet sind, zeigen diese welche source_keys verfügbar sind — nutze sie.
-- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus. Wichtig: target_agent_name exakt so schreiben wie in der Agenten-Instruction genannt — keine Underscores statt Leerzeichen, keine Veränderung der Groß-/Kleinschreibung. Beispiel: "Jim Cramer" nicht "jim_cramer", "Gecko" nicht "gecko".
+- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — für kurze Werte.
+- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — für lange Texte.
+- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus.
 - {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
-Wann state_updates, wann db_write, wann db_write_from_work:
-- state_updates: Watchlists, Ticker-Listen, Flags, kurze Statusinfos — alles was andere Agents via State lesen sollen. Niemals last_run_summary in state_updates — der Runner setzt ihn automatisch aus report. Beispiele für typische State-Keys: analyses_overview, fundamentalanalyse_pending, known_companies.
-- db_write: kurze Werte (URLs, Datum, kurze Statusmeldungen) — nur wenn der Wert in einem JSON-String sicher passt.
-- db_write_from_work: alle langen Texte — Analysen, Berichte, Markdown-Dokumente. Kein JSON-Escaping nötig.
-Wichtig: state_updates werden IMMER gesetzt wenn der Work-Result State-Änderungen beschreibt — unabhängig davon ob report "KEINE_AENDERUNG" ist. Ein "KEINE_AENDERUNG"-Report bedeutet nur dass der User nicht benachrichtigt wird, nicht dass State-Updates weggelassen werden.
-report ist die Zusammenfassung für den User und muss immer befüllt sein wenn etwas passiert ist — auch wenn state_updates gesetzt werden. Ohne report kein Telegram-Feedback.
-Beispiel:
-{"report": "3 neue Unternehmen gefunden und zur Watchlist hinzugefügt.", "notify_user": true, "state_updates": {"known_companies": "ORA, ENPH, BE"}, "tool_calls": [{"tool": "notify_user", "message": "3 neue Unternehmen in der Watchlist."}]}"""
+Wichtig: state_updates werden IMMER gesetzt wenn der Work-Result State-Änderungen beschreibt. Niemals last_run_summary in state_updates setzen."""
+
 _MAX_SUMMARY_CHARS = 800
+
 
 def _build_relay_system(agent_name: str) -> str:
     return f"""Du bist {agent_name}. Formuliere den folgenden Bericht als direkte Nachricht in der ersten Person.
@@ -40,10 +35,13 @@ Beginne immer mit "{agent_name}:" — nie mit "Bob" oder einem anderen Namen.
 Keine Einleitung, kein Abschluss — nur die Nachricht direkt.
 Behalte alle konkreten Fakten vollständig bei."""
 
+
 def _resolve_template(template: str, trigger_payload: dict[str, str]) -> str:
     for k, v in trigger_payload.items():
         template = template.replace(f"{{{{{k}}}}}", v)
     return template
+
+
 async def _load_data_reads(
     pool: asyncpg.Pool,
     agent_id: int,
@@ -93,6 +91,7 @@ async def _load_data_reads(
                     result[label] = value
                     logger.info("Agent %d pre-loaded %s/%s from agent_id %d", agent_id, namespace, key, target_agent_id)
     return result
+
 
 async def _execute_tool_calls(
     pool: asyncpg.Pool,
@@ -149,10 +148,12 @@ async def _execute_tool_calls(
         except Exception as e:
             logger.error("Agent %d tool %s failed: %s", agent_id, tool, e)
 
+
 def _resolve_pipeline_template(template: str, context: dict[str, str]) -> str:
     for k, v in context.items():
         template = template.replace(f"{{{{{k}}}}}", v)
     return template
+
 
 _AGENT_OUTPUT_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
 Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der letzte }.
@@ -162,15 +163,16 @@ Felder:
 - "state_updates": Dict mit Key-Value-Paaren für den Agent-State. Alle Werte müssen Strings sein. Niemals "last_run_summary" setzen.
 - "tool_calls": Liste der Tool-Aufrufe.
 Verfügbare Tools:
-- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — kurze Werte (URLs, Datum, Statusmeldungen).
-- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — lange Texte. source_key referenziert einen Pipeline-Context-Key. Nur verwenden wenn im Prompt explizit angewiesen.
+- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — kurze Werte.
+- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — lange Texte.
 - {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — target_agent_name exakt wie in der Instruction genannt.
 - {"tool": "notify_user", "message": "..."} — Nachricht an den User.
-Wichtig: Erzeuge NUR Tool-Calls die im Prompt explizit angewiesen werden. Keine eigenen Entscheidungen über was gespeichert oder getriggert werden soll."""
+Wichtig: Erzeuge NUR Tool-Calls die im Prompt explizit angewiesen werden."""
 
 _ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad gilt.
 Antworte NUR mit einem einzigen Wort. Befolge die Entscheidungslogik im Router-Prompt exakt und in der angegebenen Reihenfolge.
 Wenn keine Bedingung zutrifft: antworte mit 'normal'."""
+
 
 def _expand_pipeline_template(
     config_data: dict,
@@ -232,6 +234,7 @@ def _expand_pipeline_template(
     config_data["_template_aggregate_key"] = aggregate_key
     return expanded
 
+
 async def _execute_pipeline(
     pool: asyncpg.Pool,
     agent_id: int,
@@ -282,7 +285,7 @@ async def _execute_pipeline(
                 )
                 context[output_key] = output_raw
                 last_output = output_raw
-                logger.info("Agent %d (%s) output step '%s' done (%d chars)", agent_id, name, step_id, len(output_raw))
+                logger.warning("Agent %d (%s) output step '%s' (%d chars): %r", agent_id, name, step_id, len(output_raw), output_raw[:400])
             except Exception as e:
                 logger.error("Agent %d (%s) output step '%s' failed: %s", agent_id, name, step_id, e)
                 raise
@@ -335,7 +338,7 @@ async def _execute_pipeline(
                 finance_result = f"Keine Finanzdaten für {ticker} verfügbar."
             context[output_key] = finance_result
             last_output = finance_result
-            logger.warning("Agent %d (%s) step '%s' output: %r", agent_id, name, step_id, step_output[:400])
+            logger.info("Agent %d (%s) step '%s' done (%d chars output)", agent_id, name, step_id, len(finance_result))
             continue
         search_queries: list[str] | None = None
         if is_search_step:
@@ -382,15 +385,13 @@ async def _execute_pipeline(
         else:
             context[output_key] = step_output
             last_output = step_output
-            logger.info(
-                "Agent %d (%s) step '%s' done (%d chars output)",
-                agent_id, name, step_id, len(step_output),
-            )
+            logger.warning("Agent %d (%s) step '%s' (%d chars): %r", agent_id, name, step_id, len(step_output), step_output[:400])
         if aggregate_key and output_key in template_output_keys:
             existing = context.get(aggregate_key, "")
             context[aggregate_key] = f"{existing}\n\n---\n\n{output_key}:\n{step_output}" if existing else f"{output_key}:\n{step_output}"
     has_output_step = any(s.get("is_output", False) for s in full_pipeline)
     return last_output, context, has_output_step
+
 
 async def execute_agent(
     pool: asyncpg.Pool,
