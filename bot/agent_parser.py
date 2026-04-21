@@ -72,9 +72,9 @@ Output: {"instruction": "Werte neue Job-Listings aus dem Scraper-Service aus. Be
 _CAPABILITY_CLASSIFIER_SYSTEM = """Analysiere diese Agent-Instruction und bestimme welche primäre Fähigkeit der ausführende LLM-Call benötigt.
 
 Antworte NUR mit einem dieser Werte, kein anderer Text:
-- fast: einfache Statusprüfungen, Ja/Nein-Entscheidungen, kurze Transformationen ohne eigenes Urteil
-- balanced: moderate Analyse, Zusammenfassungen, normaler Informationsabruf
-- search: Web-Recherche, Nachrichtenauswertung, große Mengen Text zusammenfassen und bewerten
+- simple_tasks: einfache Statusprüfungen, Ja/Nein-Entscheidungen, kurze Transformationen ohne eigenes Urteil
+- chat: moderate Analyse, Zusammenfassungen, normaler Informationsabruf ohne Web-Zugriff
+- search: Web-Recherche, URL-Abruf, RSS/XML-Feeds abrufen, Nachrichtenauswertung, aktuelle Daten aus dem Internet holen
 - reasoning: Analysen mit mehreren Abhängigkeiten, Bewertungen die Urteilsvermögen erfordern
 - deep_reasoning: komplexe mehrstufige Schlussfolgerungen mit vielen Interdependenzen — strategische Systembewertungen, Entscheidungen mit langfristigen Konsequenzen
 - coding: Code schreiben, debuggen, Codebasen analysieren
@@ -83,13 +83,14 @@ Antworte NUR mit einem dieser Werte, kein anderer Text:
 Wähle deep_reasoning nur wenn die Aufgabe wirklich von tiefem Reasoning profitiert — nicht als Default für alles Komplexe.
 
 Beispiele:
-"Prüfe den Status der laufenden Docker Container und melde wenn einer down ist" → fast
+"Prüfe den Status der laufenden Docker Container und melde wenn einer down ist" → simple_tasks
+"Rufe täglich einen RSS- oder XML-Feed ab und extrahiere Daten daraus" → search
 "Suche täglich nach neuen Open-Source-Projekten auf relevanten Plattformen" → search
 "Prüfe aktuelle Nachrichten zu Unternehmen auf der Watchlist" → search
 "Erstelle vollständige Fundamentalanalysen inkl. Bilanzqualität, Marktposition und Kursziel" → deep_reasoning
 "Bewerte ob neue Quartalszahlen die bestehende Einschätzung verändern" → reasoning
 "Schreibe und teste neue API-Endpoints für das Projekt" → coding
-"Fasse den täglichen Wetterbericht zusammen" → balanced"""
+"Fasse den täglichen Wetterbericht zusammen" → chat"""
 
 _NAME_RESOLUTION_SYSTEM = """Identifiziere welcher Agent aus der Liste gemeint ist.
 Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.
@@ -126,12 +127,12 @@ Antworte NUR mit einem JSON-Objekt. Kein anderer Text, keine Markdown-Backticks.
 
 Felder in "pipeline" und "pipeline_after_template" — jeder Step:
 - "id": snake_case Bezeichner
-- "capability": "fast", "search", "finance", "reasoning", "deep_reasoning"
+- "capability": "simple_tasks", "search", "finance", "reasoning", "deep_reasoning"
 - "prompt_template": Anweisung für das LLM. Bei capability=finance wird kein LLM-Call gemacht — der Finance-Service liefert direkt strukturierte Kursdaten. prompt_template kann leer bleiben.
 - "ticker_key": Nur für finance-Steps. Context-Key der den Ticker enthält. Standard: "selected_ticker".
 - "output_key": Speicher-Key
 - "is_router": true nur für Router
-- "is_output": true für den letzten Step der Pipeline. Dieser Step gibt direkt valides JSON aus. Jede Pipeline MUSS genau einen is_output-Step als letzten Step haben. capability="fast". Das JSON enthält: report (max 3 Sätze oder "KEINE_AENDERUNG"), notify_user (bool), state_updates (dict), tool_calls (list). Verfügbare Tools: db_write, db_write_from_work (source_key=Pipeline-Context-Key), trigger_agent (target_agent_name exakt wie genannt), notify_user.
+- "is_output": true für den letzten Step der Pipeline. Dieser Step gibt direkt valides JSON aus. Jede Pipeline MUSS genau einen is_output-Step als letzten Step haben. capability="simple_tasks". Das JSON enthält: report (max 3 Sätze oder "KEINE_AENDERUNG"), notify_user (bool), state_updates (dict), tool_calls (list). Verfügbare Tools: db_write, db_write_from_work (source_key=Pipeline-Context-Key), trigger_agent (target_agent_name exakt wie genannt), notify_user.
 - "only_if_route": Route-Filter (String oder Liste)
 - "time_range": Nur für Search-Steps. Gültige Werte: "day", "week", "month", "year".
 - "search_query": Nur für Search-Steps. Kurze optimierte Suchanfrage (1-6 Wörter). Template-Variablen erlaubt.
@@ -159,25 +160,25 @@ KEIN pipeline_template wenn:
 Router einbauen wenn Instruction Modi beschreibt (Trigger-Modus vs Normal-Modus).
 
 Search-Steps enden immer mit: "Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet."
-Der letzte Step jeder Pipeline ist IMMER ein is_output-Step mit capability="fast".
+Der letzte Step jeder Pipeline ist IMMER ein is_output-Step mit capability="simple_tasks".
 
 Beispiel "Themenbereiche recherchieren" (feste Steps):
 {
   "pipeline": [
-    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob ein Trigger-Payload vorhanden ist der eine sofortige Aktion erfordert. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
-    {"id": "handle_trigger", "capability": "fast", "only_if_route": "trigger", "prompt_template": "Führe die Trigger-Aktion aus gemäß trigger_payload.", "output_key": "trigger_done"}
+    {"id": "router", "capability": "simple_tasks", "is_router": true, "prompt_template": "Prüfe ob ein Trigger-Payload vorhanden ist der eine sofortige Aktion erfordert. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"},
+    {"id": "handle_trigger", "capability": "simple_tasks", "only_if_route": "trigger", "prompt_template": "Führe die Trigger-Aktion aus gemäß trigger_payload.", "output_key": "trigger_done"}
   ],
   "pipeline_after_template": [
     {"id": "search_thema_1", "capability": "search", "only_if_route": "normal", "search_query": "...", "categories": "...", "prompt_template": "Suche nach [Thema]. Fasse als kompaktes Markdown zusammen — maximal 300 Wörter, nur Fakten. Das Ergebnis wird von einem anderen Modell weiterverarbeitet.", "output_key": "search_1"},
     {"id": "analyze", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Analysiere: {{search_1}}. Wende Filterkriterien aus Instruction an.", "output_key": "analysis"},
-    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+    {"id": "output", "capability": "simple_tasks", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
   ]
 }
 
 Beispiel "Variable Liste aus State verarbeiten" (Template):
 {
   "pipeline": [
-    {"id": "router", "capability": "fast", "is_router": true, "prompt_template": "Prüfe ob Trigger-Payload einen sofortigen Sonderfall auslöst. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"}
+    {"id": "router", "capability": "simple_tasks", "is_router": true, "prompt_template": "Prüfe ob Trigger-Payload einen sofortigen Sonderfall auslöst. Falls ja: 'trigger'. Falls nein: 'normal'.", "output_key": "route"}
   ],
   "pipeline_template": {
     "source": "state", "foreach": "[state_key_mit_liste]", "split_by": ",", "batch_size": 1,
@@ -186,7 +187,7 @@ Beispiel "Variable Liste aus State verarbeiten" (Template):
   },
   "pipeline_after_template": [
     {"id": "analyze", "capability": "reasoning", "only_if_route": "normal", "prompt_template": "Analysiere alle Ergebnisse: {{all_results}}.", "output_key": "analysis"},
-    {"id": "output", "capability": "fast", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
+    {"id": "output", "capability": "simple_tasks", "is_output": true, "prompt_template": "Erstelle aus folgendem Ergebnis ein JSON-Objekt:\n{{analysis}}\n\nFormat: {report, notify_user, state_updates, tool_calls}", "output_key": "output"}
   ]
 }"""
 
@@ -199,7 +200,7 @@ def _pick_name_for_topic(topic_type: str) -> str:
 
 
 async def _classify_work_capability(instruction: str) -> str:
-    valid = {CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, "search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING}
+    valid = {CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, "search", CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING, "finance"}
     try:
         raw = await brain.chat(
             system=_CAPABILITY_CLASSIFIER_SYSTEM,
@@ -210,7 +211,7 @@ async def _classify_work_capability(instruction: str) -> str:
         result = raw.strip().lower()
         if result in valid:
             return result
-        logger.warning("Capability classifier returned unknown value %r, falling back to balanced", result)
+        logger.warning("Capability classifier returned unknown value %r, falling back to chat", result)
         return CAPABILITY_CHAT
     except Exception as e:
         logger.warning("Capability classification failed: %s", e)

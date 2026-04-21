@@ -316,7 +316,7 @@ async def _execute_pipeline(
                 logger.error("Agent %d (%s) router failed: %s", agent_id, name, e)
                 raise
             continue
-        is_search_step = capability == "search"
+        is_search_step = capability == "search" or (capability == "chat" and bool(step.get("search_query")))
         is_finance_step = capability == "finance"
         use_web_search = is_search_step
         web_search_max_uses = 3 if is_search_step else None
