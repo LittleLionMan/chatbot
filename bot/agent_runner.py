@@ -335,7 +335,7 @@ async def _execute_pipeline(
                 finance_result = f"Keine Finanzdaten für {ticker} verfügbar."
             context[output_key] = finance_result
             last_output = finance_result
-            logger.info("Agent %d (%s) step '%s' done (%d chars output)", agent_id, name, step_id, len(finance_result))
+            logger.warning("Agent %d (%s) step '%s' done (%d chars output)", agent_id, name, step_id, len(finance_result))
             continue
         search_queries: list[str] | None = None
         if is_search_step:
