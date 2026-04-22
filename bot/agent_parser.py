@@ -44,74 +44,59 @@ Felder:
   - "id": snake_case Bezeichner
   - "description": Was passiert hier in einem Satz
   - "classification": Einer der verfügbaren Baustein-Typen (siehe unten)
-  - "inputs": Liste von Eingaben (z.B. "trigger_payload.url", "state:price_baselines", "context:search_result")
-  - "outputs": Liste von Ausgaben (z.B. "context:extracted", "state:price_baselines")
-  - "operation": Nur für transform-Bausteine. Einer von: array_append, iqr_bounds, json_extract
+  - "inputs": Liste von Eingaben (z.B. "trigger_payload.url", "state:baselines", "context:search_result")
+  - "outputs": Liste von Ausgaben (z.B. "context:extracted", "state:baselines")
+  - "operation": Nur für transform-Bausteine. Einer von: array_append, iqr_bounds, json_path, xml_extract, regex_extract
   - "condition": Nur wenn diese Teilaufgabe nur unter bestimmten Bedingungen läuft. Freitext.
   - "route": Nur wenn diese Teilaufgabe nur auf einem bestimmten Route-Pfad läuft.
 
 Verfügbare Baustein-Typen:
 
 ROUTING:
-- router_match: Deterministisches Routing auf Basis exakter Werte in trigger_payload oder context. Verwende dies wenn der Routing-Wert ein strukturiertes Feld ist (type, url, id etc.).
+- router_match: Deterministisches Routing auf Basis exakter Werte in trigger_payload oder context.
 - router_llm: LLM-basiertes Routing wenn die Entscheidung Interpretation erfordert.
 
-LLM (nur wenn Urteilsvermögen, Abstraktion oder Sprachverständnis nötig ist):
+LLM — nur wenn Urteilsvermögen, Abstraktion oder Sprachverständnis nötig ist:
 - llm_extract: Strukturierte Daten aus unstrukturiertem Text extrahieren. Gibt immer JSON zurück.
 - llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück.
 - llm_summarize: Zusammenfassung für Menschen oder als Input für weitere Steps.
 
-DATENZUGRIFF (deterministisch):
-- web_search: Websuche mit Query-Template.
-- finance: Kursdaten für einen Ticker aus dem Finance-Service.
-- http_fetch: HTTP-Request an eine bekannte URL. Schreibt den Response-Body als String in den Context. Für strukturierte APIs, XML-Feeds, REST-Endpunkte wo die URL bekannt ist. Kein LLM.
-- state_read: Einzelnen Key aus Agent-State lesen.
-- state_write: Einzelnen Key in Agent-State schreiben.
-- state_read_external: Key aus State eines anderen Agenten lesen.
-- state_write_external: Key in State eines anderen Agenten schreiben.
-- data_read: Dokument aus agent_data Namespace lesen.
-- data_write: Dokument in agent_data Namespace schreiben.
-- data_read_external: Dokument aus agent_data eines anderen Agenten lesen.
-- data_write_external: Dokument in agent_data eines anderen Agenten schreiben.
+DATENZUGRIFF — deterministisch:
+- web_search: Websuche wenn die URL nicht bekannt ist oder die Ergebnisse variabel sind.
+- finance: Börsenkurse und Finanzkennzahlen für einen Ticker.
+- http_fetch: HTTP-Request an eine bekannte URL. Gibt den Response-Body als String zurück. Für strukturierte APIs, XML-Feeds, REST-Endpunkte.
+- state_read / state_write: Einzelnen Key im eigenen Agent-State lesen oder schreiben.
+- state_read_external / state_write_external: Key im State eines anderen Agenten lesen oder schreiben.
+- data_read / data_write: Längere Dokumente im eigenen agent_data Namespace lesen oder schreiben.
+- data_read_external / data_write_external: Längere Dokumente im agent_data eines anderen Agenten.
 
-TRANSFORMATION (deterministisch, operiert auf context-Werten):
+TRANSFORMATION — deterministisch, operiert auf Context-Werten:
 - transform: Berechnung oder Strukturänderung auf bereits im Context vorhandenen Daten.
-  Operationen:
-  - array_append: Wert an gruppierte Liste anhängen
-  - iqr_bounds: Statistische Bounds (Q1/Q3/IQR) berechnen
-  - json_path: Wert aus JSON-String extrahieren via Punkt-Pfad (z.B. "rates.USD")
-  - xml_extract: Wert aus XML-String extrahieren via XPath + optionalem Attribut-Namen
-  - regex_extract: Wert aus beliebigem Text via Regex-Capture-Group
+  Operationen: array_append, iqr_bounds, json_path, xml_extract, regex_extract
 
-KOORDINATION (deterministisch):
+KOORDINATION — deterministisch:
 - trigger_agent: Anderen Agenten mit Payload anstoßen.
-- notify_user: Nachricht an User senden.
+- notify_user: Nachricht direkt an den User senden.
 
-ENTSCHEIDUNGSREGELN:
-- Routing auf trigger_payload.type oder ähnliche strukturierte Felder → router_match, NICHT router_llm
-- Bekannte URL mit strukturiertem Response (XML, JSON, RSS) → http_fetch + transform(xml_extract|json_path), KEIN LLM
-- Websuche ohne bekannte URL → web_search
-- Preis in Liste eintragen → state_read + transform(array_append) + state_write
-- Statistiken auf gesammelten Daten → state_read + transform(iqr_bounds) + state_write
-- Wert aus LLM-Output in State → llm_extract dann state_write mit source_key auf llm_output
-- Lange Analysen, Berichte, Dokumente → data_write statt state_write
-- LLM NUR wenn: unstrukturierter Text, Urteilsvermögen, Abstraktion, Sprachgenerierung nötig
-- Alles andere ist deterministisch
+ENTSCHEIDUNGSMATRIX:
+Was ist deterministisch — verwende NIE ein LLM dafür:
+- Routing auf strukturierten Feldern (type, id, url != null) → router_match
+- Bekannte URL mit strukturiertem Response → http_fetch + transform
+- Wert aus JSON extrahieren → transform(json_path)
+- Wert aus XML extrahieren → transform(xml_extract)
+- Wert aus Text per Regex → transform(regex_extract)
+- Zahl/Wert in Liste einpflegen → state_read + transform(array_append) + state_write
+- Statistiken auf gesammelten Zahlen → transform(iqr_bounds)
+- Kurze Fakten im State speichern → state_write
+- Lange Dokumente speichern → data_write
+- Anderen Agent starten → trigger_agent
+- User benachrichtigen → notify_user
 
-Beispiel für "Überwache Listings, baue Preisbaseline auf, melde Schnäppchen":
-{
-  "type": "market",
-  "subtasks": [
-    {"id": "route", "description": "Routing: exchange_rate_update oder new_listing oder idle", "classification": "router_match", "inputs": ["trigger_payload.type", "trigger_payload.url"], "outputs": ["context:route"]},
-    {"id": "extract_listing", "description": "GPU-Modell, Preis, Relevanz aus Listing extrahieren", "classification": "llm_extract", "inputs": ["trigger_payload.title", "trigger_payload.raw_text"], "outputs": ["context:extracted"], "route": "new_listing"},
-    {"id": "read_baselines", "description": "Bestehende Preisbaseline aus State lesen", "classification": "state_read", "inputs": ["state:price_baselines"], "outputs": ["context:baselines"], "route": "new_listing"},
-    {"id": "append_price", "description": "Neuen Preis zur Baseline des Modells hinzufügen", "classification": "transform", "operation": "array_append", "inputs": ["context:extracted", "context:baselines"], "outputs": ["context:baselines"], "route": "new_listing"},
-    {"id": "write_baselines", "description": "Aktualisierte Baseline in State schreiben", "classification": "state_write", "inputs": ["context:baselines"], "outputs": ["state:price_baselines"], "route": "new_listing"},
-    {"id": "compute_stats", "description": "IQR-Bounds aus Baseline berechnen", "classification": "transform", "operation": "iqr_bounds", "inputs": ["context:baselines"], "outputs": ["context:price_stats"], "route": "new_listing"},
-    {"id": "decide_bargain", "description": "Ist der Preis ein echtes Schnäppchen?", "classification": "llm_decide", "inputs": ["context:extracted", "context:price_stats"], "outputs": ["context:decision"], "route": "new_listing"},
-    {"id": "notify", "description": "User benachrichtigen wenn Schnäppchen", "classification": "notify_user", "inputs": ["context:decision"], "outputs": [], "condition": "decision.verdict == bargain", "route": "new_listing"}
-  ]
-}"""
+Was braucht ein LLM:
+- Unstrukturierter Text der verstanden werden muss → llm_extract
+- Bewertung, Urteil, Entscheidung mit Begründung → llm_decide
+- Zusammenfassung für Menschen → llm_summarize
+- Websuche wenn URL nicht bekannt → web_search"""
 
 
 async def _decompose_task(instruction: str) -> dict | None:
@@ -146,93 +131,91 @@ Du bekommst:
 1. Die originale Instruction des Agenten
 2. Eine strukturierte Klassifikation der Teilaufgaben mit Baustein-Typen
 
-Deine Aufgabe ist ausschließlich Übersetzung — du erfindest keine neue Logik.
+Deine Aufgabe ist ausschließlich Übersetzung — du erfindest keine neue Logik, du folgst der Klassifikation.
 
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
 Felder:
-- "pipeline": Liste von Steps die vor dem Template laufen (Router, erste feste Steps)
-- "pipeline_after_template": Liste von Steps die nach dem Template laufen (Analyse, Output)
+- "pipeline": Feste Steps — Router und alle Steps die vor variablen Teilen laufen
+- "pipeline_after_template": Steps die nach variablen Teilen laufen — Analyse, Output
 
-Jeder Step hat folgende Felder je nach type:
+Step-Schemas nach Typ:
 
 router_match:
-{"id": "...", "type": "router_match", "rules": [{"if": "trigger_payload.X == 'Y'", "then": "route_name"}, {"if": "trigger_payload.Z != null", "then": "other_route"}], "default": "idle", "output_key": "route"}
+{"id": "route", "type": "router_match", "rules": [{"if": "trigger_payload.X == 'value'", "then": "route_a"}, {"if": "trigger_payload.Y != null", "then": "route_b"}], "default": "idle", "output_key": "route"}
 
 router_llm:
-{"id": "...", "type": "router_llm", "prompt": "...", "output_key": "route"}
+{"id": "route", "type": "router_llm", "prompt": "Entscheide welcher Pfad gilt.", "output_key": "route"}
 
 llm_extract:
-{"id": "...", "type": "llm_extract", "prompt": "Extrahiere ... aus {{source}}. Antworte NUR mit rohem JSON: {...}", "output_key": "...", "only_if_route": "..."}
+{"id": "extract", "type": "llm_extract", "prompt": "Extrahiere X aus {{source_key}}. Antworte NUR mit rohem JSON: {\"field\": \"...\"}", "output_key": "extracted", "only_if_route": "route_name"}
 
 llm_decide:
-{"id": "...", "type": "llm_decide", "prompt": "Bewerte ... Antworte NUR mit rohem JSON: {...}", "output_key": "...", "only_if_route": "..."}
+{"id": "decide", "type": "llm_decide", "prompt": "Bewerte X anhand von {{data}}. Antworte NUR mit rohem JSON: {\"verdict\": \"...\", \"reason\": \"...\"}", "output_key": "decision", "only_if_route": "route_name"}
 
 llm_summarize:
-{"id": "...", "type": "llm_summarize", "prompt": "...", "output_key": "...", "only_if_route": "..."}
-
-llm_summarize mit Web-Suche (is_output=false, für Recherche-Steps):
-{"id": "...", "type": "llm_summarize", "prompt": "...", "search_query": "optimierter Suchbegriff 1-6 Wörter", "time_range": "day|week|month|year", "categories": "general|news|finance|it|science", "output_key": "..."}
+{"id": "summarize", "type": "llm_summarize", "prompt": "Fasse zusammen.", "output_key": "summary"}
+{"id": "search_and_summarize", "type": "llm_summarize", "prompt": "Fasse die Suchergebnisse zusammen.", "search_query": "kurzer Suchbegriff 1-6 Wörter", "time_range": "day|week|month|year", "categories": "general|news|finance|it|science", "output_key": "summary"}
 
 web_search:
-{"id": "...", "type": "web_search", "query_template": "{{ticker}} news", "prompt": "Fasse zusammen.", "time_range": "week", "categories": "finance", "output_key": "...", "only_if_route": "..."}
+{"id": "search", "type": "web_search", "query_template": "{{context_key}} relevante begriffe", "prompt": "Fasse zusammen.", "time_range": "week", "categories": "general", "output_key": "search_result"}
 
 finance:
-{"id": "...", "type": "finance", "ticker_key": "selected_ticker", "output_key": "...", "only_if_route": "..."}
-
-state_read:
-{"id": "...", "type": "state_read", "key": "price_baselines", "output_key": "baselines", "default": "{}"}
-
-state_write:
-{"id": "...", "type": "state_write", "key": "price_baselines", "source_key": "baselines"}
-
-state_read_external / state_write_external:
-{"id": "...", "type": "state_read_external", "agent_name": "Linus", "key": "watchlist", "output_key": "...", "default": ""}
-{"id": "...", "type": "state_write_external", "agent_name": "Linus", "key": "last_alert", "source_key": "context_key"}
-
-data_read / data_write:
-{"id": "...", "type": "data_read", "namespace": "analyses", "key_template": "{{ticker}}", "output_key": "...", "default": ""}
-{"id": "...", "type": "data_write", "namespace": "analyses", "key_template": "{{ticker}}", "source_key": "final_analysis"}
-
-data_read_external / data_write_external:
-{"id": "...", "type": "data_read_external", "agent_name": "Gordon", "namespace": "analyses", "key_template": "{{ticker}}", "output_key": "...", "default": ""}
-{"id": "...", "type": "data_write_external", "agent_name": "Gordon", "namespace": "analyses", "key_template": "{{ticker}}", "source_key": "analysis"}
-
-transform array_append:
-{"id": "...", "type": "transform", "operation": "array_append", "source_key": "extracted", "group_by": "model", "value_key": "price", "condition": "relevant", "target_key": "baselines", "output_key": "baselines", "max_items": 200, "only_if_route": "..."}
-
-transform iqr_bounds:
-{"id": "...", "type": "transform", "operation": "iqr_bounds", "source_key": "baselines", "multiplier": 1.5, "output_key": "price_stats", "only_if_route": "..."}
+{"id": "get_quote", "type": "finance", "ticker_key": "selected_ticker", "output_key": "quote_data"}
 
 http_fetch:
-{"id": "...", "type": "http_fetch", "url": "https://example.com/api", "output_key": "...", "default": ""}
-{"id": "...", "type": "http_fetch", "url_template": "https://api.example.com/{{ticker}}", "method": "GET", "headers": {"Accept": "application/xml"}, "timeout": 15.0, "output_key": "..."}
+{"id": "fetch", "type": "http_fetch", "url": "https://example.com/api/data", "output_key": "raw_response", "default": ""}
+{"id": "fetch", "type": "http_fetch", "url_template": "https://api.example.com/{{context_key}}", "headers": {"Accept": "application/xml"}, "timeout": 15.0, "output_key": "raw_response"}
+
+state_read:
+{"id": "read_data", "type": "state_read", "key": "my_key", "output_key": "data", "default": "{}"}
+
+state_write:
+{"id": "write_data", "type": "state_write", "key": "my_key", "source_key": "context_key_to_save"}
+
+state_read_external / state_write_external:
+{"id": "read_other", "type": "state_read_external", "agent_name": "OtherAgent", "key": "their_key", "output_key": "data", "default": ""}
+{"id": "write_other", "type": "state_write_external", "agent_name": "OtherAgent", "key": "their_key", "source_key": "context_key"}
+
+data_read / data_write:
+{"id": "read_doc", "type": "data_read", "namespace": "my_namespace", "key_template": "{{context_key}}", "output_key": "document", "default": ""}
+{"id": "write_doc", "type": "data_write", "namespace": "my_namespace", "key_template": "{{context_key}}", "source_key": "document_to_save"}
+
+data_read_external / data_write_external:
+{"id": "read_doc", "type": "data_read_external", "agent_name": "OtherAgent", "namespace": "their_namespace", "key_template": "{{context_key}}", "output_key": "document", "default": ""}
+{"id": "write_doc", "type": "data_write_external", "agent_name": "OtherAgent", "namespace": "their_namespace", "key_template": "{{context_key}}", "source_key": "document"}
+
+transform array_append:
+{"id": "append", "type": "transform", "operation": "array_append", "source_key": "extracted", "group_by": "group_field", "value_key": "value_field", "condition": "boolean_field", "target_key": "list_in_context", "output_key": "list_in_context", "max_items": 200}
+
+transform iqr_bounds:
+{"id": "stats", "type": "transform", "operation": "iqr_bounds", "source_key": "list_in_context", "multiplier": 1.5, "output_key": "bounds"}
 
 transform json_path:
-{"id": "...", "type": "transform", "operation": "json_path", "source_key": "api_response", "path": "rates.USD", "output_key": "usd_rate", "default": ""}
+{"id": "extract_field", "type": "transform", "operation": "json_path", "source_key": "json_string", "path": "nested.field", "output_key": "value", "default": ""}
 
 transform xml_extract:
-{"id": "...", "type": "transform", "operation": "xml_extract", "source_key": "xml_response", "xpath": ".//Cube[@currency='USD']", "attribute": "rate", "output_key": "usd_rate", "default": ""}
+{"id": "extract_xml", "type": "transform", "operation": "xml_extract", "source_key": "xml_string", "xpath": ".//Element[@attr='value']", "attribute": "rate", "output_key": "value", "default": ""}
 
 transform regex_extract:
-{"id": "...", "type": "transform", "operation": "regex_extract", "source_key": "raw_text", "pattern": "USD[:\\s]+([\\d.]+)", "group": 1, "output_key": "usd_rate", "default": ""}
+{"id": "extract_pattern", "type": "transform", "operation": "regex_extract", "source_key": "text", "pattern": "Pattern: ([\\d.]+)", "group": 1, "output_key": "value", "default": ""}
 
 trigger_agent:
-{"id": "...", "type": "trigger_agent", "target_agent_name": "Gordon", "payload": {"key": "{{value}}"}, "delay_minutes": 0}
+{"id": "trigger", "type": "trigger_agent", "target_agent_name": "TargetAgent", "payload": {"key": "{{context_key}}"}, "delay_minutes": 0}
 
 notify_user:
-{"id": "...", "type": "notify_user", "source_key": "report_text"}
+{"id": "notify", "type": "notify_user", "source_key": "message_context_key"}
 
-Output Step (letzter Step jeder Route die eine Antwort produziert):
-{"id": "output", "type": "llm_extract", "is_output": true, "prompt": "Erstelle aus {{decision}} ein JSON-Objekt.\\n\\nRegeln:\\n- state_updates: immer {}\\n- notify_user: true nur wenn ...", "output_key": "output", "only_if_route": "..."}
+Output-Step — letzter Step jeder Route die ein Ergebnis produziert:
+{"id": "output", "type": "llm_extract", "is_output": true, "prompt": "Erstelle aus {{result}} ein JSON-Objekt.\\n\\nRegeln:\\n- state_updates: immer {}\\n- notify_user: true nur wenn ...", "output_key": "output", "only_if_route": "route_name"}
 
-REGELN:
+STRUKTURREGELN:
 - Der Output-Step hat immer is_output=true und type=llm_extract
-- state_updates im Output-Step ist IMMER {} — State wird durch state_write Steps geschrieben
-- LLM-prompts für llm_extract/llm_decide enden mit "Antworte NUR mit rohem JSON: {Felder}"
-- Jeder Step der Daten aus einem anderen Step braucht dessen output_key als Template-Variable: {{output_key}}
+- state_updates im Output-Step ist IMMER {} — State wird ausschließlich durch state_write Steps geschrieben
+- LLM-Prompts für llm_extract/llm_decide enden mit "Antworte NUR mit rohem JSON: {Felder}"
+- Jeder Step der Daten eines anderen Steps braucht — {{output_key}} als Template-Variable im prompt
 - only_if_route weglassen wenn der Step auf allen Routen läuft
-- Keine Schritte erfinden die nicht in der Klassifikation stehen"""
+- Keine Steps erfinden die nicht in der Klassifikation stehen"""
 
 
 async def _generate_pipeline(

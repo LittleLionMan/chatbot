@@ -298,7 +298,8 @@ async def _handle_data_write(
     key_template: str = step.get("key_template", "")
     key = _resolve_template(key_template, context)
     source_key: str = step["source_key"]
-    value = context.get(source_key, "")
+    raw = context.get(source_key, "")
+    value = clean_llm_json(raw) if raw.strip().startswith("```") else raw
     await memory.write_agent_data(pool, agent_id, namespace, key, value)
     logger.info("data_write: %s/%s (%d chars)", namespace, key, len(value))
     return value

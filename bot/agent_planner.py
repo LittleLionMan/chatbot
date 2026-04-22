@@ -72,7 +72,7 @@ Deine Aufgabe: analysiere ob du genug weißt um ein sinnvolles System zu bauen. 
 Verfügbare Bausteine:
 {json.dumps(_AVAILABLE_STEP_TYPES, ensure_ascii=False)}
 
-Verfügbare Transform-Operationen (für deterministisches Parsing):
+Verfügbare Transform-Operationen (für deterministisches Parsing ohne LLM):
 {json.dumps(_TRANSFORM_OPERATIONS, ensure_ascii=False)}
 
 Externe Services die Agents triggern können:
@@ -97,7 +97,7 @@ Mögliche Status-Werte:
   "description": "Menschenlesbare Zusammenfassung in Bobs Stimme. Beschreibe jeden Agent mit Name, Aufgabe und Zeitplan/Trigger. Benenne explizit welcher Agent wessen Daten liest. Nenne Annahmen die du getroffen hast. Schließe mit: Passt das so, oder soll ich etwas anpassen?",
   "agents": [
     {{
-      "name": "thematisch passender Name",
+      "name": "thematisch passender menschlicher Name",
       "role": "ein Satz was dieser Agent tut",
       "schedule": "Cron-Expression oder null wenn trigger-only",
       "trigger": "womit wird der Agent getriggert, oder null"
@@ -107,19 +107,21 @@ Mögliche Status-Werte:
   "missing_capabilities": ["Beschreibung was fehlt und warum — leer wenn alles abdeckbar"]
 }}
 
-3. User hat bestätigt (explizite Zustimmung wie ja/gut/mach es/los/ok):
+3. User hat bestätigt:
 {{"status": "confirmed"}}
 
-Regeln:
-- Maximal zwei Klärungsrunden — danach Plan präsentieren und Annahmen benennen
-- Eine Rückfrage pro Runde, nicht mehrere
+Regeln für Rückfragen:
+- Stelle eine Rückfrage nur wenn die fehlende Information das System grundlegend verändert und nicht sinnvoll angenommen werden kann
+- Eine Rückfrage pro Runde, die wichtigste offene zuerst
+- Frage nicht nach Dingen die du sinnvoll annehmen und als Annahme benennen kannst
+- Irgendwann reicht es — präsentiere einen Plan und benenne was du angenommen hast
+
+Regeln für den Plan:
+- Eine Korrektur des Users ("nein, nicht täglich sondern wöchentlich") → direkt angepassten Plan zurückgeben
+- Erkenne Bestätigungen: "ja", "gut", "mach es", "los", "ok", "passt", "stimmt so", "anlegen", "setze um"
 - missing_capabilities nur wenn eine Teilaufgabe wirklich nicht mit verfügbaren Bausteinen abbildbar ist
-- http_fetch + xml_extract/json_path deckt strukturierte APIs und Feeds ab — das ist kein fehlendes Feature
-- Wenn der User einen Plan korrigiert ("nein, nicht täglich sondern wöchentlich") → direkt angepassten Plan zurückgeben, nicht nochmal nachfragen
-- Namen thematisch passend wählen: Finance → Gordon/Warren, News → Wolf/Anna, Monitoring → Argus/HAL, GPU/Hardware → Linus/Jensen
-- Erkenne explizite Bestätigungen: "ja", "gut", "mach es", "los", "ok", "passt", "stimmt so", "anlegen"
-- Scraper-Trigger sind bereits bekannt — frage nicht nach dem Payload-Format wenn der User erwähnt dass Scraper existieren
-- Wechselkurs-Bedarf: wenn USD-Preise im Spiel sind und kein Wechselkurs-Agent existiert, plane einen ein der täglich die EZB abruft (URL: https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml)
+- Strukturierte Daten von bekannten APIs oder Feeds → http_fetch + transform, kein LLM-Call nötig
+- Scraper-Trigger-Payload ist bekannt — frage nicht danach wenn der User Scraper erwähnt
 """
 
 
@@ -129,15 +131,9 @@ async def plan(
     clarification_rounds: int = 0,
 ) -> dict:
     try:
-        if clarification_rounds >= 2:
-            force_hint = "\n\nHinweis: Du hast bereits zweimal nachgefragt. Präsentiere jetzt einen Plan mit den verfügbaren Informationen und benenne deine Annahmen explizit."
-            context = accumulated_context + force_hint
-        else:
-            context = accumulated_context
-
         raw = await brain.chat(
             system=_PLAN_SYSTEM,
-            messages=[{"role": "user", "content": context}],
+            messages=[{"role": "user", "content": accumulated_context}],
             capability=CAPABILITY_DEEP_REASONING,
             caller="agent_planner",
             pool=pool,
