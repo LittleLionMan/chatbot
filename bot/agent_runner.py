@@ -465,7 +465,7 @@ def _transform_iqr_bounds(step: dict, context: dict[str, str]) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def _transform_json_extract(step: dict, context: dict[str, str]) -> str:
+def _transform_json_path(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     path: str = step["path"]
 
@@ -473,17 +473,70 @@ def _transform_json_extract(step: dict, context: dict[str, str]) -> str:
     try:
         data = json.loads(raw)
         for part in path.split("."):
-            data = data[part]
+            if part.isdigit():
+                data = data[int(part)]
+            else:
+                data = data[part]
         return str(data)
     except Exception:
-        logger.warning("transform json_extract: could not extract %r from %r", path, source_key)
+        logger.warning("transform json_path: could not extract %r from %r", path, source_key)
+        return step.get("default", "")
+
+
+def _transform_xml_extract(step: dict, context: dict[str, str]) -> str:
+    import xml.etree.ElementTree as ET
+
+    source_key: str = step["source_key"]
+    xpath: str = step["xpath"]
+    attribute: str | None = step.get("attribute")
+
+    raw = context.get(source_key, "")
+    if not raw:
+        logger.warning("transform xml_extract: source_key %r is empty", source_key)
+        return step.get("default", "")
+    try:
+        root = ET.fromstring(raw)
+        elements = root.findall(xpath)
+        if not elements:
+            logger.warning("transform xml_extract: xpath %r found no elements", xpath)
+            return step.get("default", "")
+        el = elements[0]
+        if attribute:
+            result = el.get(attribute, step.get("default", ""))
+        else:
+            result = el.text or step.get("default", "")
+        return str(result).strip()
+    except Exception as e:
+        logger.warning("transform xml_extract: failed for xpath %r: %s", xpath, e)
+        return step.get("default", "")
+
+
+def _transform_regex_extract(step: dict, context: dict[str, str]) -> str:
+    import re as _re
+
+    source_key: str = step["source_key"]
+    pattern: str = step["pattern"]
+    group: int = int(step.get("group", 1))
+
+    raw = context.get(source_key, "")
+    try:
+        match = _re.search(pattern, raw)
+        if not match:
+            logger.warning("transform regex_extract: pattern %r found no match", pattern)
+            return step.get("default", "")
+        return match.group(group).strip()
+    except Exception as e:
+        logger.warning("transform regex_extract: failed for pattern %r: %s", pattern, e)
         return step.get("default", "")
 
 
 _TRANSFORM_OPERATIONS: dict[str, Callable[[dict, dict[str, str]], str]] = {
     "array_append": _transform_array_append,
     "iqr_bounds": _transform_iqr_bounds,
-    "json_extract": _transform_json_extract,
+    "json_path": _transform_json_path,
+    "json_extract": _transform_json_path,
+    "xml_extract": _transform_xml_extract,
+    "regex_extract": _transform_regex_extract,
 }
 
 
@@ -498,6 +551,50 @@ async def _handle_transform(
         logger.warning("transform: unknown operation %r", operation)
         return ""
     return handler(step, context)
+
+
+# ── HTTP Fetch ────────────────────────────────────────────────────────────────
+
+async def _handle_http_fetch(
+    step: dict,
+    context: dict[str, str],
+    **_,
+) -> str:
+    import httpx
+
+    url_template: str = step.get("url_template") or step.get("url", "")
+    url = _resolve_template(url_template, context)
+    if not url:
+        logger.warning("http_fetch: no url configured")
+        return step.get("default", "")
+
+    method: str = step.get("method", "GET").upper()
+    headers: dict[str, str] = step.get("headers", {})
+    timeout: float = float(step.get("timeout", 15.0))
+    body: str | None = step.get("body")
+
+    resolved_headers = {k: _resolve_template(v, context) for k, v in headers.items()}
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            if method == "GET":
+                resp = await client.get(url, headers=resolved_headers)
+            elif method == "POST":
+                resp = await client.post(url, headers=resolved_headers, content=body)
+            else:
+                logger.warning("http_fetch: unsupported method %r", method)
+                return step.get("default", "")
+
+            resp.raise_for_status()
+            result = resp.text
+            logger.info("http_fetch: %s %s → %d (%d chars)", method, url[:80], resp.status_code, len(result))
+            return result
+    except httpx.HTTPStatusError as e:
+        logger.warning("http_fetch: HTTP error %d for %s", e.response.status_code, url[:80])
+        return step.get("default", "")
+    except Exception as e:
+        logger.warning("http_fetch: failed for %s: %s", url[:80], e)
+        return step.get("default", "")
 
 
 # ── Coordination ──────────────────────────────────────────────────────────────
@@ -553,6 +650,7 @@ _STEP_HANDLERS: dict[str, StepHandler] = {
     "llm_summarize": _handle_llm_step,
     "web_search": _handle_web_search,
     "finance": _handle_finance,
+    "http_fetch": _handle_http_fetch,
     "state_read": _handle_state_read,
     "state_write": _handle_state_write,
     "state_read_external": _handle_state_read_external,
@@ -827,10 +925,9 @@ async def execute_agent(
         else:
             logger.info("agent %s: no change or notify suppressed", name)
 
-        if schedule:
-            tz = await memory.get_user_timezone(pool, user_id)
-            next_run = next_agent_run_after(schedule, tz)
-            await memory.update_agent_run(pool, agent_id, next_run)
+        tz = await memory.get_user_timezone(pool, user_id)
+        next_run = next_agent_run_after(schedule, tz)
+        await memory.update_agent_run(pool, agent_id, next_run)
         logger.info("agent %d done. next run: %s", agent_id, next_run.isoformat())
 
     except ProviderRateLimitError as e:
@@ -838,9 +935,8 @@ async def execute_agent(
     except Exception as e:
         logger.error("agent %d execution failed: %s", agent_id, e)
         try:
-            if schedule:
-                tz = await memory.get_user_timezone(pool, user_id)
-                next_run = next_agent_run_after(schedule, tz)
-                await memory.update_agent_run(pool, agent_id, next_run)
+            tz = await memory.get_user_timezone(pool, user_id)
+            next_run = next_agent_run_after(schedule, tz)
+            await memory.update_agent_run(pool, agent_id, next_run)
         except Exception as inner_e:
             logger.error("agent %d failed to update next_run: %s", agent_id, inner_e)

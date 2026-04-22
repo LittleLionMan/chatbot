@@ -123,6 +123,7 @@ const STEP_TYPE_GROUPS = {
   Datenzugriff: [
     "web_search",
     "finance",
+    "http_fetch",
     "state_read",
     "state_write",
     "state_read_external",
@@ -144,6 +145,7 @@ const STEP_TYPE_COLORS = {
   llm_summarize: "var(--accent)",
   web_search: "var(--blue)",
   finance: "var(--blue)",
+  http_fetch: "var(--blue)",
   state_read: "var(--text3)",
   state_write: "var(--text3)",
   state_read_external: "var(--text3)",
@@ -195,6 +197,10 @@ function stepSummary(step) {
       break;
     case "finance":
       parts.push(`ticker_key: ${step.ticker_key || "selected_ticker"}`);
+      break;
+    case "http_fetch":
+      parts.push(step.url || step.url_template || "?");
+      if (step.method && step.method !== "GET") parts.push(step.method);
       break;
     case "state_read":
     case "state_write":
@@ -267,7 +273,13 @@ function categoryOptions(selected) {
 }
 
 function transformOpOptions(selected) {
-  return ["array_append", "iqr_bounds", "json_extract"]
+  return [
+    "array_append",
+    "iqr_bounds",
+    "json_path",
+    "xml_extract",
+    "regex_extract",
+  ]
     .map(
       (o) =>
         `<option value="${o}" ${o === (selected || "") ? "selected" : ""}>${o}</option>`,
@@ -425,6 +437,36 @@ function buildStepFormBody(step) {
         ) + outputKey;
       break;
 
+    case "http_fetch":
+      typeSpecific =
+        field(
+          "url (oder url_template mit {{context_key}})",
+          textInput(
+            "sf-url",
+            step.url || step.url_template,
+            "https://example.com/api",
+          ),
+        ) +
+        field(
+          "method",
+          `<select class="modal-select" id="sf-method"><option value="GET" ${(step.method || "GET") === "GET" ? "selected" : ""}>GET</option><option value="POST" ${step.method === "POST" ? "selected" : ""}>POST</option></select>`,
+        ) +
+        field(
+          "headers (JSON, optional)",
+          textInput(
+            "sf-headers",
+            step.headers ? JSON.stringify(step.headers) : "",
+            '{"Accept": "application/xml"}',
+          ),
+        ) +
+        field("timeout Sekunden", textInput("sf-timeout", step.timeout, "15")) +
+        field(
+          "default (bei Fehler)",
+          textInput("sf-default", step.default, ""),
+        ) +
+        outputKey;
+      break;
+
     case "state_read":
       typeSpecific = keyField + outputKey + defaultVal;
       break;
@@ -472,7 +514,11 @@ function buildStepFormBody(step) {
         `<div id="sf-max-items-wrap">${field("max_items", textInput("sf-max-items", step.max_items, "200"))}</div>` +
         targetKey +
         `<div id="sf-multiplier-wrap">${field("multiplier (für iqr_bounds)", textInput("sf-multiplier", step.multiplier, "1.5"))}</div>` +
-        `<div id="sf-path-wrap">${field("path (für json_extract, z.B. field.nested)", textInput("sf-path", step.path, ""))}</div>` +
+        `<div id="sf-path-wrap">${field("path (für json_path, z.B. rates.USD)", textInput("sf-path", step.path, ""))}</div>` +
+        `<div id="sf-xpath-wrap">${field("xpath (für xml_extract, z.B. .//Cube[@currency='USD'])", textInput("sf-xpath", step.xpath, ""))}</div>` +
+        `<div id="sf-attribute-wrap">${field("attribute (für xml_extract, z.B. rate)", textInput("sf-attribute", step.attribute, ""))}</div>` +
+        `<div id="sf-pattern-wrap">${field("pattern (für regex_extract)", textInput("sf-pattern", step.pattern, ""))}</div>` +
+        `<div id="sf-group-num-wrap">${field("group (für regex_extract, Standard 1)", textInput("sf-group-num", step.group, "1"))}</div>` +
         outputKey;
       break;
     }
@@ -531,7 +577,11 @@ function onTransformOpChange() {
   show("sf-condition-wrap", op === "array_append");
   show("sf-max-items-wrap", op === "array_append");
   show("sf-multiplier-wrap", op === "iqr_bounds");
-  show("sf-path-wrap", op === "json_extract");
+  show("sf-path-wrap", op === "json_path");
+  show("sf-xpath-wrap", op === "xml_extract");
+  show("sf-attribute-wrap", op === "xml_extract");
+  show("sf-pattern-wrap", op === "regex_extract");
+  show("sf-group-num-wrap", op === "regex_extract");
 }
 
 function _val(id) {
@@ -665,11 +715,42 @@ function _readStepFromForm() {
         const mult = _val("sf-multiplier");
         if (mult) step.multiplier = parseFloat(mult);
       }
-      if (step.operation === "json_extract") {
+      if (step.operation === "json_path") {
         step.path = _val("sf-path") || "";
         const def = _val("sf-default");
         if (def) step.default = def;
       }
+      if (step.operation === "xml_extract") {
+        step.xpath = _val("sf-xpath") || "";
+        const attr = _val("sf-attribute");
+        if (attr) step.attribute = attr;
+        const def = _val("sf-default");
+        if (def) step.default = def;
+      }
+      if (step.operation === "regex_extract") {
+        step.pattern = _val("sf-pattern") || "";
+        const grp = _val("sf-group-num");
+        if (grp) step.group = parseInt(grp);
+        const def = _val("sf-default");
+        if (def) step.default = def;
+      }
+      break;
+    }
+    case "http_fetch": {
+      const urlVal = _val("sf-url") || "";
+      if (urlVal.includes("{{")) step.url_template = urlVal;
+      else step.url = urlVal;
+      step.method = _val("sf-method") || "GET";
+      const hdrs = _val("sf-headers");
+      if (hdrs) {
+        try {
+          step.headers = JSON.parse(hdrs);
+        } catch {}
+      }
+      const to = _val("sf-timeout");
+      if (to) step.timeout = parseFloat(to);
+      const def = _val("sf-default");
+      if (def) step.default = def;
       break;
     }
     case "trigger_agent": {

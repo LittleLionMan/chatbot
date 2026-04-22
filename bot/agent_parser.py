@@ -64,6 +64,7 @@ LLM (nur wenn Urteilsvermögen, Abstraktion oder Sprachverständnis nötig ist):
 DATENZUGRIFF (deterministisch):
 - web_search: Websuche mit Query-Template.
 - finance: Kursdaten für einen Ticker aus dem Finance-Service.
+- http_fetch: HTTP-Request an eine bekannte URL. Schreibt den Response-Body als String in den Context. Für strukturierte APIs, XML-Feeds, REST-Endpunkte wo die URL bekannt ist. Kein LLM.
 - state_read: Einzelnen Key aus Agent-State lesen.
 - state_write: Einzelnen Key in Agent-State schreiben.
 - state_read_external: Key aus State eines anderen Agenten lesen.
@@ -75,8 +76,12 @@ DATENZUGRIFF (deterministisch):
 
 TRANSFORMATION (deterministisch, operiert auf context-Werten):
 - transform: Berechnung oder Strukturänderung auf bereits im Context vorhandenen Daten.
-  Operationen: array_append (Wert an gruppierte Liste anhängen), iqr_bounds (Statistiken berechnen),
-  json_extract (Wert aus JSON-Pfad extrahieren).
+  Operationen:
+  - array_append: Wert an gruppierte Liste anhängen
+  - iqr_bounds: Statistische Bounds (Q1/Q3/IQR) berechnen
+  - json_path: Wert aus JSON-String extrahieren via Punkt-Pfad (z.B. "rates.USD")
+  - xml_extract: Wert aus XML-String extrahieren via XPath + optionalem Attribut-Namen
+  - regex_extract: Wert aus beliebigem Text via Regex-Capture-Group
 
 KOORDINATION (deterministisch):
 - trigger_agent: Anderen Agenten mit Payload anstoßen.
@@ -84,6 +89,8 @@ KOORDINATION (deterministisch):
 
 ENTSCHEIDUNGSREGELN:
 - Routing auf trigger_payload.type oder ähnliche strukturierte Felder → router_match, NICHT router_llm
+- Bekannte URL mit strukturiertem Response (XML, JSON, RSS) → http_fetch + transform(xml_extract|json_path), KEIN LLM
+- Websuche ohne bekannte URL → web_search
 - Preis in Liste eintragen → state_read + transform(array_append) + state_write
 - Statistiken auf gesammelten Daten → state_read + transform(iqr_bounds) + state_write
 - Wert aus LLM-Output in State → llm_extract dann state_write mit source_key auf llm_output
@@ -197,8 +204,18 @@ transform array_append:
 transform iqr_bounds:
 {"id": "...", "type": "transform", "operation": "iqr_bounds", "source_key": "baselines", "multiplier": 1.5, "output_key": "price_stats", "only_if_route": "..."}
 
-transform json_extract:
-{"id": "...", "type": "transform", "operation": "json_extract", "source_key": "some_json", "path": "field.nested", "output_key": "extracted_value", "default": ""}
+http_fetch:
+{"id": "...", "type": "http_fetch", "url": "https://example.com/api", "output_key": "...", "default": ""}
+{"id": "...", "type": "http_fetch", "url_template": "https://api.example.com/{{ticker}}", "method": "GET", "headers": {"Accept": "application/xml"}, "timeout": 15.0, "output_key": "..."}
+
+transform json_path:
+{"id": "...", "type": "transform", "operation": "json_path", "source_key": "api_response", "path": "rates.USD", "output_key": "usd_rate", "default": ""}
+
+transform xml_extract:
+{"id": "...", "type": "transform", "operation": "xml_extract", "source_key": "xml_response", "xpath": ".//Cube[@currency='USD']", "attribute": "rate", "output_key": "usd_rate", "default": ""}
+
+transform regex_extract:
+{"id": "...", "type": "transform", "operation": "regex_extract", "source_key": "raw_text", "pattern": "USD[:\\s]+([\\d.]+)", "group": 1, "output_key": "usd_rate", "default": ""}
 
 trigger_agent:
 {"id": "...", "type": "trigger_agent", "target_agent_name": "Gordon", "payload": {"key": "{{value}}"}, "delay_minutes": 0}
