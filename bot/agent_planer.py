@@ -38,6 +38,31 @@ _EXTERNAL_SERVICES = [
     "tts (Text-to-Speech)",
 ]
 
+_SCRAPER_PAYLOAD_SCHEMA = {
+    "listing_id": "int — interne DB-ID des Listings",
+    "platform": "str — z.B. 'kleinanzeigen' oder 'ebay'",
+    "category": "str — z.B. 'gpu'",
+    "title": "str — Titel des Listings",
+    "price": "float | null — Preis in der Währung der Plattform",
+    "currency": "str | null — z.B. 'EUR' oder 'USD'",
+    "url": "str — Link zum Listing",
+    "location": "str | null — Ort des Verkäufers",
+    "condition": "str | null — z.B. 'very_good', 'good', 'acceptable'",
+    "seller_rating": "float | null — Bewertung des Verkäufers",
+    "attributes": "dict — plattformspezifische Zusatzfelder",
+    "raw_text": "str — Beschreibungstext des Listings (max 2000 Zeichen)",
+}
+
+_RSS_MONITOR_PAYLOAD_SCHEMA = {
+    "key": "str — Watchlist-Item (z.B. Ticker oder Suchbegriff)",
+    "name": "str — Anzeigename des Items",
+    "reason": "str — Artikeltitel + Quelle",
+    "article_text": "str — Volltext des Artikels (max 8000 Zeichen)",
+    "article_url": "str — Link zum Artikel",
+    "published": "str — Veröffentlichungsdatum",
+    "since_date": "str — Datum der letzten Analyse dieses Items",
+}
+
 _PLAN_SYSTEM = f"""Du bist Bob. Du planst ein Agent-System für einen User.
 
 Dir wird der bisherige Gesprächsverlauf übergeben — der ursprüngliche Prompt des Users und alle bisherigen Klärungsrunden.
@@ -52,6 +77,12 @@ Verfügbare Transform-Operationen (für deterministisches Parsing):
 
 Externe Services die Agents triggern können:
 {json.dumps(_EXTERNAL_SERVICES, ensure_ascii=False)}
+
+Wenn ein Scraper einen Agent triggert, enthält der Trigger-Payload immer diese Felder:
+{json.dumps(_SCRAPER_PAYLOAD_SCHEMA, ensure_ascii=False)}
+
+Wenn ein RSS-Monitor einen Agent triggert, enthält der Trigger-Payload immer diese Felder:
+{json.dumps(_RSS_MONITOR_PAYLOAD_SCHEMA, ensure_ascii=False)}
 
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
@@ -87,6 +118,8 @@ Regeln:
 - Wenn der User einen Plan korrigiert ("nein, nicht täglich sondern wöchentlich") → direkt angepassten Plan zurückgeben, nicht nochmal nachfragen
 - Namen thematisch passend wählen: Finance → Gordon/Warren, News → Wolf/Anna, Monitoring → Argus/HAL, GPU/Hardware → Linus/Jensen
 - Erkenne explizite Bestätigungen: "ja", "gut", "mach es", "los", "ok", "passt", "stimmt so", "anlegen"
+- Scraper-Trigger sind bereits bekannt — frage nicht nach dem Payload-Format wenn der User erwähnt dass Scraper existieren
+- Wechselkurs-Bedarf: wenn USD-Preise im Spiel sind und kein Wechselkurs-Agent existiert, plane einen ein der täglich die EZB abruft (URL: https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml)
 """
 
 
