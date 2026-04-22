@@ -25,24 +25,9 @@ engines:
     shortcut: gn
     categories: news
 
-  - name: yahoo finance
-    engine: yahoo_finance
-    shortcut: yf
-    categories: finance
-
-  - name: seeking alpha
-    engine: seekingalpha
-    shortcut: sa
-    categories: finance
-
   - name: github
     engine: github
     shortcut: gh
-    categories: it
-
-  - name: stackoverflow
-    engine: stackoverflow
-    shortcut: so
     categories: it
 
   - name: arxiv
