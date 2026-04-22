@@ -1,46 +1,685 @@
 from __future__ import annotations
 import json
 import logging
+import re
+import statistics
+from typing import Callable, Awaitable
+
 import asyncpg
 import telegram
+
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
 from bot.brain import ProviderRateLimitError
-from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING, CAPABILITY_CODING
+from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, CAPABILITY_REASONING
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
 
-_AGENT_STRUCTURE_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
-Dir wird das Arbeits-Ergebnis des Agenten übergeben. Extrahiere daraus die strukturierten Ausgaben.
-Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der letzte }.
-Felder:
-- "report": Zusammenfassung des Laufs in maximal 3 kurzen Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
-- "notify_user": true wenn der User benachrichtigt werden soll, false sonst.
-- "state_updates": Dict mit Key-Value-Paaren die im Agent-State gespeichert werden. Alle Werte müssen Strings sein.
-- "tool_calls": Liste aller Tool-Aufrufe für große Dokumente oder Koordination.
-Verfügbare Tools:
-- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — für kurze Werte.
-- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — für lange Texte.
-- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — löst einen anderen Agenten aus.
-- {"tool": "notify_user", "message": "..."} — sendet eine Nachricht an den User.
-Wichtig: state_updates werden IMMER gesetzt wenn der Work-Result State-Änderungen beschreibt. Niemals last_run_summary in state_updates setzen."""
 
-_MAX_SUMMARY_CHARS = 800
-
-
-def _build_relay_system(agent_name: str) -> str:
-    return f"""Du bist {agent_name}. Formuliere den folgenden Bericht als direkte Nachricht in der ersten Person.
-Beginne immer mit "{agent_name}:" — nie mit "Bob" oder einem anderen Namen.
+_RELAY_SYSTEM_TEMPLATE = """Du bist {name}. Formuliere den folgenden Bericht als direkte Nachricht in der ersten Person.
+Beginne immer mit "{name}:" — nie mit "Bob" oder einem anderen Namen.
 Keine Einleitung, kein Abschluss — nur die Nachricht direkt.
 Behalte alle konkreten Fakten vollständig bei."""
 
 
-def _resolve_template(template: str, trigger_payload: dict[str, str]) -> str:
-    for k, v in trigger_payload.items():
+def _build_relay_system(agent_name: str) -> str:
+    return _RELAY_SYSTEM_TEMPLATE.format(name=agent_name)
+
+
+def _resolve_template(template: str, context: dict[str, str]) -> str:
+    for k, v in context.items():
         template = template.replace(f"{{{{{k}}}}}", v)
     return template
 
+
+def _get(context: dict[str, str], key: str) -> str:
+    return context.get(key, "")
+
+
+def _set(context: dict[str, str], key: str, value: str) -> None:
+    context[key] = value
+
+
+# ── Router ────────────────────────────────────────────────────────────────────
+
+def _evaluate_condition(condition: str, context: dict[str, str]) -> bool:
+    match = re.match(r"^([\w.]+)\s*(==|!=|>|<|>=|<=)\s*(.+)$", condition.strip())
+    if not match:
+        logger.warning("router_match: unparseable condition %r", condition)
+        return False
+
+    lhs_key, op, rhs_raw = match.group(1), match.group(2), match.group(3).strip()
+
+    lhs_raw = context.get(lhs_key.replace(".", "_"), context.get(lhs_key, ""))
+
+    rhs = rhs_raw.strip("'\"")
+    if rhs_raw.lower() == "null":
+        rhs = None
+
+    if op == "==" and rhs is None:
+        return lhs_raw == "" or lhs_raw is None
+    if op == "!=" and rhs is None:
+        return lhs_raw not in ("", None)
+
+    try:
+        lhs = float(lhs_raw)
+        rhs_cmp = float(rhs)
+        return {"==": lhs == rhs_cmp, "!=": lhs != rhs_cmp,
+                ">": lhs > rhs_cmp, "<": lhs < rhs_cmp,
+                ">=": lhs >= rhs_cmp, "<=": lhs <= rhs_cmp}[op]
+    except (ValueError, TypeError):
+        return {"==": lhs_raw == rhs, "!=": lhs_raw != rhs}.get(op, False)
+
+
+async def _handle_router_match(
+    step: dict,
+    context: dict[str, str],
+    **_,
+) -> str:
+    rules: list[dict] = step.get("rules", [])
+    default: str = step.get("default", "default")
+
+    for rule in rules:
+        condition: str = rule.get("if", "")
+        route: str = rule.get("then", default)
+        if _evaluate_condition(condition, context):
+            logger.info("router_match: condition %r → route %r", condition, route)
+            return route
+
+    logger.info("router_match: no condition matched → default %r", default)
+    return default
+
+
+async def _handle_router_llm(
+    step: dict,
+    context: dict[str, str],
+    agent_system: str,
+    pool: asyncpg.Pool,
+    name: str,
+    **_,
+) -> str:
+    _ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad gilt.
+Antworte NUR mit einem einzigen Wort. Befolge die Entscheidungslogik im Prompt exakt.
+Wenn keine Bedingung zutrifft: antworte mit 'normal'."""
+
+    prompt = _resolve_template(step.get("prompt", ""), context)
+    result = await brain.chat(
+        system=_ROUTER_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=20,
+        capability=CAPABILITY_SIMPLE_TASKS,
+        caller=f"agent_router:{name}",
+        pool=pool,
+    )
+    return result.strip().lower()
+
+
+# ── LLM Steps ─────────────────────────────────────────────────────────────────
+
+_LLM_CAPABILITY_MAP: dict[str, str] = {
+    "llm_extract": CAPABILITY_SIMPLE_TASKS,
+    "llm_decide": CAPABILITY_REASONING,
+    "llm_summarize": CAPABILITY_CHAT,
+}
+
+_EXTRACT_SYSTEM = """Du extrahierst strukturierte Daten. Antworte ausschließlich mit rohem JSON.
+Der erste Charakter muss { sein, der letzte }. Kein anderer Text."""
+
+_DECIDE_SYSTEM = """Du bewertest und entscheidest. Antworte ausschließlich mit rohem JSON.
+Der erste Charakter muss { sein, der letzte }. Kein anderer Text."""
+
+_SUMMARIZE_SYSTEM = """Du fasst zusammen. Schreibe kompaktes Markdown, maximal 300 Wörter, nur Fakten.
+Das Ergebnis wird von einem anderen Modell weiterverarbeitet."""
+
+_LLM_SYSTEM_MAP: dict[str, str] = {
+    "llm_extract": _EXTRACT_SYSTEM,
+    "llm_decide": _DECIDE_SYSTEM,
+    "llm_summarize": _SUMMARIZE_SYSTEM,
+}
+
+_OUTPUT_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
+Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der letzte }.
+Felder:
+- "report": Zusammenfassung in maximal 3 kurzen Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
+- "notify_user": true wenn der User benachrichtigt werden soll, false sonst.
+- "state_updates": immer leeres Dict {} — State wird per state_write Steps gepflegt.
+- "tool_calls": Liste der Tool-Aufrufe.
+Verfügbare Tools:
+- {"tool": "notify_user", "message": "..."} — Nachricht an den User.
+- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0}
+Erzeuge NUR Tool-Calls die im Prompt explizit angewiesen werden."""
+
+
+async def _handle_llm_step(
+    step: dict,
+    step_type: str,
+    context: dict[str, str],
+    agent_system: str,
+    pool: asyncpg.Pool,
+    name: str,
+    **_,
+) -> str:
+    is_output = step.get("is_output", False)
+    system = _OUTPUT_SYSTEM if is_output else _LLM_SYSTEM_MAP[step_type]
+    capability = CAPABILITY_SIMPLE_TASKS if is_output else _LLM_CAPABILITY_MAP[step_type]
+    prompt = _resolve_template(step.get("prompt", ""), context)
+
+    result = await brain.chat(
+        system=system if is_output else f"{agent_system}\n\n{system}",
+        messages=[{"role": "user", "content": prompt}],
+        capability=capability,
+        caller=f"agent_{step_type}:{name}",
+        pool=pool,
+    )
+    logger.info("agent %s step %r (%s): %d chars", name, step["id"], step_type, len(result))
+    return result
+
+
+# ── Web Search ────────────────────────────────────────────────────────────────
+
+async def _handle_web_search(
+    step: dict,
+    context: dict[str, str],
+    agent_system: str,
+    pool: asyncpg.Pool,
+    name: str,
+    **_,
+) -> str:
+    from bot import search as _search
+    from bot.models import select_model_for_provider
+
+    query_template = step.get("query_template", "")
+    query = _resolve_template(query_template, context)
+    time_range: str | None = step.get("time_range")
+    categories: str | None = step.get("categories")
+    prompt = _resolve_template(step.get("prompt", "Fasse die Suchergebnisse zusammen."), context)
+
+    if not await _search.is_available():
+        force_model = select_model_for_provider(CAPABILITY_CHAT, "anthropic")
+        result = await brain.chat(
+            system=agent_system,
+            messages=[{"role": "user", "content": prompt}],
+            use_web_search=True,
+            capability=CAPABILITY_CHAT,
+            force_model=force_model,
+            caller=f"agent_web_search:{name}",
+            pool=pool,
+        )
+        return result
+
+    search_result = await _search.search(query, time_range=time_range, categories=categories)
+    if not search_result:
+        logger.info("agent %s web_search %r: no results", name, query)
+        return ""
+
+    augmented_prompt = f"{prompt}\n\n[Suchergebnisse für '{query}']\n\n{search_result}"
+    result = await brain.chat(
+        system=agent_system,
+        messages=[{"role": "user", "content": augmented_prompt}],
+        capability=CAPABILITY_CHAT,
+        caller=f"agent_web_search:{name}",
+        pool=pool,
+    )
+    logger.info("agent %s web_search %r: %d chars", name, query, len(result))
+    return result
+
+
+# ── Finance ───────────────────────────────────────────────────────────────────
+
+async def _handle_finance(
+    step: dict,
+    context: dict[str, str],
+    **_,
+) -> str:
+    from bot import finance as _finance
+
+    ticker_key = step.get("ticker_key", "selected_ticker")
+    ticker = context.get(ticker_key, "").strip()
+    if not ticker:
+        logger.warning("finance step: no ticker in context key %r", ticker_key)
+        return ""
+
+    result = await _finance.get_quote_summary(ticker)
+    logger.info("finance step: fetched %s (%d chars)", ticker, len(result))
+    return result
+
+
+# ── State / Data ──────────────────────────────────────────────────────────────
+
+async def _handle_state_read(
+    step: dict,
+    context: dict[str, str],
+    state: dict[str, str],
+    **_,
+) -> str:
+    key: str = step["key"]
+    default: str = step.get("default", "")
+    value = state.get(key, default)
+    return value
+
+
+async def _handle_state_write(
+    step: dict,
+    context: dict[str, str],
+    state: dict[str, str],
+    **_,
+) -> str:
+    key: str = step["key"]
+    source_key: str = step["source_key"]
+    value = context.get(source_key, "")
+    state[key] = value
+    logger.info("state_write: %r = %d chars", key, len(value))
+    return value
+
+
+async def _handle_data_read(
+    step: dict,
+    context: dict[str, str],
+    pool: asyncpg.Pool,
+    agent_id: int,
+    **_,
+) -> str:
+    namespace: str = step["namespace"]
+    key_template: str = step.get("key_template", "")
+    key = _resolve_template(key_template, context)
+    value = await memory.read_agent_data(pool, agent_id, namespace, key)
+    return value or step.get("default", "")
+
+
+async def _handle_data_write(
+    step: dict,
+    context: dict[str, str],
+    pool: asyncpg.Pool,
+    agent_id: int,
+    **_,
+) -> str:
+    namespace: str = step["namespace"]
+    key_template: str = step.get("key_template", "")
+    key = _resolve_template(key_template, context)
+    source_key: str = step["source_key"]
+    value = context.get(source_key, "")
+    await memory.write_agent_data(pool, agent_id, namespace, key, value)
+    logger.info("data_write: %s/%s (%d chars)", namespace, key, len(value))
+    return value
+
+
+async def _handle_data_read_external(
+    step: dict,
+    context: dict[str, str],
+    pool: asyncpg.Pool,
+    **_,
+) -> str:
+    agent_name: str = step["agent_name"]
+    namespace: str = step["namespace"]
+    key_template: str = step.get("key_template", "")
+    key = _resolve_template(key_template, context)
+
+    target_id = await memory.get_agent_id_by_name(pool, agent_name)
+    if target_id is None:
+        logger.warning("data_read_external: agent %r not found", agent_name)
+        return step.get("default", "")
+
+    value = await memory.read_agent_data(pool, target_id, namespace, key)
+    return value or step.get("default", "")
+
+
+async def _handle_data_write_external(
+    step: dict,
+    context: dict[str, str],
+    pool: asyncpg.Pool,
+    **_,
+) -> str:
+    agent_name: str = step["agent_name"]
+    namespace: str = step["namespace"]
+    key_template: str = step.get("key_template", "")
+    key = _resolve_template(key_template, context)
+    source_key: str = step["source_key"]
+    value = context.get(source_key, "")
+
+    target_id = await memory.get_agent_id_by_name(pool, agent_name)
+    if target_id is None:
+        logger.warning("data_write_external: agent %r not found", agent_name)
+        return ""
+
+    await memory.write_agent_data(pool, target_id, namespace, key, value)
+    logger.info("data_write_external: %s → %s/%s (%d chars)", agent_name, namespace, key, len(value))
+    return value
+
+
+async def _handle_state_read_external(
+    step: dict,
+    context: dict[str, str],
+    pool: asyncpg.Pool,
+    **_,
+) -> str:
+    agent_name: str = step["agent_name"]
+    key: str = step["key"]
+
+    state = await memory.get_agent_state_by_name(pool, agent_name)
+    if state is None:
+        logger.warning("state_read_external: agent %r not found", agent_name)
+        return step.get("default", "")
+
+    return state.get(key, step.get("default", ""))
+
+
+async def _handle_state_write_external(
+    step: dict,
+    context: dict[str, str],
+    pool: asyncpg.Pool,
+    **_,
+) -> str:
+    agent_name: str = step["agent_name"]
+    key: str = step["key"]
+    source_key: str = step["source_key"]
+    value = context.get(source_key, "")
+
+    target_id = await memory.get_agent_id_by_name(pool, agent_name)
+    if target_id is None:
+        logger.warning("state_write_external: agent %r not found", agent_name)
+        return ""
+
+    await memory.set_agent_state(pool, target_id, {key: value})
+    logger.info("state_write_external: %s[%r] = %d chars", agent_name, key, len(value))
+    return value
+
+
+# ── Transform ─────────────────────────────────────────────────────────────────
+
+def _transform_array_append(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    group_by: str = step["group_by"]
+    value_key: str = step["value_key"]
+    target_key: str = step["target_key"]
+    max_items: int = int(step.get("max_items", 500))
+    condition_key: str | None = step.get("condition")
+
+    raw_source = context.get(source_key, "")
+    try:
+        source_data = json.loads(raw_source)
+    except Exception:
+        logger.warning("transform array_append: source %r is not valid JSON", source_key)
+        return context.get(target_key, "{}")
+
+    if condition_key and not source_data.get(condition_key):
+        logger.info("transform array_append: condition %r not met", condition_key)
+        return context.get(target_key, "{}")
+
+    group_value = source_data.get(group_by)
+    append_value = source_data.get(value_key)
+
+    if group_value is None or append_value is None:
+        logger.warning("transform array_append: missing %r or %r in source", group_by, value_key)
+        return context.get(target_key, "{}")
+
+    raw_target = context.get(target_key, "{}")
+    try:
+        target: dict[str, list] = json.loads(raw_target)
+        if not isinstance(target, dict):
+            target = {}
+    except Exception:
+        target = {}
+
+    group_key = str(group_value)
+    target.setdefault(group_key, [])
+    target[group_key].append(append_value)
+
+    if len(target[group_key]) > max_items:
+        target[group_key] = target[group_key][-max_items:]
+
+    result = json.dumps(target, ensure_ascii=False)
+    logger.info("transform array_append: %s[%s] now %d entries", target_key, group_key, len(target[group_key]))
+    return result
+
+
+def _transform_iqr_bounds(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    multiplier: float = float(step.get("multiplier", 1.5))
+
+    raw = context.get(source_key, "{}")
+    try:
+        baselines: dict[str, list] = json.loads(raw)
+        if not isinstance(baselines, dict):
+            raise ValueError
+    except Exception:
+        logger.warning("transform iqr_bounds: source %r is not a valid dict", source_key)
+        return "{}"
+
+    result: dict[str, dict] = {}
+    for model, prices in baselines.items():
+        floats = [float(p) for p in prices if p is not None]
+        if len(floats) < 20:
+            result[model] = {"count": len(floats), "lower_bound": None, "q1": None, "q3": None}
+            continue
+        q1 = statistics.quantiles(floats, n=4)[0]
+        q3 = statistics.quantiles(floats, n=4)[2]
+        iqr = q3 - q1
+        result[model] = {
+            "count": len(floats),
+            "q1": round(q1, 2),
+            "q3": round(q3, 2),
+            "lower_bound": round(q1 - multiplier * iqr, 2),
+        }
+
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _transform_json_extract(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    path: str = step["path"]
+
+    raw = context.get(source_key, "")
+    try:
+        data = json.loads(raw)
+        for part in path.split("."):
+            data = data[part]
+        return str(data)
+    except Exception:
+        logger.warning("transform json_extract: could not extract %r from %r", path, source_key)
+        return step.get("default", "")
+
+
+_TRANSFORM_OPERATIONS: dict[str, Callable[[dict, dict[str, str]], str]] = {
+    "array_append": _transform_array_append,
+    "iqr_bounds": _transform_iqr_bounds,
+    "json_extract": _transform_json_extract,
+}
+
+
+async def _handle_transform(
+    step: dict,
+    context: dict[str, str],
+    **_,
+) -> str:
+    operation: str = step.get("operation", "")
+    handler = _TRANSFORM_OPERATIONS.get(operation)
+    if handler is None:
+        logger.warning("transform: unknown operation %r", operation)
+        return ""
+    return handler(step, context)
+
+
+# ── Coordination ──────────────────────────────────────────────────────────────
+
+async def _handle_trigger_agent(
+    step: dict,
+    context: dict[str, str],
+    pool: asyncpg.Pool,
+    agent_id: int,
+    **_,
+) -> str:
+    target_name: str = _resolve_template(step.get("target_agent_name", ""), context)
+    delay: int = int(step.get("delay_minutes", 0))
+    payload_template: dict = step.get("payload", {})
+    payload = {k: _resolve_template(str(v), context) for k, v in payload_template.items()}
+
+    if target_name:
+        await memory.enqueue_agent_trigger(pool, agent_id, target_name, payload, delay)
+        logger.info("trigger_agent: queued %r (delay: %dm)", target_name, delay)
+    return ""
+
+
+async def _handle_notify_user(
+    step: dict,
+    context: dict[str, str],
+    bot: telegram.Bot,
+    target_chat_id: int,
+    **_,
+) -> str:
+    message_template: str = step.get("message_template", "")
+    source_key: str | None = step.get("source_key")
+
+    if source_key:
+        message = context.get(source_key, "")
+    else:
+        message = _resolve_template(message_template, context)
+
+    if message:
+        await bot.send_message(chat_id=target_chat_id, text=message)
+        logger.info("notify_user: sent %d chars", len(message))
+    return ""
+
+
+# ── Dispatch ──────────────────────────────────────────────────────────────────
+
+StepHandler = Callable[..., Awaitable[str]]
+
+_STEP_HANDLERS: dict[str, StepHandler] = {
+    "router_match": _handle_router_match,
+    "router_llm": _handle_router_llm,
+    "llm_extract": _handle_llm_step,
+    "llm_decide": _handle_llm_step,
+    "llm_summarize": _handle_llm_step,
+    "web_search": _handle_web_search,
+    "finance": _handle_finance,
+    "state_read": _handle_state_read,
+    "state_write": _handle_state_write,
+    "state_read_external": _handle_state_read_external,
+    "state_write_external": _handle_state_write_external,
+    "data_read": _handle_data_read,
+    "data_write": _handle_data_write,
+    "data_read_external": _handle_data_read_external,
+    "data_write_external": _handle_data_write_external,
+    "transform": _handle_transform,
+    "trigger_agent": _handle_trigger_agent,
+    "notify_user": _handle_notify_user,
+}
+
+
+# ── Tool call execution (from output step) ────────────────────────────────────
+
+async def _execute_tool_calls(
+    pool: asyncpg.Pool,
+    bot: telegram.Bot,
+    agent_id: int,
+    target_chat_id: int,
+    tool_calls: list[dict],
+) -> None:
+    for call in tool_calls:
+        tool = call.get("tool")
+        try:
+            if tool == "notify_user":
+                msg = call.get("message", "")
+                if msg:
+                    await bot.send_message(chat_id=target_chat_id, text=msg)
+                    logger.info("tool notify_user: sent")
+            elif tool == "trigger_agent":
+                target_name: str = call.get("target_agent_name", "")
+                payload: dict = call.get("payload", {})
+                delay: int = int(call.get("delay_minutes", 0))
+                if target_name:
+                    await memory.enqueue_agent_trigger(pool, agent_id, target_name, payload, delay)
+                    logger.info("tool trigger_agent: queued %r", target_name)
+            else:
+                logger.warning("unknown tool_call: %r", tool)
+        except Exception as e:
+            logger.error("tool_call %r failed: %s", tool, e)
+
+
+# ── Pipeline execution ────────────────────────────────────────────────────────
+
+def _route_allows(step: dict, active_route: str | None) -> bool:
+    only_if_route = step.get("only_if_route")
+    if only_if_route is None:
+        return True
+    if active_route is None:
+        return False
+    allowed = [only_if_route] if isinstance(only_if_route, str) else only_if_route
+    return active_route in allowed
+
+
+async def _execute_pipeline(
+    pool: asyncpg.Pool,
+    bot: telegram.Bot,
+    agent_id: int,
+    name: str,
+    steps: list[dict],
+    state: dict[str, str],
+    trigger_payload: dict[str, str],
+    config_data: dict,
+) -> tuple[str, bool]:
+    context: dict[str, str] = {}
+    context.update({k: v for k, v in state.items() if v})
+    for k, v in trigger_payload.items():
+        context[f"trigger_payload.{k}"] = str(v)
+        context[k] = str(v)
+
+    agent_system = f"Gesamtauftrag des Agenten:\n{config_data.get('instruction', '')}"
+    active_route: str | None = None
+    output_step_result: str = ""
+    has_output_step = False
+
+    shared_kwargs = dict(
+        pool=pool,
+        bot=bot,
+        agent_id=agent_id,
+        name=name,
+        state=state,
+        agent_system=agent_system,
+        target_chat_id=0,
+    )
+
+    for step in steps:
+        step_id: str = step.get("id", "?")
+        step_type: str = step.get("type", "")
+        output_key: str = step.get("output_key", "")
+
+        if not _route_allows(step, active_route):
+            logger.info("agent %s step %r skipped (route=%s)", name, step_id, active_route)
+            continue
+
+        handler = _STEP_HANDLERS.get(step_type)
+        if handler is None:
+            logger.warning("agent %s step %r: unknown type %r", name, step_id, step_type)
+            continue
+
+        try:
+            result = await handler(
+                step=step,
+                step_type=step_type,
+                context=context,
+                **shared_kwargs,
+            )
+        except Exception as e:
+            logger.error("agent %s step %r failed: %s", name, step_id, e)
+            raise
+
+        if step_type in ("router_match", "router_llm"):
+            active_route = result
+            logger.info("agent %s route set to %r", name, active_route)
+
+        if output_key:
+            _set(context, output_key, result)
+
+        if step.get("is_output"):
+            output_step_result = result
+            has_output_step = True
+
+    return output_step_result, has_output_step
+
+
+# ── Data reads (pre-pipeline) ─────────────────────────────────────────────────
 
 async def _load_data_reads(
     pool: asyncpg.Pool,
@@ -52,28 +691,23 @@ async def _load_data_reads(
     for read in data_reads:
         read_type = read.get("type", "namespace")
         agent_name = read.get("agent_name")
+
         if read_type == "state":
             if not agent_name:
-                logger.warning("Agent %d data_read type=state missing agent_name, skipping", agent_id)
                 continue
             state = await memory.get_agent_state_by_name(pool, agent_name)
             if state is None:
-                logger.warning("Agent %d data_read: agent '%s' not found or has no state", agent_id, agent_name)
                 continue
             combined = "\n".join(f"{k}: {v}" for k, v in state.items() if k != "last_run_summary")
             if combined:
                 result[f"state:{agent_name}"] = combined
-                logger.info("Agent %d pre-loaded state from '%s' (%d keys)", agent_id, agent_name, len(state))
-            else:
-                logger.warning("Agent %d data_read state from '%s' was empty after filtering", agent_id, agent_name)
         else:
-            namespace = _resolve_template(read.get("namespace", ""), trigger_payload)
+            namespace = read.get("namespace", "")
             key = read.get("key", "")
-            target_agent_id: int = agent_id
+            target_agent_id = agent_id
             if agent_name:
                 resolved = await memory.get_agent_id_by_name(pool, agent_name)
                 if resolved is None:
-                    logger.warning("Agent %d data_read: agent_name '%s' not found, skipping", agent_id, agent_name)
                     continue
                 target_agent_id = resolved
             if not key:
@@ -82,315 +716,26 @@ async def _load_data_reads(
                     combined = "\n".join(f"{r['key']}: {r['value']}" for r in rows)
                     label = read.get("as") or f"db:{agent_name or 'self'}:{namespace}"
                     result[label] = combined
-                    logger.info("Agent %d pre-loaded namespace %s from agent_id %d (%d entries)", agent_id, namespace, target_agent_id, len(rows))
             else:
-                key = _resolve_template(key, trigger_payload)
-                value = await memory.read_agent_data(pool, target_agent_id, namespace, key)
+                resolved_key = key
+                for k, v in trigger_payload.items():
+                    resolved_key = resolved_key.replace(f"{{{{{k}}}}}", v)
+                value = await memory.read_agent_data(pool, target_agent_id, namespace, resolved_key)
                 if value is not None:
-                    label = read.get("as") or f"db:{agent_name or 'self'}:{namespace}:{key}"
+                    label = read.get("as") or f"db:{agent_name or 'self'}:{namespace}:{resolved_key}"
                     result[label] = value
-                    logger.info("Agent %d pre-loaded %s/%s from agent_id %d", agent_id, namespace, key, target_agent_id)
     return result
 
 
-async def _execute_tool_calls(
-    pool: asyncpg.Pool,
-    bot: telegram.Bot,
-    agent_id: int,
-    target_chat_id: int,
-    tool_calls: list[dict],
-    work_result: str = "",
-    pipeline_context: dict[str, str] | None = None,
-) -> None:
-    for call in tool_calls:
-        tool = call.get("tool")
-        try:
-            if tool == "db_write":
-                await memory.write_agent_data(
-                    pool,
-                    agent_id,
-                    call["namespace"],
-                    call["key"],
-                    str(call["value"]),
-                )
-                logger.info("Agent %d db_write: %s/%s", agent_id, call["namespace"], call["key"])
-            elif tool == "trigger_agent":
-                target_name: str = call.get("target_agent_name", "")
-                payload: dict = call.get("payload", {})
-                delay: int = int(call.get("delay_minutes", 0))
-                if target_name:
-                    await memory.enqueue_agent_trigger(pool, agent_id, target_name, payload, delay)
-                    logger.info("Agent %d queued trigger for: %s (delay: %dm)", agent_id, target_name, delay)
-            elif tool == "db_write_from_work":
-                source_key: str | None = call.get("source_key")
-                if source_key and pipeline_context and source_key in pipeline_context:
-                    content = pipeline_context[source_key]
-                    logger.info("Agent %d db_write_from_work (source_key=%s): %s/%s (%d chars)", agent_id, source_key, call["namespace"], call["key"], len(content))
-                else:
-                    content = work_result
-                    if source_key:
-                        logger.warning("Agent %d db_write_from_work: source_key '%s' not found in context, falling back to work_result", agent_id, source_key)
-                    logger.info("Agent %d db_write_from_work: %s/%s (%d chars)", agent_id, call["namespace"], call["key"], len(content))
-                await memory.write_agent_data(
-                    pool,
-                    agent_id,
-                    call["namespace"],
-                    call["key"],
-                    content,
-                )
-            elif tool == "notify_user":
-                msg = call.get("message", "")
-                if msg:
-                    await bot.send_message(chat_id=target_chat_id, text=msg)
-                    logger.info("Agent %d notify_user sent direct message", agent_id)
-            else:
-                logger.warning("Agent %d unknown tool: %s", agent_id, tool)
-        except Exception as e:
-            logger.error("Agent %d tool %s failed: %s", agent_id, tool, e)
+# ── Main entry point ──────────────────────────────────────────────────────────
 
-
-def _resolve_pipeline_template(template: str, context: dict[str, str]) -> str:
-    for k, v in context.items():
-        template = template.replace(f"{{{{{k}}}}}", v)
-    return template
-
-
-_AGENT_OUTPUT_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
+_FALLBACK_STRUCTURE_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
 Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der letzte }.
 Felder:
 - "report": Zusammenfassung in maximal 3 kurzen Sätzen. "KEINE_AENDERUNG" wenn nichts Relevantes passiert ist.
 - "notify_user": true wenn der User benachrichtigt werden soll, false sonst.
-- "state_updates": Dict mit Key-Value-Paaren für den Agent-State. Alle Werte müssen Strings sein. Niemals "last_run_summary" setzen.
-- "tool_calls": Liste der Tool-Aufrufe.
-Verfügbare Tools:
-- {"tool": "db_write", "namespace": "...", "key": "...", "value": "..."} — kurze Werte.
-- {"tool": "db_write_from_work", "namespace": "...", "key": "...", "source_key": "..."} — lange Texte.
-- {"tool": "trigger_agent", "target_agent_name": "...", "payload": {...}, "delay_minutes": 0} — target_agent_name exakt wie in der Instruction genannt.
-- {"tool": "notify_user", "message": "..."} — Nachricht an den User.
-Wichtig: Erzeuge NUR Tool-Calls die im Prompt explizit angewiesen werden."""
-
-_ROUTER_SYSTEM = """Du entscheidest welcher Ausführungspfad gilt.
-Antworte NUR mit einem einzigen Wort. Befolge die Entscheidungslogik im Router-Prompt exakt und in der angegebenen Reihenfolge.
-Wenn keine Bedingung zutrifft: antworte mit 'normal'."""
-
-
-def _expand_pipeline_template(
-    config_data: dict,
-    state: dict[str, str],
-    injected_data: dict[str, str],
-) -> list[dict]:
-    template = config_data.get("pipeline_template")
-    if not template:
-        return []
-    source = template.get("source", "state")
-    foreach_key = template.get("foreach", "")
-    split_by = template.get("split_by", ",")
-    batch_size = int(template.get("batch_size", 1))
-    step_template = template.get("step", {})
-    aggregate_key = template.get("aggregate_key", "template_results")
-    only_if_route = template.get("only_if_route")
-    step_time_range: str | None = template.get("time_range")
-    step_categories: str | None = template.get("categories")
-    foreach_items: list[str] = template.get("foreach_items", [])
-    if source == "static":
-        items = foreach_items
-    elif source == "state":
-        raw = state.get(foreach_key, "")
-        items = [i.strip() for i in raw.split(split_by) if i.strip()]
-    elif source == "injected":
-        raw = injected_data.get(foreach_key, "")
-        items = [i.strip() for i in raw.split(split_by) if i.strip()]
-    else:
-        items = []
-    if not items:
-        logger.info("Pipeline template foreach '%s' (source=%s) produced no items", foreach_key, source)
-        return []
-    batches: list[list[str]] = []
-    for i in range(0, len(items), batch_size):
-        batches.append(items[i:i + batch_size])
-    expanded: list[dict] = []
-    all_output_keys: list[str] = []
-    for batch in batches:
-        item_str = ", ".join(batch)
-        safe_id = item_str.lower().replace(" ", "_").replace("/", "_").replace("<", "lt").replace(">", "gt")[:40]
-        step = {}
-        for k, v in step_template.items():
-            if isinstance(v, str):
-                step[k] = v.replace("{{item}}", item_str).replace("{{item_id}}", safe_id)
-            else:
-                step[k] = v
-        step["id"] = step.get("id", f"template_{safe_id}").replace("{{item}}", item_str).replace("{{item_id}}", safe_id)
-        step["output_key"] = step.get("output_key", f"result_{safe_id}").replace("{{item}}", item_str).replace("{{item_id}}", safe_id)
-        if only_if_route:
-            step["only_if_route"] = only_if_route
-        if step_time_range:
-            step["time_range"] = step_time_range
-        if step_categories:
-            step["categories"] = step_categories
-        all_output_keys.append(step["output_key"])
-        expanded.append(step)
-        logger.info("Pipeline template expanded step '%s' for item(s): %s", step["id"], item_str)
-    config_data["_template_output_keys"] = all_output_keys
-    config_data["_template_aggregate_key"] = aggregate_key
-    return expanded
-
-
-async def _execute_pipeline(
-    pool: asyncpg.Pool,
-    agent_id: int,
-    name: str,
-    pipeline: list[dict],
-    state: dict[str, str],
-    injected_data: dict[str, str],
-    config_data: dict,
-) -> tuple[str, dict[str, str], bool]:
-    context: dict[str, str] = {}
-    context.update({k: v for k, v in state.items() if v})
-    context.update(injected_data)
-    instruction = config_data.get("instruction", "")
-    agent_system = f"Gesamtauftrag des Agenten:\n{instruction}"
-    pipeline_before: list[dict] = config_data.get("pipeline", [])
-    template_steps: list[dict] = _expand_pipeline_template(config_data, state, injected_data)
-    pipeline_after: list[dict] = config_data.get("pipeline_after_template", [])
-    full_pipeline = pipeline_before + template_steps + pipeline_after
-    if not full_pipeline:
-        full_pipeline = pipeline
-    aggregate_key: str = config_data.get("_template_aggregate_key", "")
-    template_output_keys: list[str] = config_data.get("_template_output_keys", [])
-    active_route: str | None = None
-    last_output = ""
-    for step in full_pipeline:
-        step_id: str = step["id"]
-        capability: str = step["capability"]
-        prompt_template: str = step["prompt_template"]
-        output_key: str = step["output_key"]
-        is_router: bool = step.get("is_router", False)
-        only_if_route: list[str] | str | None = step.get("only_if_route")
-        if only_if_route is not None and active_route is not None:
-            allowed = [only_if_route] if isinstance(only_if_route, str) else only_if_route
-            if active_route not in allowed:
-                logger.info("Agent %d (%s) pipeline step '%s' skipped (route=%s, allowed=%s)", agent_id, name, step_id, active_route, allowed)
-                continue
-        prompt = _resolve_pipeline_template(prompt_template, context)
-        is_output_step: bool = step.get("is_output", False)
-        if is_output_step:
-            try:
-                output_raw = await brain.chat(
-                    system=_AGENT_OUTPUT_SYSTEM,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=1000,
-                    capability=CAPABILITY_SIMPLE_TASKS,
-                    caller=f"agent_output:{name}",
-                    pool=pool,
-                )
-                context[output_key] = output_raw
-                last_output = output_raw
-                logger.warning("Agent %d (%s) output step '%s' (%d chars): %r", agent_id, name, step_id, len(output_raw), output_raw[:400])
-            except Exception as e:
-                logger.error("Agent %d (%s) output step '%s' failed: %s", agent_id, name, step_id, e)
-                raise
-            continue
-        if is_router:
-            try:
-                payload_keys = {k: v for k, v in context.items() if k.startswith("trigger_payload.")}
-                payload_summary = "\n".join(f"  {k} = {v}" for k, v in payload_keys.items()) if payload_keys else "  (kein Payload vorhanden)"
-                state_summary = "\n".join(f"  {k} = {str(v)[:80]}" for k, v in context.items() if not k.startswith("trigger_payload.") and not k.startswith("state:") and not k.startswith("db:"))
-                router_context = (
-                    f"Trigger-Payload:\n{payload_summary}\n\n"
-                    f"Aktueller State:\n{state_summary}\n\n"
-                    f"Router-Prompt: {prompt}"
-                )
-                route_output = await brain.chat(
-                    system=_ROUTER_SYSTEM,
-                    messages=[{"role": "user", "content": router_context}],
-                    max_tokens=20,
-                    capability=CAPABILITY_SIMPLE_TASKS,
-                    caller=f"agent_router:{name}",
-                    pool=pool,
-                )
-                active_route = route_output.strip().lower()
-                context[output_key] = active_route
-                last_output = active_route
-                logger.info("Agent %d (%s) router decided route: '%s' (payload_keys: %s)", agent_id, name, active_route, list(payload_keys.keys()))
-            except Exception as e:
-                logger.error("Agent %d (%s) router failed: %s", agent_id, name, e)
-                raise
-            continue
-        is_search_step = capability == "search" or (capability == "chat" and bool(step.get("search_query")))
-        is_finance_step = capability == "finance"
-        use_web_search = is_search_step
-        web_search_max_uses = 3 if is_search_step else None
-        search_time_range: str | None = step.get("time_range") if is_search_step else None
-        search_categories: str | None = step.get("categories") if is_search_step else None
-        if is_finance_step:
-            from bot import finance as _finance
-            ticker_key = step.get("ticker_key", "selected_ticker")
-            ticker = context.get(ticker_key, "").strip()
-            if not ticker:
-                logger.warning("Agent %d (%s) finance step '%s': no ticker in context key '%s'", agent_id, name, step_id, ticker_key)
-                context[output_key] = "Kein Ticker verfügbar."
-                last_output = context[output_key]
-                continue
-            logger.info("Agent %d (%s) pipeline step '%s' [finance] ticker=%s", agent_id, name, step_id, ticker)
-            finance_result = await _finance.get_quote_summary(ticker)
-            if not finance_result:
-                logger.warning("Agent %d (%s) finance step '%s': no data for %s", agent_id, name, step_id, ticker)
-                finance_result = f"Keine Finanzdaten für {ticker} verfügbar."
-            context[output_key] = finance_result
-            last_output = finance_result
-            logger.info("Agent %d (%s) step '%s' done (%d chars output)", agent_id, name, step_id, len(finance_result))
-            continue
-        search_queries: list[str] | None = None
-        if is_search_step:
-            raw_query = step.get("search_query", "")
-            if raw_query:
-                resolved_query = _resolve_pipeline_template(raw_query, context)
-                search_queries = [resolved_query]
-                logger.info("Agent %d (%s) step '%s' using search_query: %r", agent_id, name, step_id, resolved_query)
-            else:
-                search_queries = [prompt]
-        force_model: str | None = None
-        if is_search_step:
-            from bot.models import select_model_for_provider
-            from bot import search as _search
-            if not await _search.is_available():
-                force_model = select_model_for_provider(capability, "anthropic")
-        logger.info(
-            "Agent %d (%s) pipeline step '%s' [%s]%s%s",
-            agent_id, name, step_id, capability,
-            f" → {force_model}" if force_model else "",
-            f" time_range={search_time_range}" if search_time_range else "",
-        )
-        try:
-            step_output = await brain.chat(
-                system=agent_system,
-                messages=[{"role": "user", "content": prompt}],
-                use_web_search=use_web_search,
-                web_search_max_uses=web_search_max_uses,
-                search_queries=search_queries,
-                search_time_range=search_time_range,
-                search_categories=search_categories,
-                capability=capability,
-                force_model=force_model,
-                caller=f"agent_pipeline:{name}:{step_id}",
-                pool=pool,
-            )
-        except Exception as e:
-            logger.error("Agent %d (%s) pipeline step '%s' failed: %s", agent_id, name, step_id, e)
-            raise
-        if is_search_step and not step_output:
-            context[output_key] = "Keine aktuellen Suchergebnisse verfügbar."
-            last_output = context[output_key]
-            logger.info("Agent %d (%s) step '%s' skipped — no search results", agent_id, name, step_id)
-        else:
-            context[output_key] = step_output
-            last_output = step_output
-            logger.warning("Agent %d (%s) step '%s' (%d chars): %r", agent_id, name, step_id, len(step_output), step_output[:400])
-        if aggregate_key and output_key in template_output_keys:
-            existing = context.get(aggregate_key, "")
-            context[aggregate_key] = f"{existing}\n\n---\n\n{output_key}:\n{step_output}" if existing else f"{output_key}:\n{step_output}"
-    has_output_step = any(s.get("is_output", False) for s in full_pipeline)
-    return last_output, context, has_output_step
+- "tool_calls": Liste der Tool-Aufrufe. Verfügbare Tools:
+  {"tool": "notify_user", "message": "..."}, {"tool": "trigger_agent", "target_agent_name": "...", "payload": {}}"""
 
 
 async def execute_agent(
@@ -405,64 +750,67 @@ async def execute_agent(
     name: str = agent["name"]
     config_data: dict = parse_agent_config(agent["config"])
     schedule: str = agent["schedule"]
-    work_capability: str = config_data.get("work_capability", CAPABILITY_CHAT)
-    logger.info("Executing agent %d (%s) for user %d with capability=%s", agent_id, name, user_id, work_capability)
+
+    logger.info("executing agent %d (%s)", agent_id, name)
+
     try:
         state = await memory.get_agent_state(pool, agent_id)
-        state_keys: list[str] = config_data.get("state_keys", ["last_run_summary"])
-        for key in state_keys:
-            if key not in state:
-                state[key] = ""
+
         flat_payload: dict[str, str] = {k: str(v) for k, v in (trigger_payload or {}).items()}
-        injected_data: dict[str, str] = {}
-        for k, v in flat_payload.items():
-            injected_data[f"trigger_payload.{k}"] = v
+
         data_reads: list[dict] = config_data.get("data_reads", [])
         if data_reads:
-            db_data = await _load_data_reads(pool, agent_id, data_reads, flat_payload)
-            injected_data.update(db_data)
+            injected = await _load_data_reads(pool, agent_id, data_reads, flat_payload)
+            flat_payload.update(injected)
+
         pipeline: list[dict] = config_data.get("pipeline", [])
-        work_result, pipeline_context, has_output_step = await _execute_pipeline(
-            pool, agent_id, name, pipeline, state, injected_data, config_data,
+        after: list[dict] = config_data.get("pipeline_after_template", [])
+        all_steps = pipeline + after
+
+        output_step_result, has_output_step = await _execute_pipeline(
+            pool=pool,
+            bot=bot,
+            agent_id=agent_id,
+            name=name,
+            steps=all_steps,
+            state=state,
+            trigger_payload=flat_payload,
+            config_data=config_data,
         )
-        logger.warning("Agent %d (%s) work result: %r", agent_id, name, work_result[:300])
+
         if has_output_step:
             try:
-                parsed_output = json.loads(clean_llm_json(work_result))
-                logger.warning("Agent %d (%s) output parsed directly from pipeline", agent_id, name)
+                parsed_output = json.loads(clean_llm_json(output_step_result))
             except Exception:
-                logger.warning("Agent %d (%s): output step JSON parse failed: %r", agent_id, name, work_result[:300])
-                parsed_output = {"report": work_result, "notify_user": True, "tool_calls": []}
+                logger.warning("agent %s output step JSON parse failed: %r", name, output_step_result[:300])
+                parsed_output = {"report": output_step_result, "notify_user": True, "tool_calls": []}
         else:
             raw_structured = await brain.chat(
-                system=_AGENT_STRUCTURE_SYSTEM,
-                messages=[{"role": "user", "content": work_result}],
+                system=_FALLBACK_STRUCTURE_SYSTEM,
+                messages=[{"role": "user", "content": output_step_result or "Keine Ausgabe."}],
                 capability=CAPABILITY_SIMPLE_TASKS,
                 caller=f"agent_structure:{name}",
                 pool=pool,
             )
-            logger.warning("Agent %d (%s) structure result: %r", agent_id, name, raw_structured[:300])
             try:
                 parsed_output = json.loads(clean_llm_json(raw_structured))
             except Exception:
-                logger.warning("Agent %d (%s): structure JSON parse failed: %r", agent_id, name, raw_structured[:300])
-                parsed_output = {"report": work_result, "notify_user": True, "tool_calls": []}
+                parsed_output = {"report": raw_structured, "notify_user": True, "tool_calls": []}
+
         report: str = parsed_output.get("report", "")
         notify_user: bool = parsed_output.get("notify_user", False)
         tool_calls: list[dict] = parsed_output.get("tool_calls", [])
-        state_updates: dict[str, str] = parsed_output.get("state_updates", {})
+
         if report and report.strip() != "KEINE_AENDERUNG":
             state["last_run_summary"] = report
         else:
             notify_user = False
-        for k, v in state_updates.items():
-            if k == "last_run_summary":
-                continue
-            state[k] = str(v)
-            logger.info("Agent %d state_update: %s = %r", agent_id, k, str(v)[:80])
+
         await memory.set_agent_state(pool, agent_id, state)
+
         if tool_calls:
-            await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls, work_result, pipeline_context)
+            await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls)
+
         has_notify_tool = any(c.get("tool") == "notify_user" for c in tool_calls)
         if notify_user and not has_notify_tool and report and report.strip() != "KEINE_AENDERUNG":
             relay_system = _build_relay_system(name)
@@ -475,21 +823,24 @@ async def execute_agent(
             )
             await bot.send_message(chat_id=target_chat_id, text=message_text)
             await memory.add_memory(pool, "agent", agent_id, report[:200])
-            logger.info("Agent %d (%s) reported change.", agent_id, name)
+            logger.info("agent %s notified user", name)
         else:
-            logger.info("Agent %d (%s): no relevant change or notify suppressed.", agent_id, name)
-        tz = await memory.get_user_timezone(pool, user_id)
-        next_run = next_agent_run_after(schedule, tz)
-        await memory.update_agent_run(pool, agent_id, next_run)
-        logger.info("Agent %d done. Next run: %s", agent_id, next_run.isoformat())
-    except ProviderRateLimitError as e:
-        logger.error("Agent %d (%s) hit rate limit on provider %s, not updating next_run: %s", agent_id, name, e.provider, e)
-    except Exception as e:
-        logger.error("Agent %d (%s) execution failed: %s", agent_id, name, e)
-        try:
+            logger.info("agent %s: no change or notify suppressed", name)
+
+        if schedule:
             tz = await memory.get_user_timezone(pool, user_id)
             next_run = next_agent_run_after(schedule, tz)
             await memory.update_agent_run(pool, agent_id, next_run)
-            logger.info("Agent %d next_run updated after error. Next: %s", agent_id, next_run.isoformat())
+        logger.info("agent %d done. next run: %s", agent_id, next_run.isoformat())
+
+    except ProviderRateLimitError as e:
+        logger.error("agent %d rate limit on %s", agent_id, e.provider)
+    except Exception as e:
+        logger.error("agent %d execution failed: %s", agent_id, e)
+        try:
+            if schedule:
+                tz = await memory.get_user_timezone(pool, user_id)
+                next_run = next_agent_run_after(schedule, tz)
+                await memory.update_agent_run(pool, agent_id, next_run)
         except Exception as inner_e:
-            logger.error("Agent %d failed to update next_run after error: %s", agent_id, inner_e)
+            logger.error("agent %d failed to update next_run: %s", agent_id, inner_e)

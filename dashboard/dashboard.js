@@ -2,17 +2,14 @@ function getBase() {
   return window.__API_URL__ || "";
 }
 
-const TIME_RANGES = ["", "day", "week", "month", "year"];
-
-let CAPABILITIES = [];
-
-let memMode = "users";
-let memData = { users: [], groups: [] };
+let STEP_TYPES = [];
 let agentsData = [];
 let scrapersData = [];
 let currentAgentId = null;
 let currentScraperId = null;
 let currentMemSubjectId = null;
+let memMode = "users";
+let memData = { users: [], groups: [] };
 let _agentMemCache = {};
 let _agentDataCache = {};
 let _memCache = {};
@@ -46,7 +43,6 @@ function fmt(iso) {
 function fmtNum(n) {
   return Number(n).toLocaleString("de-DE");
 }
-
 function fmtCost(usd) {
   if (usd === 0) return "—";
   if (usd < 0.01) return `$${usd.toFixed(4)}`;
@@ -119,12 +115,744 @@ function switchSection(name) {
   goBack();
 }
 
-function _capabilityOptions(selected) {
-  return CAPABILITIES.map(
-    (c) =>
-      `<option value="${c}" ${c === selected ? "selected" : ""}>${c}</option>`,
-  ).join("");
+// ── Step type metadata ────────────────────────────────────────────────────────
+
+const STEP_TYPE_GROUPS = {
+  Routing: ["router_match", "router_llm"],
+  LLM: ["llm_extract", "llm_decide", "llm_summarize"],
+  Datenzugriff: [
+    "web_search",
+    "finance",
+    "state_read",
+    "state_write",
+    "state_read_external",
+    "state_write_external",
+    "data_read",
+    "data_write",
+    "data_read_external",
+    "data_write_external",
+  ],
+  Transformation: ["transform"],
+  Koordination: ["trigger_agent", "notify_user"],
+};
+
+const STEP_TYPE_COLORS = {
+  router_match: "var(--amber)",
+  router_llm: "var(--amber)",
+  llm_extract: "var(--accent)",
+  llm_decide: "var(--accent)",
+  llm_summarize: "var(--accent)",
+  web_search: "var(--blue)",
+  finance: "var(--blue)",
+  state_read: "var(--text3)",
+  state_write: "var(--text3)",
+  state_read_external: "var(--text3)",
+  state_write_external: "var(--text3)",
+  data_read: "var(--text3)",
+  data_write: "var(--text3)",
+  data_read_external: "var(--text3)",
+  data_write_external: "var(--text3)",
+  transform: "var(--blue)",
+  trigger_agent: "var(--red)",
+  notify_user: "var(--red)",
+};
+
+function stepTypeBadge(type) {
+  const color = STEP_TYPE_COLORS[type] || "var(--text3)";
+  return `<span class="badge" style="background:transparent;border:1px solid ${color};color:${color};">${type}</span>`;
 }
+
+function stepSummary(step) {
+  const type = step.type || "?";
+  const parts = [];
+  if (step.is_output) parts.push("📤 output");
+  if (step.only_if_route) {
+    const r = Array.isArray(step.only_if_route)
+      ? step.only_if_route.join("|")
+      : step.only_if_route;
+    parts.push(`route: ${r}`);
+  }
+  switch (type) {
+    case "router_match":
+      parts.push(
+        `${(step.rules || []).length} rules → default: ${step.default || "?"}`,
+      );
+      break;
+    case "router_llm":
+    case "llm_extract":
+    case "llm_decide":
+    case "llm_summarize":
+      if (step.prompt)
+        parts.push(
+          step.prompt.slice(0, 80) + (step.prompt.length > 80 ? "…" : ""),
+        );
+      if (step.search_query) parts.push(`🔍 ${step.search_query}`);
+      break;
+    case "web_search":
+      parts.push(`🔍 ${step.query_template || "?"}`);
+      if (step.time_range) parts.push(step.time_range);
+      if (step.categories) parts.push(step.categories);
+      break;
+    case "finance":
+      parts.push(`ticker_key: ${step.ticker_key || "selected_ticker"}`);
+      break;
+    case "state_read":
+    case "state_write":
+      parts.push(`key: ${step.key || "?"}`);
+      if (step.source_key) parts.push(`← ${step.source_key}`);
+      break;
+    case "state_read_external":
+    case "state_write_external":
+    case "data_read_external":
+    case "data_write_external":
+      parts.push(`agent: ${step.agent_name || "?"}`);
+      if (step.namespace) parts.push(`ns: ${step.namespace}`);
+      if (step.key) parts.push(`key: ${step.key}`);
+      if (step.key_template) parts.push(`key: ${step.key_template}`);
+      break;
+    case "data_read":
+    case "data_write":
+      parts.push(`${step.namespace || "?"}/${step.key_template || "?"}`);
+      if (step.source_key) parts.push(`← ${step.source_key}`);
+      break;
+    case "transform":
+      parts.push(`op: ${step.operation || "?"}`);
+      if (step.source_key) parts.push(`← ${step.source_key}`);
+      if (step.target_key) parts.push(`→ ${step.target_key}`);
+      if (step.group_by) parts.push(`group: ${step.group_by}`);
+      break;
+    case "trigger_agent":
+      parts.push(`→ ${step.target_agent_name || "?"}`);
+      break;
+    case "notify_user":
+      if (step.source_key) parts.push(`← ${step.source_key}`);
+      else if (step.message_template)
+        parts.push(step.message_template.slice(0, 60));
+      break;
+  }
+  if (step.output_key) parts.push(`out: ${step.output_key}`);
+  return parts.join(" · ");
+}
+
+// ── Step edit form ────────────────────────────────────────────────────────────
+
+function stepTypeOptions(selected) {
+  let html = "";
+  for (const [group, types] of Object.entries(STEP_TYPE_GROUPS)) {
+    html += `<optgroup label="${group}">`;
+    for (const t of types) {
+      html += `<option value="${t}" ${t === selected ? "selected" : ""}>${t}</option>`;
+    }
+    html += "</optgroup>";
+  }
+  return html;
+}
+
+function timeRangeOptions(selected) {
+  return ["", "day", "week", "month", "year"]
+    .map(
+      (t) =>
+        `<option value="${t}" ${t === (selected || "") ? "selected" : ""}>${t || "— kein Filter —"}</option>`,
+    )
+    .join("");
+}
+
+function categoryOptions(selected) {
+  return ["", "general", "news", "finance", "it", "science", "social media"]
+    .map(
+      (c) =>
+        `<option value="${c}" ${c === (selected || "") ? "selected" : ""}>${c || "— general —"}</option>`,
+    )
+    .join("");
+}
+
+function transformOpOptions(selected) {
+  return ["array_append", "iqr_bounds", "json_extract"]
+    .map(
+      (o) =>
+        `<option value="${o}" ${o === (selected || "") ? "selected" : ""}>${o}</option>`,
+    )
+    .join("");
+}
+
+function field(label, inputHtml, id) {
+  return `<div class="modal-field" id="${id || ""}"><div class="modal-label">${label}</div>${inputHtml}</div>`;
+}
+
+function textInput(id, value, placeholder) {
+  return `<input class="modal-input" id="${id}" value="${(value || "").replace(/"/g, "&quot;")}" placeholder="${placeholder || ""}" />`;
+}
+
+function textarea(id, value, minHeight) {
+  return `<textarea class="modal-input" id="${id}" style="min-height:${minHeight || 120}px;font-family:var(--mono);font-size:12px;">${value || ""}</textarea>`;
+}
+
+function checkbox(id, checked, label) {
+  return `<label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="${id}" ${checked ? "checked" : ""} /> ${label}</label>`;
+}
+
+function buildStepFormBody(step) {
+  const type = step.type || "llm_extract";
+  const onlyIfRoute = Array.isArray(step.only_if_route)
+    ? step.only_if_route.join(", ")
+    : step.only_if_route || "";
+
+  const commonTop = `
+    ${field("ID", textInput("sf-id", step.id, "z.B. extract_gpu"))}
+    ${field("Type", `<select class="modal-select" id="sf-type" onchange="onStepTypeChange()">${stepTypeOptions(type)}</select>`)}
+    ${field("only_if_route (leer = immer, mehrere mit Komma)", textInput("sf-route", onlyIfRoute, "z.B. new_listing"))}
+  `;
+
+  const commonBottom = `
+    <div class="modal-field" style="display:flex;gap:16px;flex-wrap:wrap;">
+      ${checkbox("sf-output", step.is_output, "is_output")}
+    </div>
+  `;
+
+  const outputKey = field(
+    "output_key",
+    textInput("sf-output-key", step.output_key, "z.B. extracted"),
+  );
+  const defaultVal = field(
+    "default (leer = kein Fallback)",
+    textInput("sf-default", step.default, ""),
+  );
+  const sourceKey = field(
+    "source_key",
+    textInput("sf-source-key", step.source_key, "z.B. baselines"),
+  );
+  const targetKey = field(
+    "target_key",
+    textInput("sf-target-key", step.target_key, "z.B. baselines"),
+  );
+  const agentName = field(
+    "agent_name",
+    textInput("sf-agent-name", step.agent_name, "z.B. Gordon"),
+  );
+  const namespace = field(
+    "namespace",
+    textInput("sf-namespace", step.namespace, "z.B. analyses"),
+  );
+  const keyField = field(
+    "key",
+    textInput("sf-key", step.key, "z.B. price_baselines"),
+  );
+  const keyTemplate = field(
+    "key_template ({{ticker}} möglich)",
+    textInput("sf-key-template", step.key_template, "z.B. {{ticker}}"),
+  );
+  const promptField = field("prompt", textarea("sf-prompt", step.prompt, 160));
+
+  const rulesJson = JSON.stringify(step.rules || [], null, 2);
+
+  let typeSpecific = "";
+
+  switch (type) {
+    case "router_match":
+      typeSpecific =
+        field(
+          'rules (JSON-Array: [{"if": "trigger_payload.type == \'x\'", "then": "route"}])',
+          textarea("sf-rules", rulesJson, 140),
+        ) +
+        field(
+          "default route",
+          textInput("sf-default-route", step.default, "idle"),
+        );
+      break;
+
+    case "router_llm":
+      typeSpecific = promptField + outputKey;
+      break;
+
+    case "llm_extract":
+    case "llm_decide":
+      typeSpecific = promptField + outputKey + commonBottom;
+      return commonTop + typeSpecific;
+
+    case "llm_summarize":
+      typeSpecific =
+        promptField +
+        field(
+          "search_query (leer = keine Suche)",
+          textInput(
+            "sf-search-query",
+            step.search_query,
+            "z.B. {{ticker}} news",
+          ),
+        ) +
+        field(
+          "time_range",
+          `<select class="modal-select" id="sf-time-range">${timeRangeOptions(step.time_range)}</select>`,
+        ) +
+        field(
+          "categories",
+          `<select class="modal-select" id="sf-categories">${categoryOptions(step.categories)}</select>`,
+        ) +
+        outputKey +
+        commonBottom;
+      return commonTop + typeSpecific;
+
+    case "web_search":
+      typeSpecific =
+        field(
+          "query_template",
+          textInput(
+            "sf-query-template",
+            step.query_template,
+            "z.B. {{ticker}} earnings",
+          ),
+        ) +
+        field(
+          "prompt (Zusammenfassung)",
+          textarea("sf-prompt", step.prompt, 80),
+        ) +
+        field(
+          "time_range",
+          `<select class="modal-select" id="sf-time-range">${timeRangeOptions(step.time_range)}</select>`,
+        ) +
+        field(
+          "categories",
+          `<select class="modal-select" id="sf-categories">${categoryOptions(step.categories)}</select>`,
+        ) +
+        outputKey;
+      break;
+
+    case "finance":
+      typeSpecific =
+        field(
+          "ticker_key",
+          textInput("sf-ticker-key", step.ticker_key, "selected_ticker"),
+        ) + outputKey;
+      break;
+
+    case "state_read":
+      typeSpecific = keyField + outputKey + defaultVal;
+      break;
+
+    case "state_write":
+      typeSpecific = keyField + sourceKey;
+      break;
+
+    case "state_read_external":
+      typeSpecific = agentName + keyField + outputKey + defaultVal;
+      break;
+
+    case "state_write_external":
+      typeSpecific = agentName + keyField + sourceKey;
+      break;
+
+    case "data_read":
+      typeSpecific = namespace + keyTemplate + outputKey + defaultVal;
+      break;
+
+    case "data_write":
+      typeSpecific = namespace + keyTemplate + sourceKey;
+      break;
+
+    case "data_read_external":
+      typeSpecific =
+        agentName + namespace + keyTemplate + outputKey + defaultVal;
+      break;
+
+    case "data_write_external":
+      typeSpecific = agentName + namespace + keyTemplate + sourceKey;
+      break;
+
+    case "transform": {
+      const op = step.operation || "array_append";
+      typeSpecific =
+        field(
+          "operation",
+          `<select class="modal-select" id="sf-operation" onchange="onTransformOpChange()">${transformOpOptions(op)}</select>`,
+        ) +
+        sourceKey +
+        `<div id="sf-group-wrap">${field("group_by", textInput("sf-group-by", step.group_by, "z.B. model"))}</div>` +
+        `<div id="sf-value-key-wrap">${field("value_key", textInput("sf-value-key", step.value_key, "z.B. price"))}</div>` +
+        `<div id="sf-condition-wrap">${field("condition (boolean field name im source JSON)", textInput("sf-condition", step.condition, "z.B. relevant"))}</div>` +
+        `<div id="sf-max-items-wrap">${field("max_items", textInput("sf-max-items", step.max_items, "200"))}</div>` +
+        targetKey +
+        `<div id="sf-multiplier-wrap">${field("multiplier (für iqr_bounds)", textInput("sf-multiplier", step.multiplier, "1.5"))}</div>` +
+        `<div id="sf-path-wrap">${field("path (für json_extract, z.B. field.nested)", textInput("sf-path", step.path, ""))}</div>` +
+        outputKey;
+      break;
+    }
+
+    case "trigger_agent":
+      typeSpecific =
+        field(
+          "target_agent_name",
+          textInput("sf-target-agent", step.target_agent_name, "z.B. Gordon"),
+        ) +
+        field(
+          "payload (JSON)",
+          textarea(
+            "sf-payload",
+            JSON.stringify(step.payload || {}, null, 2),
+            80,
+          ),
+        ) +
+        field("delay_minutes", textInput("sf-delay", step.delay_minutes, "0"));
+      break;
+
+    case "notify_user":
+      typeSpecific =
+        field(
+          "source_key (Context-Key mit Nachrichtentext)",
+          textInput("sf-source-key", step.source_key, "z.B. report"),
+        ) +
+        field(
+          "message_template (alternativ zu source_key)",
+          textInput("sf-message-template", step.message_template, ""),
+        );
+      break;
+  }
+
+  return commonTop + typeSpecific + commonBottom;
+}
+
+function onStepTypeChange() {
+  const type = document.getElementById("sf-type")?.value;
+  if (!type) return;
+  const bodyDiv = document.getElementById("modal-body");
+  const currentStep = _readStepFromForm();
+  currentStep.type = type;
+  bodyDiv.innerHTML = buildStepFormBody(currentStep);
+  if (type === "transform") onTransformOpChange();
+}
+
+function onTransformOpChange() {
+  const op = document.getElementById("sf-operation")?.value;
+  const show = (id, visible) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = visible ? "" : "none";
+  };
+  show("sf-group-wrap", op === "array_append");
+  show("sf-value-key-wrap", op === "array_append");
+  show("sf-condition-wrap", op === "array_append");
+  show("sf-max-items-wrap", op === "array_append");
+  show("sf-multiplier-wrap", op === "iqr_bounds");
+  show("sf-path-wrap", op === "json_extract");
+}
+
+function _val(id) {
+  const el = document.getElementById(id);
+  if (!el) return undefined;
+  if (el.type === "checkbox") return el.checked;
+  return el.value.trim();
+}
+
+function _readStepFromForm() {
+  const type = _val("sf-type") || "llm_extract";
+  const id = _val("sf-id") || "";
+  const routeRaw = _val("sf-route") || "";
+  let onlyIfRoute = undefined;
+  if (routeRaw) {
+    const parts = routeRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    onlyIfRoute = parts.length === 1 ? parts[0] : parts;
+  }
+
+  const step = { id, type };
+  if (onlyIfRoute !== undefined) step.only_if_route = onlyIfRoute;
+  if (_val("sf-output")) step.is_output = true;
+
+  const outputKey = _val("sf-output-key");
+  if (outputKey) step.output_key = outputKey;
+
+  switch (type) {
+    case "router_match": {
+      try {
+        step.rules = JSON.parse(_val("sf-rules") || "[]");
+      } catch {
+        step.rules = [];
+      }
+      step.default = _val("sf-default-route") || "idle";
+      break;
+    }
+    case "router_llm":
+      step.prompt = _val("sf-prompt") || "";
+      break;
+    case "llm_extract":
+    case "llm_decide":
+      step.prompt = _val("sf-prompt") || "";
+      break;
+    case "llm_summarize": {
+      step.prompt = _val("sf-prompt") || "";
+      const sq = _val("sf-search-query");
+      if (sq) step.search_query = sq;
+      const tr = _val("sf-time-range");
+      if (tr) step.time_range = tr;
+      const cat = _val("sf-categories");
+      if (cat) step.categories = cat;
+      break;
+    }
+    case "web_search": {
+      step.query_template = _val("sf-query-template") || "";
+      step.prompt = _val("sf-prompt") || "";
+      const tr = _val("sf-time-range");
+      if (tr) step.time_range = tr;
+      const cat = _val("sf-categories");
+      if (cat) step.categories = cat;
+      break;
+    }
+    case "finance":
+      step.ticker_key = _val("sf-ticker-key") || "selected_ticker";
+      break;
+    case "state_read": {
+      step.key = _val("sf-key") || "";
+      const def = _val("sf-default");
+      if (def) step.default = def;
+      break;
+    }
+    case "state_write":
+      step.key = _val("sf-key") || "";
+      step.source_key = _val("sf-source-key") || "";
+      break;
+    case "state_read_external": {
+      step.agent_name = _val("sf-agent-name") || "";
+      step.key = _val("sf-key") || "";
+      const def = _val("sf-default");
+      if (def) step.default = def;
+      break;
+    }
+    case "state_write_external":
+      step.agent_name = _val("sf-agent-name") || "";
+      step.key = _val("sf-key") || "";
+      step.source_key = _val("sf-source-key") || "";
+      break;
+    case "data_read": {
+      step.namespace = _val("sf-namespace") || "";
+      step.key_template = _val("sf-key-template") || "";
+      const def = _val("sf-default");
+      if (def) step.default = def;
+      break;
+    }
+    case "data_write":
+      step.namespace = _val("sf-namespace") || "";
+      step.key_template = _val("sf-key-template") || "";
+      step.source_key = _val("sf-source-key") || "";
+      break;
+    case "data_read_external": {
+      step.agent_name = _val("sf-agent-name") || "";
+      step.namespace = _val("sf-namespace") || "";
+      step.key_template = _val("sf-key-template") || "";
+      const def = _val("sf-default");
+      if (def) step.default = def;
+      break;
+    }
+    case "data_write_external":
+      step.agent_name = _val("sf-agent-name") || "";
+      step.namespace = _val("sf-namespace") || "";
+      step.key_template = _val("sf-key-template") || "";
+      step.source_key = _val("sf-source-key") || "";
+      break;
+    case "transform": {
+      step.operation = _val("sf-operation") || "array_append";
+      step.source_key = _val("sf-source-key") || "";
+      const tk = _val("sf-target-key");
+      if (tk) step.target_key = tk;
+      if (step.operation === "array_append") {
+        step.group_by = _val("sf-group-by") || "";
+        step.value_key = _val("sf-value-key") || "";
+        const cond = _val("sf-condition");
+        if (cond) step.condition = cond;
+        const maxItems = _val("sf-max-items");
+        if (maxItems) step.max_items = parseInt(maxItems);
+      }
+      if (step.operation === "iqr_bounds") {
+        const mult = _val("sf-multiplier");
+        if (mult) step.multiplier = parseFloat(mult);
+      }
+      if (step.operation === "json_extract") {
+        step.path = _val("sf-path") || "";
+        const def = _val("sf-default");
+        if (def) step.default = def;
+      }
+      break;
+    }
+    case "trigger_agent": {
+      step.target_agent_name = _val("sf-target-agent") || "";
+      try {
+        step.payload = JSON.parse(_val("sf-payload") || "{}");
+      } catch {
+        step.payload = {};
+      }
+      const delay = _val("sf-delay");
+      if (delay) step.delay_minutes = parseInt(delay);
+      break;
+    }
+    case "notify_user": {
+      const sk = _val("sf-source-key");
+      if (sk) step.source_key = sk;
+      const mt = _val("sf-message-template");
+      if (mt) step.message_template = mt;
+      break;
+    }
+  }
+
+  return step;
+}
+
+// ── Pipeline rendering ────────────────────────────────────────────────────────
+
+function renderStep(step, idx, section, agentId) {
+  const summary = stepSummary(step);
+  return `
+    <div class="pipeline-step">
+      <div class="pipeline-step-header">
+        <div class="pipeline-step-info">
+          <span class="pipeline-step-id">${step.id}</span>
+          ${stepTypeBadge(step.type || "?")}
+          ${step.is_output ? '<span class="badge badge-active">output</span>' : ""}
+        </div>
+        <div class="pipeline-step-actions">
+          <button class="btn btn-sm" onclick="editStep(${agentId}, ${idx}, '${section}')">Bearbeiten</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteStep(${agentId}, ${idx}, '${section}')">Löschen</button>
+        </div>
+      </div>
+      ${summary ? `<div class="pipeline-step-prompt">${summary}</div>` : ""}
+    </div>
+  `;
+}
+
+function editStep(agentId, idx, section) {
+  const a = agentsData.find((x) => x.id === agentId);
+  const steps =
+    section === "pipeline_after_template"
+      ? a.pipeline_after_template || []
+      : a.pipeline || [];
+  const step = steps[idx];
+  openModal(
+    "Step bearbeiten",
+    buildStepFormBody(step),
+    `<button class="btn" onclick="closeModal()">Abbrechen</button>
+     <button class="btn btn-accent" onclick="saveStep(${agentId}, ${idx}, '${section}')">Speichern</button>`,
+  );
+  if (step.type === "transform") onTransformOpChange();
+}
+
+async function saveStep(agentId, idx, section) {
+  const a = agentsData.find((x) => x.id === agentId);
+  const steps = [
+    ...(section === "pipeline_after_template"
+      ? a.pipeline_after_template || []
+      : a.pipeline || []),
+  ];
+  steps[idx] = _readStepFromForm();
+  const patchKey =
+    section === "pipeline_after_template"
+      ? "pipeline_after_template"
+      : "pipeline";
+  try {
+    await api("/api/agents/" + agentId, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [patchKey]: steps }),
+    });
+    if (section === "pipeline_after_template")
+      a.pipeline_after_template = steps;
+    else a.pipeline = steps;
+    closeModal();
+    toast("Gespeichert.");
+    selectAgent(agentId);
+  } catch {
+    toast("Fehler.", true);
+  }
+}
+
+function deleteStep(agentId, idx, section) {
+  confirmModal("Step wirklich löschen?", async () => {
+    const a = agentsData.find((x) => x.id === agentId);
+    const steps = [
+      ...(section === "pipeline_after_template"
+        ? a.pipeline_after_template || []
+        : a.pipeline || []),
+    ];
+    steps.splice(idx, 1);
+    const patchKey =
+      section === "pipeline_after_template"
+        ? "pipeline_after_template"
+        : "pipeline";
+    try {
+      await api("/api/agents/" + agentId, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [patchKey]: steps }),
+      });
+      if (section === "pipeline_after_template")
+        a.pipeline_after_template = steps;
+      else a.pipeline = steps;
+      toast("Gelöscht.");
+      selectAgent(agentId);
+    } catch {
+      toast("Fehler.", true);
+    }
+  });
+}
+
+function addStep(agentId) {
+  const a = agentsData.find((x) => x.id === agentId);
+  const hasAfter = (a.pipeline_after_template || []).length > 0;
+  const emptyStep = { id: "", type: "llm_extract" };
+  openModal(
+    "Neuen Step hinzufügen",
+    `<div class="modal-field">
+       <div class="modal-label">Sektion</div>
+       <select class="modal-select" id="sf-section">
+         <option value="pipeline">pipeline</option>
+         ${hasAfter ? '<option value="pipeline_after_template">pipeline_after_template</option>' : ""}
+       </select>
+     </div>
+     <div class="modal-field">
+       <div class="modal-label">Position (leer = ans Ende)</div>
+       <input class="modal-input" id="sf-position" type="number" placeholder="0 = Anfang" />
+     </div>` + buildStepFormBody(emptyStep),
+    `<button class="btn" onclick="closeModal()">Abbrechen</button>
+     <button class="btn btn-accent" onclick="saveNewStep(${agentId})">Hinzufügen</button>`,
+  );
+}
+
+async function saveNewStep(agentId) {
+  const step = _readStepFromForm();
+  if (!step.id) {
+    toast("ID ist Pflichtfeld.", true);
+    return;
+  }
+  const section = _val("sf-section") || "pipeline";
+  const posRaw = _val("sf-position");
+  const pos = posRaw !== "" && posRaw !== undefined ? parseInt(posRaw) : null;
+  const a = agentsData.find((x) => x.id === agentId);
+  const steps = [
+    ...(section === "pipeline_after_template"
+      ? a.pipeline_after_template || []
+      : a.pipeline || []),
+  ];
+  if (pos === null || pos >= steps.length) steps.push(step);
+  else steps.splice(pos, 0, step);
+  const patchKey =
+    section === "pipeline_after_template"
+      ? "pipeline_after_template"
+      : "pipeline";
+  try {
+    await api("/api/agents/" + agentId, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [patchKey]: steps }),
+    });
+    if (section === "pipeline_after_template")
+      a.pipeline_after_template = steps;
+    else a.pipeline = steps;
+    closeModal();
+    toast("Hinzugefügt.");
+    selectAgent(agentId);
+  } catch {
+    toast("Fehler.", true);
+  }
+}
+
+// ── Agents ────────────────────────────────────────────────────────────────────
 
 document.querySelectorAll(".nav-btn[data-section]").forEach((btn) => {
   btn.addEventListener("click", function () {
@@ -143,29 +871,11 @@ document.getElementById("memory-search").addEventListener("input", function () {
   renderMemoryList(this.value);
 });
 
-async function loadCapabilities() {
-  try {
-    CAPABILITIES = await api("/api/capabilities");
-  } catch (e) {
-    CAPABILITIES = [
-      "chat",
-      "coding",
-      "deep_reasoning",
-      "finance",
-      "long_context",
-      "math",
-      "multimodal",
-      "reasoning",
-      "simple_tasks",
-    ];
-  }
-}
-
 async function loadAgents() {
   try {
     agentsData = await api("/api/agents");
     renderAgentsList();
-  } catch (e) {
+  } catch {
     document.getElementById("agents-list").innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:8px;">Backend nicht erreichbar.</div>';
   }
@@ -184,17 +894,18 @@ function renderAgentsList(filter) {
     return;
   }
   document.getElementById("agents-list").innerHTML = filtered
-    .map(
-      (a) => `
-    <div class="sidebar-item" data-id="${a.id}" onclick="selectAgent(${a.id})">
-      <div class="si-name">${a.name}
-        <span class="badge ${a.is_active ? "badge-active" : "badge-inactive"}">${a.is_active ? "aktiv" : "inaktiv"}</span>
-        ${a.pipeline && a.pipeline.length ? '<span class="badge badge-pipeline">pipeline</span>' : ""}
-      </div>
-      <div class="si-meta">${a.type || "—"} · ${a.work_capability || "chat"} · ${a.schedule}</div>
-    </div>
-  `,
-    )
+    .map((a) => {
+      const totalSteps =
+        (a.pipeline || []).length + (a.pipeline_after_template || []).length;
+      return `
+      <div class="sidebar-item" data-id="${a.id}" onclick="selectAgent(${a.id})">
+        <div class="si-name">${a.name}
+          <span class="badge ${a.is_active ? "badge-active" : "badge-inactive"}">${a.is_active ? "aktiv" : "inaktiv"}</span>
+          ${totalSteps > 0 ? `<span class="badge badge-pipeline">${totalSteps} steps</span>` : ""}
+        </div>
+        <div class="si-meta">${a.type || "—"} · ${a.schedule || "trigger-only"}</div>
+      </div>`;
+    })
     .join("");
 }
 
@@ -225,74 +936,29 @@ async function selectAgent(id) {
       nsMap[d.namespace].push({ ...d, _idx: i });
     });
 
-    const capabilityOptions = _capabilityOptions(a.work_capability);
-
-    const allSteps = [
-      ...(a.pipeline || []).map((s) => ({ ...s, _section: "pipeline" })),
-      ...(a.pipeline_after_template || []).map((s) => ({
-        ...s,
-        _section: "pipeline_after_template",
-      })),
-    ];
-    const hasTemplate =
-      a.pipeline_template && typeof a.pipeline_template === "object";
-    const totalSteps = allSteps.length + (hasTemplate ? 1 : 0);
-
-    const renderStep = (step, i, section) => `
-      <div class="pipeline-step">
-        <div class="pipeline-step-header">
-          <div class="pipeline-step-info">
-            <span class="pipeline-step-id">${step.id}${step.is_router ? " 🔀" : ""}${step.is_output ? " 📤" : ""}</span>
-            <span class="badge badge-cap">${step.capability}</span>
-            ${step.only_if_route ? `<span class="badge badge-pipeline">${Array.isArray(step.only_if_route) ? step.only_if_route.join("|") : step.only_if_route}</span>` : ""}
-            ${step.time_range ? `<span class="badge badge-pipeline">⏱ ${step.time_range}</span>` : ""}
-          </div>
-          <div class="pipeline-step-actions">
-            <button class="btn btn-sm" onclick="editPipelineStep(${id}, ${i}, '${section}')">Bearbeiten</button>
-            <button class="btn btn-sm btn-danger" onclick="deletePipelineStep(${id}, ${i}, '${section}')">Löschen</button>
-          </div>
-        </div>
-        <div class="pipeline-step-prompt">${step.prompt_template.slice(0, 120)}${step.prompt_template.length > 120 ? "…" : ""}</div>
-        <div class="pipeline-step-meta">output_key: ${step.output_key}${step.only_if_route ? ` · only_if: ${Array.isArray(step.only_if_route) ? step.only_if_route.join(", ") : step.only_if_route}` : ""}${step.time_range ? ` · time_range: ${step.time_range}` : ""}${step.search_query ? ` · query: ${step.search_query}` : ""}${step.categories ? ` · cat: ${step.categories}` : ""}</div>
-      </div>
-    `;
+    const pipelineSteps = a.pipeline || [];
+    const afterSteps = a.pipeline_after_template || [];
+    const totalSteps = pipelineSteps.length + afterSteps.length;
 
     const pipelineHtml = `
       <div class="detail-block">
         <div class="detail-block-title">
           Pipeline (${totalSteps} Steps)
-          <button class="btn btn-sm btn-accent" onclick="addPipelineStep(${id})">+ Step</button>
+          <button class="btn btn-sm btn-accent" onclick="addStep(${id})">+ Step</button>
         </div>
         ${
-          (a.pipeline || []).length
+          pipelineSteps.length
             ? `
-          <div class="ns-label" style="margin-bottom:6px;">Feste Steps (pipeline)</div>
-          ${(a.pipeline || []).map((s, i) => renderStep(s, i, "pipeline")).join("")}
+          <div class="ns-label" style="margin-bottom:6px;">pipeline</div>
+          ${pipelineSteps.map((s, i) => renderStep(s, i, "pipeline", id)).join("")}
         `
             : ""
         }
         ${
-          hasTemplate
+          afterSteps.length
             ? `
-          <div class="ns-label" style="margin:10px 0 6px;">Template (${a.pipeline_template.source === "static" ? a.pipeline_template.foreach_items?.length + " Items" : "dynamisch aus " + a.pipeline_template.foreach})</div>
-          <div class="pipeline-step" style="border-style:dashed;">
-            <div class="pipeline-step-header">
-              <span class="pipeline-step-id">∀ ${a.pipeline_template.step?.id || "template"}</span>
-              <span class="badge badge-cap">${a.pipeline_template.step?.capability || "?"}</span>
-              ${a.pipeline_template.only_if_route ? `<span class="badge badge-pipeline">${a.pipeline_template.only_if_route}</span>` : ""}
-              <button class="btn btn-sm" onclick="editPipelineTemplate(${id})">Bearbeiten</button>
-            </div>
-            <div class="pipeline-step-prompt">${a.pipeline_template.step?.prompt_template?.slice(0, 120) || ""}…</div>
-            <div class="pipeline-step-meta">aggregate_key: ${a.pipeline_template.aggregate_key} · batch: ${a.pipeline_template.batch_size || 1}${a.pipeline_template.time_range ? " · time_range: " + a.pipeline_template.time_range : ""}</div>
-          </div>
-        `
-            : ""
-        }
-        ${
-          (a.pipeline_after_template || []).length
-            ? `
-          <div class="ns-label" style="margin:10px 0 6px;">Nach Template (pipeline_after_template)</div>
-          ${(a.pipeline_after_template || []).map((s, i) => renderStep(s, i, "pipeline_after_template")).join("")}
+          <div class="ns-label" style="margin:10px 0 6px;">pipeline_after_template</div>
+          ${afterSteps.map((s, i) => renderStep(s, i, "pipeline_after_template", id)).join("")}
         `
             : ""
         }
@@ -312,17 +978,10 @@ async function selectAgent(id) {
       </div>
       <div class="detail-block">
         <div class="detail-block-title">Konfiguration</div>
-        <div class="detail-mono">Zeitplan: ${a.schedule}</div>
+        <div class="detail-mono">Zeitplan: ${a.schedule || "nur auf Trigger"}</div>
         <div class="detail-mono">Letzter Lauf: ${fmt(a.last_run_at)}</div>
-        <div class="detail-mono">Nächster Lauf: ${fmt(a.next_run_at)}</div>
+        <div class="detail-mono">Nächster Lauf: ${a.next_run_at ? fmt(a.next_run_at) : "—"}</div>
         <div class="detail-mono">Typ: ${a.type || "—"}</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
-          <span style="font-family:var(--mono);font-size:12px;color:var(--text3);">work_capability:</span>
-          <select class="capability-select" id="cap-select-${id}" onchange="saveCapability(${id})">
-            ${capabilityOptions}
-          </select>
-        </div>
-        ${a.data_reads && a.data_reads.length ? `<div class="detail-mono" style="margin-top:4px;">data_reads: ${JSON.stringify(a.data_reads)}</div>` : ""}
       </div>
       ${pipelineHtml}
       <hr class="divider">
@@ -361,26 +1020,26 @@ async function selectAgent(id) {
             ? Object.entries(nsMap)
                 .map(
                   ([ns, entries]) => `
-          <div class="ns-block">
-            <div class="ns-label">${ns}</div>
-            ${entries
-              .map(
-                (d) => `
-              <div class="data-card">
-                <div class="data-card-header">
-                  <div class="data-key">${d.key} <span style="color:var(--text3);margin-left:6px;">${fmt(d.updated_at)}</span></div>
-                  <div class="data-actions">
-                    <button class="btn btn-sm" data-agent="${id}" data-idx="${d._idx}" data-action="edit-data">Bearbeiten</button>
-                    <button class="btn btn-sm btn-danger" data-agent="${id}" data-idx="${d._idx}" data-action="delete-data">Löschen</button>
+              <div class="ns-block">
+                <div class="ns-label">${ns}</div>
+                ${entries
+                  .map(
+                    (d) => `
+                  <div class="data-card">
+                    <div class="data-card-header">
+                      <div class="data-key">${d.key} <span style="color:var(--text3);margin-left:6px;">${fmt(d.updated_at)}</span></div>
+                      <div class="data-actions">
+                        <button class="btn btn-sm" data-agent="${id}" data-idx="${d._idx}" data-action="edit-data">Bearbeiten</button>
+                        <button class="btn btn-sm btn-danger" data-agent="${id}" data-idx="${d._idx}" data-action="delete-data">Löschen</button>
+                      </div>
+                    </div>
+                    <div class="data-val">${d.value}</div>
                   </div>
-                </div>
-                <div class="data-val">${d.value}</div>
+                `,
+                  )
+                  .join("")}
               </div>
             `,
-              )
-              .join("")}
-          </div>
-        `,
                 )
                 .join("")
             : '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Keine Data-Einträge.</div>'
@@ -433,426 +1092,6 @@ async function selectAgent(id) {
   }
 }
 
-async function saveCapability(agentId) {
-  const val = document.getElementById("cap-select-" + agentId).value;
-  try {
-    await api("/api/agents/" + agentId, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ work_capability: val }),
-    });
-    const a = agentsData.find((x) => x.id === agentId);
-    if (a) a.work_capability = val;
-    toast("Capability gespeichert.");
-  } catch (e) {
-    toast("Fehler.", true);
-  }
-}
-
-function _timeRangeOptions(selected) {
-  return TIME_RANGES.map(
-    (t) =>
-      `<option value="${t}" ${t === (selected || "") ? "selected" : ""}>${t || "— kein Filter —"}</option>`,
-  ).join("");
-}
-
-function _categoryOptions(selected) {
-  const cats = [
-    "",
-    "general",
-    "news",
-    "finance",
-    "it",
-    "science",
-    "social media",
-  ];
-  return cats
-    .map(
-      (c) =>
-        `<option value="${c}" ${c === (selected || "") ? "selected" : ""}>${c || "— Standard (general) —"}</option>`,
-    )
-    .join("");
-}
-
-function _isSearchCapability(cap) {
-  return cap === "chat";
-}
-
-function _updateEditStepVisibility() {
-  const cap = document.getElementById("edit-step-cap")?.value || "";
-  const isSearch = _isSearchCapability(cap);
-  const isFinance = cap === "finance";
-  const fields = {
-    "field-edit-searchquery": isSearch,
-    "field-edit-timerange": isSearch,
-    "field-edit-categories": isSearch,
-    "field-edit-tickerkey": isFinance,
-  };
-  for (const [id, show] of Object.entries(fields)) {
-    const el = document.getElementById(id);
-    if (el) el.style.display = show ? "block" : "none";
-  }
-}
-
-function _updateNewStepVisibility() {
-  const cap = document.getElementById("new-step-cap")?.value || "";
-  const isSearch = _isSearchCapability(cap);
-  const isFinance = cap === "finance";
-  const fields = {
-    "field-new-searchquery": isSearch,
-    "field-new-timerange": isSearch,
-    "field-new-categories": isSearch,
-    "field-new-tickerkey": isFinance,
-  };
-  for (const [id, show] of Object.entries(fields)) {
-    const el = document.getElementById(id);
-    if (el) el.style.display = show ? "block" : "none";
-  }
-}
-
-function editPipelineStep(agentId, stepIndex, section) {
-  section = section || "pipeline";
-  const a = agentsData.find((x) => x.id === agentId);
-  const steps =
-    section === "pipeline_after_template"
-      ? a.pipeline_after_template || []
-      : a.pipeline || [];
-  const step = steps[stepIndex];
-  const capOptions = _capabilityOptions(step.capability);
-  const onlyIfRoute = Array.isArray(step.only_if_route)
-    ? step.only_if_route.join(", ")
-    : step.only_if_route || "";
-  const isSearch = _isSearchCapability(step.capability || "");
-  const isFinance = step.capability === "finance";
-  openModal(
-    "Pipeline-Step bearbeiten",
-    `<div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="edit-step-id" value="${step.id}" /></div>
-     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="edit-step-cap" onchange="_updateEditStepVisibility()">${capOptions}</select></div>
-     <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="edit-step-prompt" style="min-height:200px;">${step.prompt_template}</textarea></div>
-     <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="edit-step-key" value="${step.output_key}" /></div>
-     <div class="modal-field"><div class="modal-label">only_if_route (leer = immer, mehrere mit Komma)</div><input class="modal-input" id="edit-step-route" value="${onlyIfRoute}" placeholder="z.B. normal oder normal, trigger" /></div>
-     <div class="modal-field" id="field-edit-searchquery" style="display:${isSearch ? "block" : "none"}"><div class="modal-label">search_query</div><input class="modal-input" id="edit-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
-     <div class="modal-field" id="field-edit-timerange" style="display:${isSearch ? "block" : "none"}"><div class="modal-label">time_range</div><select class="modal-select" id="edit-step-timerange">${_timeRangeOptions(step.time_range)}</select></div>
-     <div class="modal-field" id="field-edit-categories" style="display:${isSearch ? "block" : "none"}"><div class="modal-label">categories</div><select class="modal-select" id="edit-step-categories">${_categoryOptions(step.categories)}</select></div>
-     <div class="modal-field" id="field-edit-tickerkey" style="display:${isFinance ? "block" : "none"}"><div class="modal-label">ticker_key</div><input class="modal-input" id="edit-step-tickerkey" value="${step.ticker_key || ""}" placeholder="selected_ticker" /></div>
-     <div class="modal-field" style="display:flex;gap:16px;flex-wrap:wrap;">
-       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="edit-step-router" ${step.is_router ? "checked" : ""} /> is_router</label>
-       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="edit-step-output" ${step.is_output ? "checked" : ""} /> is_output</label>
-     </div>`,
-    `<button class="btn" onclick="closeModal()">Abbrechen</button>
-     <button class="btn btn-accent" onclick="savePipelineStep(${agentId}, ${stepIndex}, '${section}')">Speichern</button>`,
-  );
-}
-
-async function savePipelineStep(agentId, stepIndex, section) {
-  section = section || "pipeline";
-  const a = agentsData.find((x) => x.id === agentId);
-  const steps =
-    section === "pipeline_after_template"
-      ? a.pipeline_after_template || []
-      : a.pipeline || [];
-  const routeRaw = document.getElementById("edit-step-route").value.trim();
-  let onlyIfRoute = null;
-  if (routeRaw) {
-    const parts = routeRaw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    onlyIfRoute = parts.length === 1 ? parts[0] : parts;
-  }
-  const timeRange = document.getElementById("edit-step-timerange").value;
-  const categories = document.getElementById("edit-step-categories").value;
-  const searchQuery = document
-    .getElementById("edit-step-searchquery")
-    .value.trim();
-  const tickerKey = document.getElementById("edit-step-tickerkey").value.trim();
-  const updated = {
-    id: document.getElementById("edit-step-id").value.trim(),
-    capability: document.getElementById("edit-step-cap").value,
-    prompt_template: document.getElementById("edit-step-prompt").value,
-    output_key: document.getElementById("edit-step-key").value.trim(),
-  };
-  if (onlyIfRoute !== null) updated.only_if_route = onlyIfRoute;
-  if (searchQuery) updated.search_query = searchQuery;
-  if (timeRange) updated.time_range = timeRange;
-  if (categories) updated.categories = categories;
-  if (tickerKey) updated.ticker_key = tickerKey;
-  if (document.getElementById("edit-step-router").checked)
-    updated.is_router = true;
-  if (document.getElementById("edit-step-output").checked)
-    updated.is_output = true;
-
-  const newSteps = [...steps];
-  newSteps[stepIndex] = updated;
-  const patchKey =
-    section === "pipeline_after_template"
-      ? "pipeline_after_template"
-      : "pipeline";
-
-  try {
-    await api("/api/agents/" + agentId, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [patchKey]: newSteps }),
-    });
-    if (section === "pipeline_after_template") {
-      a.pipeline_after_template = newSteps;
-    } else {
-      a.pipeline = newSteps;
-    }
-    closeModal();
-    toast("Step gespeichert.");
-    selectAgent(agentId);
-  } catch (e) {
-    toast("Fehler.", true);
-  }
-}
-
-async function deletePipelineStep(agentId, stepIndex, section) {
-  section = section || "pipeline";
-  confirmModal("Pipeline-Step wirklich löschen?", async () => {
-    const a = agentsData.find((x) => x.id === agentId);
-    const steps =
-      section === "pipeline_after_template"
-        ? [...(a.pipeline_after_template || [])]
-        : [...(a.pipeline || [])];
-    steps.splice(stepIndex, 1);
-    const patchKey =
-      section === "pipeline_after_template"
-        ? "pipeline_after_template"
-        : "pipeline";
-    try {
-      await api("/api/agents/" + agentId, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [patchKey]: steps }),
-      });
-      if (section === "pipeline_after_template") {
-        a.pipeline_after_template = steps;
-      } else {
-        a.pipeline = steps;
-      }
-      toast("Step gelöscht.");
-      selectAgent(agentId);
-    } catch (e) {
-      toast("Fehler.", true);
-    }
-  });
-}
-
-function editPipelineTemplate(agentId) {
-  const a = agentsData.find((x) => x.id === agentId);
-  const t = a.pipeline_template || {};
-  const step = t.step || {};
-  const capOptions = _capabilityOptions(step.capability);
-  const itemsList = Array.isArray(t.foreach_items)
-    ? t.foreach_items.join("\n")
-    : "";
-  openModal(
-    "Pipeline Template bearbeiten",
-    `<div class="modal-field">
-       <div class="modal-label">Source</div>
-       <select class="modal-select" id="tmpl-source" onchange="toggleTemplateSource()">
-         <option value="static" ${t.source === "static" ? "selected" : ""}>static (feste Liste)</option>
-         <option value="state" ${t.source === "state" ? "selected" : ""}>state (aus Agent-State)</option>
-         <option value="injected" ${t.source === "injected" ? "selected" : ""}>injected (aus data_reads)</option>
-       </select>
-     </div>
-     <div class="modal-field" id="tmpl-foreach-field" style="${t.source !== "static" ? "" : "display:none"}">
-       <div class="modal-label">foreach (State-Key)</div>
-       <input class="modal-input" id="tmpl-foreach" value="${t.foreach || ""}" placeholder="z.B. fundamentalanalyse_vorhanden" />
-     </div>
-     <div class="modal-field" id="tmpl-items-field" style="${t.source === "static" ? "" : "display:none"}">
-       <div class="modal-label">foreach_items (ein Item pro Zeile)</div>
-       <textarea class="modal-input" id="tmpl-items" style="min-height:100px;">${itemsList}</textarea>
-     </div>
-     <div class="modal-field"><div class="modal-label">split_by (Trennzeichen)</div><input class="modal-input" id="tmpl-split" value="${t.split_by || ","}" /></div>
-     <div class="modal-field"><div class="modal-label">batch_size</div><input class="modal-input" id="tmpl-batch" type="number" value="${t.batch_size || 1}" /></div>
-     <div class="modal-field"><div class="modal-label">aggregate_key</div><input class="modal-input" id="tmpl-agg" value="${t.aggregate_key || ""}" /></div>
-     <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="tmpl-route" value="${t.only_if_route || ""}" /></div>
-     <div class="modal-field"><div class="modal-label">time_range für Chat-Steps (leer = kein Filter)</div><select class="modal-select" id="tmpl-timerange">${_timeRangeOptions(t.time_range)}</select></div>
-     <hr class="divider">
-     <div class="modal-label" style="margin-bottom:8px;">Step Template</div>
-     <div class="modal-field"><div class="modal-label">ID ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-id" value="${step.id || "search_{{item_id}}"}" /></div>
-     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="tmpl-step-cap">${capOptions}</select></div>
-     <div class="modal-field"><div class="modal-label">Prompt Template ({{item}} und {{item_id}} verfügbar)</div><textarea class="modal-input" id="tmpl-step-prompt" style="min-height:140px;">${step.prompt_template || ""}</textarea></div>
-     <div class="modal-field"><div class="modal-label">Output Key ({{item_id}} verfügbar)</div><input class="modal-input" id="tmpl-step-key" value="${step.output_key || "result_{{item_id}}"}" /></div>
-     <div class="modal-field"><div class="modal-label">search_query (nur für Chat-Steps, {{item}} verfügbar)</div><input class="modal-input" id="tmpl-step-searchquery" value="${step.search_query || ""}" placeholder="z.B. {{trigger_payload.ticker}} {{item}}" /></div>
-     <div class="modal-field"><div class="modal-label">categories (nur für Chat-Steps)</div><select class="modal-select" id="tmpl-step-categories">${_categoryOptions(step.categories)}</select></div>`,
-    `<button class="btn" onclick="closeModal()">Abbrechen</button>
-     <button class="btn btn-accent" onclick="savePipelineTemplate(${agentId})">Speichern</button>`,
-  );
-}
-
-function toggleTemplateSource() {
-  const src = document.getElementById("tmpl-source").value;
-  document.getElementById("tmpl-foreach-field").style.display =
-    src !== "static" ? "" : "none";
-  document.getElementById("tmpl-items-field").style.display =
-    src === "static" ? "" : "none";
-}
-
-async function savePipelineTemplate(agentId) {
-  const source = document.getElementById("tmpl-source").value;
-  const template = {
-    source,
-    split_by: document.getElementById("tmpl-split").value || ",",
-    batch_size: parseInt(document.getElementById("tmpl-batch").value) || 1,
-    aggregate_key: document.getElementById("tmpl-agg").value.trim(),
-    step: {
-      id: document.getElementById("tmpl-step-id").value.trim(),
-      capability: document.getElementById("tmpl-step-cap").value,
-      prompt_template: document.getElementById("tmpl-step-prompt").value,
-      output_key: document.getElementById("tmpl-step-key").value.trim(),
-      ...(document.getElementById("tmpl-step-searchquery").value.trim()
-        ? {
-            search_query: document
-              .getElementById("tmpl-step-searchquery")
-              .value.trim(),
-          }
-        : {}),
-      ...(document.getElementById("tmpl-step-categories").value
-        ? { categories: document.getElementById("tmpl-step-categories").value }
-        : {}),
-    },
-  };
-  if (source === "static") {
-    const items = document
-      .getElementById("tmpl-items")
-      .value.split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    template.foreach_items = items;
-  } else {
-    template.foreach = document.getElementById("tmpl-foreach").value.trim();
-  }
-  const routeRaw = document.getElementById("tmpl-route").value.trim();
-  if (routeRaw) template.only_if_route = routeRaw;
-  const tmplTimeRange = document.getElementById("tmpl-timerange").value;
-  if (tmplTimeRange) template.time_range = tmplTimeRange;
-
-  try {
-    await api("/api/agents/" + agentId, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pipeline_template: template }),
-    });
-    const a = agentsData.find((x) => x.id === agentId);
-    a.pipeline_template = template;
-    closeModal();
-    toast("Template gespeichert.");
-    selectAgent(agentId);
-  } catch (e) {
-    toast("Fehler.", true);
-  }
-}
-
-function addPipelineStep(agentId) {
-  const a = agentsData.find((x) => x.id === agentId);
-  const hasAfterTemplate =
-    a.pipeline_after_template && a.pipeline_after_template.length > 0;
-  const capOptions = _capabilityOptions("");
-  openModal(
-    "Neuen Pipeline-Step hinzufügen",
-    `<div class="modal-field">
-       <div class="modal-label">Sektion</div>
-       <select class="modal-select" id="new-step-section">
-         <option value="pipeline">pipeline (feste Steps)</option>
-         ${hasAfterTemplate ? '<option value="pipeline_after_template">pipeline_after_template (nach Template)</option>' : ""}
-       </select>
-     </div>
-     <div class="modal-field"><div class="modal-label">ID</div><input class="modal-input" id="new-step-id" placeholder="z.B. search_news" /></div>
-     <div class="modal-field"><div class="modal-label">Capability</div><select class="modal-select" id="new-step-cap" onchange="_updateNewStepVisibility()">${capOptions}</select></div>
-     <div class="modal-field"><div class="modal-label">Prompt Template</div><textarea class="modal-input" id="new-step-prompt" style="min-height:160px;" placeholder="Anweisung für diesen Step…"></textarea></div>
-     <div class="modal-field"><div class="modal-label">Output Key</div><input class="modal-input" id="new-step-key" placeholder="z.B. search_result" /></div>
-     <div class="modal-field"><div class="modal-label">only_if_route (leer = immer)</div><input class="modal-input" id="new-step-route" placeholder="z.B. normal" /></div>
-     <div class="modal-field" id="field-new-searchquery" style="display:none"><div class="modal-label">search_query</div><input class="modal-input" id="new-step-searchquery" placeholder="z.B. {{selected_ticker}} Finanzkennzahlen 2026" /></div>
-     <div class="modal-field" id="field-new-timerange" style="display:none"><div class="modal-label">time_range</div><select class="modal-select" id="new-step-timerange">${_timeRangeOptions("")}</select></div>
-     <div class="modal-field" id="field-new-categories" style="display:none"><div class="modal-label">categories</div><select class="modal-select" id="new-step-categories">${_categoryOptions("")}</select></div>
-     <div class="modal-field" id="field-new-tickerkey" style="display:none"><div class="modal-label">ticker_key</div><input class="modal-input" id="new-step-tickerkey" placeholder="selected_ticker" /></div>
-     <div class="modal-field"><div class="modal-label">Position (leer = ans Ende)</div><input class="modal-input" id="new-step-pos" type="number" placeholder="0 = Anfang" /></div>
-     <div class="modal-field" style="display:flex;gap:16px;flex-wrap:wrap;">
-       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="new-step-router" /> is_router</label>
-       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="new-step-output" /> is_output</label>
-     </div>`,
-    `<button class="btn" onclick="closeModal()">Abbrechen</button>
-     <button class="btn btn-accent" onclick="saveNewPipelineStep(${agentId})">Hinzufügen</button>`,
-  );
-}
-
-async function saveNewPipelineStep(agentId) {
-  const id = document.getElementById("new-step-id").value.trim();
-  const key = document.getElementById("new-step-key").value.trim();
-  const prompt = document.getElementById("new-step-prompt").value.trim();
-  if (!id || !key || !prompt) {
-    toast("ID, Output Key und Prompt sind pflicht.", true);
-    return;
-  }
-  const section = document.getElementById("new-step-section").value;
-  const routeRaw = document.getElementById("new-step-route").value.trim();
-  let onlyIfRoute = null;
-  if (routeRaw) {
-    const parts = routeRaw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    onlyIfRoute = parts.length === 1 ? parts[0] : parts;
-  }
-  const timeRange = document.getElementById("new-step-timerange").value;
-  const categories = document.getElementById("new-step-categories").value;
-  const searchQuery = document
-    .getElementById("new-step-searchquery")
-    .value.trim();
-  const posRaw = document.getElementById("new-step-pos").value.trim();
-  const pos = posRaw !== "" ? parseInt(posRaw) : null;
-  const step = {
-    id,
-    capability: document.getElementById("new-step-cap").value,
-    prompt_template: prompt,
-    output_key: key,
-  };
-  if (onlyIfRoute !== null) step.only_if_route = onlyIfRoute;
-  if (searchQuery) step.search_query = searchQuery;
-  if (timeRange) step.time_range = timeRange;
-  if (categories) step.categories = categories;
-  const newTickerKey = document
-    .getElementById("new-step-tickerkey")
-    ?.value.trim();
-  if (newTickerKey) step.ticker_key = newTickerKey;
-  if (document.getElementById("new-step-router").checked) step.is_router = true;
-  if (document.getElementById("new-step-output").checked) step.is_output = true;
-
-  const a = agentsData.find((x) => x.id === agentId);
-  const currentSteps =
-    section === "pipeline_after_template"
-      ? [...(a.pipeline_after_template || [])]
-      : [...(a.pipeline || [])];
-
-  if (pos === null || pos >= currentSteps.length) {
-    currentSteps.push(step);
-  } else {
-    currentSteps.splice(pos, 0, step);
-  }
-
-  try {
-    await api("/api/agents/" + agentId, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [section]: currentSteps }),
-    });
-    if (section === "pipeline_after_template") {
-      a.pipeline_after_template = currentSteps;
-    } else {
-      a.pipeline = currentSteps;
-    }
-    closeModal();
-    toast("Step hinzugefügt.");
-    selectAgent(agentId);
-  } catch (e) {
-    toast("Fehler.", true);
-  }
-}
-
 function handleAgentDetailClick(e) {
   const btn = e.target.closest("[data-action]");
   if (!btn) return;
@@ -873,7 +1112,7 @@ function handleAgentDetailClick(e) {
     );
   } else if (action === "delete-state") {
     const key = btn.dataset.key;
-    confirmModal('State-Eintrag "' + key + '" wirklich löschen?', () => {
+    confirmModal(`State-Eintrag "${key}" wirklich löschen?`, () => {
       api("/api/agents/" + agentId + "/state/" + encodeURIComponent(key), {
         method: "DELETE",
       })
@@ -897,14 +1136,9 @@ function handleAgentDetailClick(e) {
   } else if (action === "delete-data") {
     const idx = Number(btn.dataset.idx);
     const d = _agentDataCache[agentId][idx];
-    confirmModal('Eintrag "' + d.namespace + "/" + d.key + '" löschen?', () => {
+    confirmModal(`Eintrag "${d.namespace}/${d.key}" löschen?`, () => {
       api(
-        "/api/agents/" +
-          agentId +
-          "/data/" +
-          encodeURIComponent(d.namespace) +
-          "/" +
-          encodeURIComponent(d.key),
+        `/api/agents/${agentId}/data/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.key)}`,
         { method: "DELETE" },
       )
         .then(() => {
@@ -951,7 +1185,7 @@ async function saveStateEntry(agentId, key) {
     closeModal();
     toast("Gespeichert.");
     selectAgent(agentId);
-  } catch (e) {
+  } catch {
     toast("Fehler.", true);
   }
 }
@@ -961,12 +1195,7 @@ async function saveAgentData(agentId, idx) {
   const value = document.getElementById("edit-data-val").value;
   try {
     await api(
-      "/api/agents/" +
-        agentId +
-        "/data/" +
-        encodeURIComponent(d.namespace) +
-        "/" +
-        encodeURIComponent(d.key),
+      `/api/agents/${agentId}/data/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.key)}`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -976,7 +1205,7 @@ async function saveAgentData(agentId, idx) {
     closeModal();
     toast("Gespeichert.");
     selectAgent(agentId);
-  } catch (e) {
+  } catch {
     toast("Fehler.", true);
   }
 }
@@ -992,7 +1221,7 @@ function addAgentData(agentId) {
        <datalist id="ns-suggestions">${namespaces.map((ns) => `<option value="${ns}">`).join("")}</datalist>
      </div>
      <div class="modal-field"><div class="modal-label">Key</div><input class="modal-input" id="new-data-key" placeholder="z.B. EOSE" /></div>
-     <div class="modal-field"><div class="modal-label">Value</div><textarea class="modal-input" id="new-data-val" style="min-height:120px;" placeholder="Inhalt…"></textarea></div>`,
+     <div class="modal-field"><div class="modal-label">Value</div><textarea class="modal-input" id="new-data-val" style="min-height:120px;"></textarea></div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="saveNewAgentData(${agentId})">Speichern</button>`,
   );
@@ -1003,7 +1232,7 @@ async function saveNewAgentData(agentId) {
   const key = document.getElementById("new-data-key").value.trim();
   const value = document.getElementById("new-data-val").value.trim();
   if (!namespace || !key || !value) {
-    toast("Alle Felder sind pflicht.", true);
+    toast("Alle Felder sind Pflicht.", true);
     return;
   }
   try {
@@ -1015,7 +1244,7 @@ async function saveNewAgentData(agentId) {
     closeModal();
     toast("Gespeichert.");
     selectAgent(agentId);
-  } catch (e) {
+  } catch {
     toast("Fehler.", true);
   }
 }
@@ -1036,7 +1265,7 @@ async function saveAgentMemory(agentId, idx) {
     closeModal();
     toast("Gespeichert.");
     selectAgent(agentId);
-  } catch (e) {
+  } catch {
     toast("Fehler.", true);
   }
 }
@@ -1062,7 +1291,7 @@ async function saveNewAgentMemory(agentId) {
     closeModal();
     toast("Gespeichert.");
     selectAgent(agentId);
-  } catch (e) {
+  } catch {
     toast("Fehler.", true);
   }
 }
@@ -1070,8 +1299,8 @@ async function saveNewAgentMemory(agentId) {
 async function triggerAgent(id) {
   try {
     await api("/api/agents/" + id + "/trigger", { method: "POST" });
-    toast("Trigger gesetzt — läuft beim nächsten Scheduler-Durchlauf.");
-  } catch (e) {
+    toast("Trigger gesetzt.");
+  } catch {
     toast("Fehler.", true);
   }
 }
@@ -1083,7 +1312,7 @@ async function stopAgent(id) {
       toast("Agent gestoppt.");
       goBack();
       await loadAgents();
-    } catch (e) {
+    } catch {
       toast("Fehler.", true);
     }
   });
@@ -1094,7 +1323,7 @@ function editAgent(id) {
   openModal(
     "Agent bearbeiten",
     `<div class="modal-field"><div class="modal-label">Name</div><input class="modal-input" id="edit-name" value="${a.name}" /></div>
-     <div class="modal-field"><div class="modal-label">Zeitplan (Cron)</div><input class="modal-input" id="edit-schedule" value="${a.schedule}" /></div>
+     <div class="modal-field"><div class="modal-label">Zeitplan (Cron, leer = nur Trigger)</div><input class="modal-input" id="edit-schedule" value="${a.schedule || ""}" /></div>
      <div class="modal-field"><div class="modal-label">Anweisung</div><textarea class="modal-input" id="edit-instruction" style="min-height:140px;">${a.instruction}</textarea></div>`,
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
      <button class="btn btn-accent" onclick="saveAgent(${id})">Speichern</button>`,
@@ -1103,7 +1332,8 @@ function editAgent(id) {
 
 async function saveAgent(id) {
   const name = document.getElementById("edit-name").value.trim();
-  const schedule = document.getElementById("edit-schedule").value.trim();
+  const schedule =
+    document.getElementById("edit-schedule").value.trim() || null;
   const instruction = document.getElementById("edit-instruction").value.trim();
   try {
     await api("/api/agents/" + id, {
@@ -1115,10 +1345,12 @@ async function saveAgent(id) {
     toast("Gespeichert.");
     await loadAgents();
     selectAgent(id);
-  } catch (e) {
+  } catch {
     toast("Fehler.", true);
   }
 }
+
+// ── Memory ────────────────────────────────────────────────────────────────────
 
 async function loadMemory() {
   try {
@@ -1129,7 +1361,7 @@ async function loadMemory() {
     memData.users = users;
     memData.groups = groups;
     renderMemoryList();
-  } catch (e) {
+  } catch {
     document.getElementById("memory-list").innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:8px;">Fehler.</div>';
   }
@@ -1253,7 +1485,7 @@ async function renderMemDetail(id) {
         .map(
           (type) => `
         <div class="detail-block">
-          <div class="detail-block-title"><span>${type} (${byType[type].length})</span></div>
+          <div class="detail-block-title">${type} (${byType[type].length})</div>
           <div class="mem-list">
             ${byType[type]
               .map(
@@ -1279,7 +1511,7 @@ async function renderMemDetail(id) {
     `;
     detail.removeEventListener("click", handleMemDetailClick);
     detail.addEventListener("click", handleMemDetailClick);
-  } catch (e) {
+  } catch {
     detail.innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
   }
@@ -1341,7 +1573,7 @@ async function saveMemory(subjectId, idx) {
     closeModal();
     toast("Gespeichert.");
     renderMemDetail(subjectId);
-  } catch (e) {
+  } catch {
     toast("Fehler.", true);
   }
 }
@@ -1380,10 +1612,12 @@ async function saveNewMemory(subjectId) {
     closeModal();
     toast("Gespeichert.");
     renderMemDetail(subjectId);
-  } catch (e) {
+  } catch {
     toast("Fehler.", true);
   }
 }
+
+// ── Usage ─────────────────────────────────────────────────────────────────────
 
 document
   .getElementById("usage-tabs")
@@ -1406,9 +1640,7 @@ document
 async function loadUsage() {
   try {
     const u = await api("/api/usage");
-
     const totalCost = u.by_model.reduce((s, m) => s + m.estimated_cost_usd, 0);
-
     document.getElementById("usage-tab-models").innerHTML = `
       <div class="metrics-grid">
         <div class="metric-card"><div class="metric-label">input tokens</div><div class="metric-value">${fmtNum(u.total_input)}</div></div>
@@ -1430,11 +1662,10 @@ async function loadUsage() {
           `,
             )
             .join("")}
-          ${!u.by_model.length ? '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Noch keine Model-Daten.</div>' : ""}
+          ${!u.by_model.length ? '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Noch keine Daten.</div>' : ""}
         </div>
       </div>
     `;
-
     const maxTokens = u.by_caller.reduce(
       (m, c) => Math.max(m, c.input + c.output),
       1,
@@ -1457,7 +1688,7 @@ async function loadUsage() {
         </div>
       </div>
     `;
-  } catch (e) {
+  } catch {
     document.getElementById("usage-tab-models").innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
   }
@@ -1500,18 +1731,19 @@ async function loadUsageHistory(page) {
         </div>
       </div>
     `;
-  } catch (e) {
+  } catch {
     el.innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
   }
 }
+
+// ── Registry ──────────────────────────────────────────────────────────────────
 
 async function loadRegistry() {
   const el = document.getElementById("registry-detail");
   el.innerHTML = '<div class="empty-state">Lade…</div>';
   try {
     const data = await api("/api/registry");
-
     const routingHtml = data.routing
       .map(
         (r) => `
@@ -1523,13 +1755,11 @@ async function loadRegistry() {
     `,
       )
       .join("");
-
     const byProvider = {};
     data.models.forEach((m) => {
       if (!byProvider[m.provider]) byProvider[m.provider] = [];
       byProvider[m.provider].push(m);
     });
-
     const modelsHtml = Object.entries(byProvider)
       .map(
         ([provider, models]) => `
@@ -1545,14 +1775,10 @@ async function loadRegistry() {
                 <span class="badge ${m.is_available ? "badge-active" : "badge-inactive"}">${m.is_available ? "verfügbar" : "nicht verfügbar"}</span>
                 ${m.is_local ? '<span class="badge badge-pipeline">local</span>' : ""}
               </div>
-              <div style="font-family:var(--mono);font-size:10px;color:var(--text3);">
-                ${m.input_cost_per_mtok === 0 ? "kostenlos" : "$" + m.input_cost_per_mtok + " / $" + m.output_cost_per_mtok + " MTok"}
-              </div>
+              <div style="font-family:var(--mono);font-size:10px;color:var(--text3);">${m.input_cost_per_mtok === 0 ? "kostenlos" : "$" + m.input_cost_per_mtok + " / $" + m.output_cost_per_mtok + " MTok"}</div>
             </div>
             <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:6px;">${m.api_model_name} · ctx: ${m.context_window ? fmtNum(m.context_window) : "—"} · out: ${m.max_output_tokens ? fmtNum(m.max_output_tokens) : "—"}</div>
-            <div style="display:flex;flex-wrap:wrap;gap:4px;">
-              ${m.capabilities.map((c) => `<span class="badge badge-cap">${c}</span>`).join("")}
-            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;">${m.capabilities.map((c) => `<span class="badge badge-cap">${c}</span>`).join("")}</div>
             ${m.notes ? `<div style="font-size:11px;color:var(--text3);margin-top:6px;">${m.notes}</div>` : ""}
           </div>
         `,
@@ -1562,11 +1788,10 @@ async function loadRegistry() {
     `,
       )
       .join("");
-
     el.innerHTML = `
       <div class="detail-block">
         <div class="detail-block-title">Aktives Routing</div>
-        ${routingHtml || '<div style="font-size:13px;color:var(--text3);">Keine Routing-Daten — Bot noch nicht gestartet.</div>'}
+        ${routingHtml || '<div style="font-size:13px;color:var(--text3);">Keine Daten.</div>'}
       </div>
       <hr class="divider">
       <div class="detail-block">
@@ -1574,11 +1799,13 @@ async function loadRegistry() {
         ${modelsHtml}
       </div>
     `;
-  } catch (e) {
+  } catch {
     el.innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
   }
 }
+
+// ── Triggers ──────────────────────────────────────────────────────────────────
 
 async function loadTriggers() {
   const el = document.getElementById("triggers-detail");
@@ -1602,17 +1829,19 @@ async function loadTriggers() {
     `,
       )
       .join("");
-  } catch (e) {
+  } catch {
     el.innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
   }
 }
 
+// ── Scrapers ──────────────────────────────────────────────────────────────────
+
 async function loadScrapers() {
   try {
     scrapersData = await api("/api/scrapers");
     renderScrapersList();
-  } catch (e) {
+  } catch {
     document.getElementById("scrapers-list").innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:8px;">Backend nicht erreichbar.</div>';
   }
@@ -1650,7 +1879,6 @@ async function selectScraper(id) {
   const detail = document.getElementById("scrapers-detail");
   detail.innerHTML = '<div class="empty-state">Lade…</div>';
   showDetail(detail, document.getElementById("scrapers-sidebar"), s.query);
-
   try {
     const listings = await api(
       `/api/listings?category=${encodeURIComponent(s.category)}&platform=${encodeURIComponent(s.platform)}&limit=50`,
@@ -1664,7 +1892,6 @@ async function selectScraper(id) {
           .map(([k, v]) => `${k}: ${v}`)
           .join(", ")
       : "—";
-
     detail.innerHTML = `
       <div class="action-bar">
         ${s.is_active ? `<button class="btn btn-danger" onclick="stopScraper(${id})">Stoppen</button>` : ""}
@@ -1688,20 +1915,18 @@ async function selectScraper(id) {
               ? listings
                   .map(
                     (l) => `
-            <div class="data-card">
-              <div class="data-card-header">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;">
-                  <a href="${l.url}" target="_blank" style="font-size:13px;font-weight:500;color:var(--accent);text-decoration:none;word-break:break-word;">${l.title}</a>
-                  ${l.price !== null ? `<span class="badge badge-active">${l.price} ${l.currency || ""}</span>` : ""}
-                  ${l.condition ? `<span class="badge badge-pipeline">${l.condition}</span>` : ""}
+                <div class="data-card">
+                  <div class="data-card-header">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;">
+                      <a href="${l.url}" target="_blank" style="font-size:13px;font-weight:500;color:var(--accent);text-decoration:none;word-break:break-word;">${l.title}</a>
+                      ${l.price !== null ? `<span class="badge badge-active">${l.price} ${l.currency || ""}</span>` : ""}
+                      ${l.condition ? `<span class="badge badge-pipeline">${l.condition}</span>` : ""}
+                    </div>
+                    <button class="btn btn-sm btn-danger" onclick="deleteListing(${l.id}, ${id})">Del</button>
+                  </div>
+                  <div class="detail-mono" style="margin-top:4px;">${l.location ? l.location + " · " : ""}${l.seller_name || ""}${l.seller_rating ? " (" + l.seller_rating + "★)" : ""} · ${fmt(l.first_seen_at)}</div>
                 </div>
-                <button class="btn btn-sm btn-danger" onclick="deleteListing(${l.id}, ${id})">Del</button>
-              </div>
-              <div class="detail-mono" style="margin-top:4px;">
-                ${l.location ? l.location + " · " : ""}${l.seller_name || ""}${l.seller_rating ? " (" + l.seller_rating + "★)" : ""} · ${fmt(l.first_seen_at)}
-              </div>
-            </div>
-          `,
+              `,
                   )
                   .join("")
               : '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Noch keine Listings.</div>'
@@ -1709,9 +1934,9 @@ async function selectScraper(id) {
         </div>
       </div>
     `;
-  } catch (e) {
+  } catch {
     detail.innerHTML =
-      '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
+      '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler.</div>';
   }
 }
 
@@ -1722,7 +1947,7 @@ async function stopScraper(id) {
       toast("Scraper gestoppt.");
       goBack();
       await loadScrapers();
-    } catch (e) {
+    } catch {
       toast("Fehler.", true);
     }
   });
@@ -1734,14 +1959,16 @@ async function deleteListing(listingId, scraperId) {
       await api("/api/listings/" + listingId, { method: "DELETE" });
       toast("Gelöscht.");
       selectScraper(scraperId);
-    } catch (e) {
+    } catch {
       toast("Fehler.", true);
     }
   });
 }
 
+// ── Init ──────────────────────────────────────────────────────────────────────
+
 async function loadAll() {
-  await loadCapabilities();
+  STEP_TYPES = await api("/api/step-types").catch(() => []);
   loadAgents();
   loadMemory();
   loadScrapers();

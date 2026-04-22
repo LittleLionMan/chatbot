@@ -5,10 +5,14 @@ import logging
 import asyncpg
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from bot import brain, memory, decider, config, ratelimit, extractor, greeter, voice, task_parser, agent_parser, agent_runner, intent_classifier, agent_system_parser
+from bot import (
+    brain, memory, decider, config, ratelimit, extractor,
+    greeter, voice, task_parser, agent_parser, agent_runner,
+    intent_classifier, agent_system_parser,
+)
 from bot.brain import ProviderRateLimitError, ProviderAuthError
 from bot.models import CAPABILITY_CHAT, CAPABILITY_MULTIMODAL
-from bot.agent_parser import _classify_work_capability, _generate_pipeline
+from bot.agent_parser import regenerate_pipeline_for_agent
 from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -89,15 +93,18 @@ async def _handle_file_content(
     is_group = chat.type in ("group", "supergroup")
     display = _display_name(user)
     group_title = chat.title if is_group else None
+
     await memory.upsert_user(pool, user.id, user.username, user.first_name, user.last_name)
     if is_group:
         await memory.upsert_group(pool, chat.id, group_title)
+
     user_memories = await memory.get_memories(pool, "user", user.id)
     group_memories = await memory.get_memories(pool, "group", chat.id) if is_group else []
     bot_memories = await memory.get_memories(pool, "bot", chat.id) if is_group else []
     reflection_memories = await memory.get_reflection_memories(pool, chat.id, user.id)
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
     history = await memory.get_recent_messages(pool, chat.id)
+
     system = brain.build_system_prompt(
         user_memories, group_memories, bot_memories, reflection_memories,
         display, group_title, active_agents=active_agents,
@@ -110,6 +117,7 @@ async def _handle_file_content(
         {"type": "text", "text": user_text},
     ]
     llm_messages.append({"role": "user", "content": content})
+
     try:
         response = await brain.chat(
             system=system,
@@ -122,6 +130,7 @@ async def _handle_file_content(
         if triggered_by_mention:
             await message.reply_text(ratelimit.rate_limit_message(e.provider))
         return
+
     text_turn = f"{display}: [Datei] {user_text}"
     await memory.save_message(pool, chat.id, user.id, "user", text_turn)
     await memory.save_message(pool, chat.id, None, "assistant", response)
@@ -156,11 +165,11 @@ async def _handle_pending_confirmation(
             )
         names = ", ".join(a["name"] for a in pending_plan["agents"])
         _pending_agent_systems.pop(user_id, None)
-        await message.reply_text(f"Angelegt: {names}. Die Agents starten zu ihren geplanten Zeiten.")
+        await message.reply_text(f"Angelegt: {names}.")
         return True
     if normalized in ("nein", "no", "abbruch", "cancel", "stopp"):
         _pending_agent_systems.pop(user_id, None)
-        await message.reply_text("Abgebrochen. Kein Agent wurde angelegt.")
+        await message.reply_text("Abgebrochen.")
         return True
     return False
 
@@ -182,8 +191,11 @@ async def _handle_agent_intent(
         else:
             for agent in active_agents:
                 instruction = parse_agent_config(agent["config"]).get("instruction", "")[:80]
-                line = f"{agent['name']} — {instruction}… ({agent['schedule']})"
-                await message.reply_text(line, reply_markup=_agent_keyboard(agent["id"]))
+                schedule_display = agent["schedule"] or "nur auf Trigger"
+                await message.reply_text(
+                    f"{agent['name']} — {instruction}… ({schedule_display})",
+                    reply_markup=_agent_keyboard(agent["id"]),
+                )
         return
 
     if intent == "scraper_create":
@@ -196,9 +208,8 @@ async def _handle_agent_intent(
                 "'Scrape Kleinanzeigen und eBay nach RTX 4090 und triggere Linus'."
             )
             return
-        created_ids: list[int] = []
         for platform in platforms:
-            config_id = await memory.create_scraper_config(
+            await memory.create_scraper_config(
                 pool,
                 platform=platform,
                 category=extracted.get("category", "general"),
@@ -207,7 +218,6 @@ async def _handle_agent_intent(
                 filters=extracted.get("filters", {}),
                 poll_interval_seconds=extracted.get("poll_interval_seconds", 3600),
             )
-            created_ids.append(config_id)
         interval_min = extracted.get("poll_interval_seconds", 3600) // 60
         await message.reply_text(
             f"Scraper eingerichtet für {', '.join(platforms)} — "
@@ -229,7 +239,9 @@ async def _handle_agent_intent(
         parsed_agent = await agent_parser.parse_agent_creation(text, user_id, chat_id, pool)
         if parsed_agent:
             suggested = parsed_agent.get("suggested_name")
-            name = suggested if suggested else agent_parser._pick_name_for_topic(parsed_agent["config"]["type"])
+            name = suggested if suggested else agent_parser._pick_name_for_topic(
+                parsed_agent["config"].get("type", "default")
+            )
             agent_id = await memory.create_agent(
                 pool,
                 user_id=user_id,
@@ -240,9 +252,12 @@ async def _handle_agent_intent(
                 next_run_at=parsed_agent["next_run_at"],
             )
             instruction_preview = parsed_agent["config"].get("instruction", "")[:80]
-            next_display = parsed_agent["next_run_display"].strftime("%d.%m.%Y %H:%M")
+            if parsed_agent.get("next_run_display"):
+                timing = f"ab {parsed_agent['next_run_display'].strftime('%d.%m.%Y %H:%M')}"
+            else:
+                timing = "wartet auf Trigger"
             await message.reply_text(
-                f"Agent angelegt: {name} — {instruction_preview}… — ab {next_display}.\n"
+                f"Agent angelegt: {name} — {instruction_preview}… — {timing}.\n"
                 f"Soll er einen anderen Namen bekommen?",
                 reply_markup=_agent_keyboard(agent_id),
             )
@@ -264,35 +279,31 @@ async def _handle_agent_intent(
                         poll_interval_seconds=monitor_params.get("poll_interval_seconds", 900),
                     )
                     await message.reply_text(
-                        f"RSS-Monitor eingerichtet (ID: {monitor_id}): überwacht relevante Quellen und triggert {name} bei neuen Artikeln."
+                        f"RSS-Monitor eingerichtet (ID: {monitor_id}): triggert {name} bei neuen Artikeln."
                     )
             if parsed_agent.get("wants_scraper"):
                 scraper_params = await intent_classifier.extract_scraper_create_params(text, pool)
-                platforms: list[str] = scraper_params.get("platforms", [])
-                query: str = scraper_params.get("query", "") or parsed_agent["config"].get("type", "")
-                if platforms and query:
-                    created_ids: list[int] = []
-                    for platform in platforms:
-                        config_id = await memory.create_scraper_config(
+                platforms_s: list[str] = scraper_params.get("platforms", [])
+                query_s: str = scraper_params.get("query", "")
+                if platforms_s and query_s:
+                    for platform in platforms_s:
+                        await memory.create_scraper_config(
                             pool,
                             platform=platform,
                             category=scraper_params.get("category", parsed_agent["config"].get("type", "general")),
-                            query=query,
+                            query=query_s,
                             target_agent=name,
                             filters=scraper_params.get("filters", {}),
                             poll_interval_seconds=scraper_params.get("poll_interval_seconds", 3600),
                         )
-                        created_ids.append(config_id)
-                    platform_list = ", ".join(platforms)
                     interval_display = f"{scraper_params.get('poll_interval_seconds', 3600) // 60} Minuten"
                     await message.reply_text(
-                        f"Scraper eingerichtet: suche nach '{query}' auf {platform_list} "
-                        f"alle {interval_display} und triggere {name} bei neuen Listings."
+                        f"Scraper eingerichtet: '{query_s}' auf {', '.join(platforms_s)} "
+                        f"alle {interval_display} → {name}."
                     )
                 else:
                     await message.reply_text(
-                        f"Ich konnte die Scraper-Parameter nicht vollständig erkennen — "
-                        f"richte den Scraper für {name} manuell ein oder beschreib es konkreter."
+                        f"Scraper-Parameter nicht vollständig erkannt — richte ihn für {name} manuell ein."
                     )
         else:
             await message.reply_text("Ich konnte keinen sinnvollen Beobachtungsauftrag erkennen. Versuch's konkreter.")
@@ -333,46 +344,20 @@ async def _handle_agent_intent(
             await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
             return
 
-        if talk_type == "config_technical":
-            current_config = dict(parse_agent_config(target_agent["config"]))
-            response_parts: list[str] = []
-            set_capability: str | None = extracted.get("set_capability")
-            if set_capability:
-                current_config["work_capability"] = set_capability
-                response_parts.append(f"work_capability auf {set_capability} gesetzt.")
-            if extracted.get("reclassify_capability") and not set_capability:
-                new_cap = await _classify_work_capability(current_config.get("instruction", ""))
-                current_config["work_capability"] = new_cap
-                response_parts.append(f"Capability neu klassifiziert: {new_cap}.")
-            if extracted.get("regenerate_pipeline"):
-                new_pipeline = await _generate_pipeline(
-                    current_config.get("instruction", ""),
-                    current_config.get("work_capability", "chat"),
-                    current_config.get("state_keys", ["last_run_summary"]),
-                )
-                current_config.pop("pipeline", None)
-                current_config.pop("pipeline_template", None)
-                current_config.pop("pipeline_after_template", None)
-                if new_pipeline:
-                    if new_pipeline.get("pipeline"):
-                        current_config["pipeline"] = new_pipeline["pipeline"]
-                    if new_pipeline.get("pipeline_template"):
-                        current_config["pipeline_template"] = new_pipeline["pipeline_template"]
-                    if new_pipeline.get("pipeline_after_template"):
-                        current_config["pipeline_after_template"] = new_pipeline["pipeline_after_template"]
-                    total = len(new_pipeline.get("pipeline", [])) + len(new_pipeline.get("pipeline_after_template", []))
-                    has_tmpl = bool(new_pipeline.get("pipeline_template"))
-                    response_parts.append(f"Pipeline generiert: {total} feste Steps, Template={'ja' if has_tmpl else 'nein'}.")
-                else:
-                    response_parts.append("Für diese Instruction wird keine Pipeline benötigt.")
-            await memory.update_agent_config(pool, target_agent["id"], current_config)
-            reply = f"{target_agent['name']}: " + " ".join(response_parts) if response_parts else f"Keine Änderungen für {target_agent['name']}."
-            await message.reply_text(reply)
+        if talk_type == "regenerate_pipeline":
+            current_config = parse_agent_config(target_agent["config"])
+            updated_config = await regenerate_pipeline_for_agent(current_config)
+            await memory.update_agent_config(pool, target_agent["id"], updated_config)
+            steps = (
+                len(updated_config.get("pipeline", []))
+                + len(updated_config.get("pipeline_after_template", []))
+            )
+            await message.reply_text(f"{target_agent['name']}: Pipeline neu generiert ({steps} Steps).")
         else:
             state = await memory.get_agent_state(pool, target_agent["id"])
             agent_memories = await memory.get_agent_memories(pool, target_agent["id"])
             response, new_config, new_name = await agent_parser.handle_agent_talk(
-                text, target_agent, state, agent_memories, pool=pool
+                text, target_agent, state, agent_memories, pool=pool,
             )
             if new_config is not None:
                 await memory.update_agent_config(pool, target_agent["id"], new_config)
@@ -458,29 +443,22 @@ async def _handle_scraper_intent(
         )
         return
     platforms: list[str] = extracted["platforms"]
-    category: str = extracted.get("category", "general")
-    query: str = extracted.get("query", "")
-    filters: dict = extracted.get("filters", {})
-    target_agent: str = extracted["target_agent"]
-    poll_interval: int = extracted.get("poll_interval_seconds", 3600)
-    created_ids: list[int] = []
     for platform in platforms:
         config_id = await memory.create_scraper_config(
             pool,
             platform=platform,
-            category=category,
-            query=query,
-            filters=filters,
-            target_agent=target_agent,
-            poll_interval_seconds=poll_interval,
+            category=extracted.get("category", "general"),
+            query=extracted.get("query", ""),
+            filters=extracted.get("filters", {}),
+            target_agent=extracted["target_agent"],
+            poll_interval_seconds=extracted.get("poll_interval_seconds", 3600),
         )
-        created_ids.append(config_id)
-        logger.info("Scraper config created: id=%d platform=%s query=%r target=%s", config_id, platform, query, target_agent)
-    interval_display = f"{poll_interval // 60} Minuten" if poll_interval < 3600 else f"{poll_interval // 3600} Stunde(n)"
-    platforms_display = ", ".join(platforms)
+        logger.info("scraper config created: id=%d platform=%s", config_id, platform)
+    poll = extracted.get("poll_interval_seconds", 3600)
+    interval_display = f"{poll // 60} Minuten" if poll < 3600 else f"{poll // 3600} Stunde(n)"
     await message.reply_text(
-        f"Scraper eingerichtet ({len(created_ids)} Konfig(s)): sucht nach '{query}' auf {platforms_display} "
-        f"alle {interval_display} und triggert {target_agent} bei neuen Funden."
+        f"Scraper eingerichtet ({len(platforms)} Konfig(s)): '{extracted.get('query')}' auf "
+        f"{', '.join(platforms)} alle {interval_display} → {extracted['target_agent']}."
     )
 
 
@@ -505,12 +483,14 @@ async def _handle_chat(
     bot_memories = await memory.get_memories(pool, "bot", chat_id) if is_group else []
     reflection_memories = await memory.get_reflection_memories(pool, chat_id, user_id)
     history = await memory.get_recent_messages(pool, chat_id)
+
     system = brain.build_system_prompt(
         user_memories, group_memories, bot_memories, reflection_memories,
         display, group_title, active_agents=active_agents,
     )
     llm_messages = brain.history_to_llm_messages(history)
     quoted = _quoted_text(message)
+
     if is_group and not triggered_by_mention:
         user_turn = f"{display}: {text}"
     else:
@@ -518,10 +498,12 @@ async def _handle_chat(
     if quoted:
         user_turn = f"[Zitiert: {quoted}]\n{user_turn}"
     llm_messages.append({"role": "user", "content": user_turn})
+
     if needs_search:
         from bot import search as _search
         if await _search.is_available():
             await message.reply_text("Moment, ich schaue kurz nach…")
+
     try:
         response = await brain.chat(
             system=system,
@@ -535,13 +517,16 @@ async def _handle_chat(
         if triggered_by_mention:
             await message.reply_text(ratelimit.rate_limit_message(e.provider))
         return
+
     await memory.save_message(pool, chat_id, user_id, "user", user_turn)
     await memory.save_message(pool, chat_id, None, "assistant", response)
     if is_group:
         await memory.touch_session_message(pool, chat_id)
     if not triggered_by_mention and is_group:
         await memory.update_spontaneous_timestamp(pool, chat_id)
+
     await _send_response(update, response, wants_voice, detected_language)
+
     snippet = _build_snippet(history, text, display)
     asyncio.create_task(extractor.extract_and_store_automatic(pool, user_id, display, snippet))
     asyncio.create_task(extractor.extract_and_store_reflection(pool, chat_id, user_id, snippet))
@@ -563,9 +548,11 @@ async def _reply(
     is_group = chat.type in ("group", "supergroup")
     group_title = chat.title if is_group else None
     group_id = chat.id if is_group else None
+
     await memory.upsert_user(pool, user.id, user.username, user.first_name, user.last_name)
     if is_group:
         await memory.upsert_group(pool, chat.id, group_title)
+
     text = transcribed_text if transcribed_text is not None else (message.text or "").strip()
     if not text:
         return
@@ -594,15 +581,11 @@ async def _reply(
     logger.debug("_reply intent=%s search=%s voice=%s", intent, needs_search, wants_voice)
 
     if intent in ("agent_system", "agent_create", "agent_trigger", "agent_talk", "agent_list"):
-        await _handle_agent_intent(
-            update, pool, text, intent, user.id, chat.id, active_agents
-        )
+        await _handle_agent_intent(update, pool, text, intent, user.id, chat.id, active_agents)
         return
 
     if intent in ("task_create", "task_stop", "task_list"):
-        await _handle_task_intent(
-            update, pool, text, intent, user.id, chat.id, active_tasks, message
-        )
+        await _handle_task_intent(update, pool, text, intent, user.id, chat.id, active_tasks, message)
         return
 
     if intent == "scraper_create":
@@ -616,7 +599,6 @@ async def _reply(
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info("handle_voice triggered")
     pool: asyncpg.Pool = context.bot_data["pool"]
     message = update.effective_message
     chat = update.effective_chat
@@ -636,9 +618,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await message.reply_text("Sprachnachricht konnte nicht transkribiert werden.")
         return
     if not transcribed.strip():
-        logger.info("STT returned empty transcript")
         return
-    logger.info("STT transcript: %s (lang: %s)", transcribed, lang)
     is_mention = (
         (bot_username and f"@{bot_username}".lower() in transcribed.lower())
         or config.BOT_NAME.lower() in transcribed.lower()
@@ -674,6 +654,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
     text = message.text.strip()
+
     pending_rename: int | None = context.user_data.get("awaiting_rename_agent_id")
     if pending_rename is not None:
         del context.user_data["awaiting_rename_agent_id"]
@@ -686,10 +667,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await memory.rename_agent(pool, pending_rename, text)
             await message.reply_text(f"{old_name} heißt jetzt {text}.")
         return
+
     agent_names_for_mention: list[str] = []
     if is_group:
         agents_for_mention = await memory.get_active_agents_for_user(pool, user.id)
         agent_names_for_mention = [a["name"].lower() for a in agents_for_mention]
+
     is_mention = (
         (bot_username and f"@{bot_username}".lower() in text.lower())
         or config.BOT_NAME.lower() in text.lower()
@@ -700,6 +683,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         and message.reply_to_message.from_user is not None
         and message.reply_to_message.from_user.id == context.bot.id
     )
+
     if is_group:
         if is_mention or is_reply_to_bot:
             if ratelimit.is_any_limited():
@@ -829,11 +813,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     except ValueError:
         await query.answer()
         return
+
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
     agent = next((a for a in active_agents if a["id"] == agent_id), None)
     if not agent:
         await query.answer("Dieser Agent existiert nicht mehr.")
         return
+
     if action == "stop":
         await memory.deactivate_agent(pool, agent_id)
         await query.answer("Gestoppt.")
@@ -844,7 +830,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         agent_memories = await memory.get_agent_memories(pool, agent_id)
         status_text, _, _ = await agent_parser.handle_agent_talk(
             "Was ist dein aktueller Status und was hast du bisher beobachtet?",
-            agent, state, agent_memories, pool=pool
+            agent, state, agent_memories, pool=pool,
         )
         await query.message.reply_text(
             f"{agent['name']} — Status:\n\n{status_text}",
@@ -873,8 +859,11 @@ async def handle_command_agents(update: Update, context: ContextTypes.DEFAULT_TY
         return
     for agent in active_agents:
         instruction = parse_agent_config(agent["config"]).get("instruction", "")[:80]
-        line = f"{agent['name']} — {instruction}… ({agent['schedule']})"
-        await update.effective_message.reply_text(line, reply_markup=_agent_keyboard(agent["id"]))
+        schedule_display = agent["schedule"] or "nur auf Trigger"
+        await update.effective_message.reply_text(
+            f"{agent['name']} — {instruction}… ({schedule_display})",
+            reply_markup=_agent_keyboard(agent["id"]),
+        )
 
 
 async def handle_command_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

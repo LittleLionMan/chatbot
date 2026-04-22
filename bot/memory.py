@@ -252,9 +252,7 @@ async def get_due_tasks(pool: asyncpg.Pool) -> list[dict]:
 
 async def update_task_run(pool: asyncpg.Pool, task_id: int, next_run_at: datetime) -> None:
     await pool.execute(
-        """
-        UPDATE tasks SET last_run_at = NOW(), next_run_at = $1 WHERE id = $2
-        """,
+        "UPDATE tasks SET last_run_at = NOW(), next_run_at = $1 WHERE id = $2",
         next_run_at, task_id,
     )
 
@@ -284,8 +282,8 @@ async def create_agent(
     target_chat_id: int,
     name: str,
     config_json: dict,
-    schedule: str,
-    next_run_at: datetime,
+    schedule: str | None,
+    next_run_at: datetime | None,
 ) -> int:
     row = await pool.fetchrow(
         """
@@ -316,7 +314,7 @@ async def get_due_agents(pool: asyncpg.Pool) -> list[dict]:
         """
         SELECT id, user_id, target_chat_id, name, config, schedule
         FROM agents
-        WHERE is_active = TRUE AND next_run_at <= NOW()
+        WHERE is_active = TRUE AND next_run_at IS NOT NULL AND next_run_at <= NOW()
         ORDER BY next_run_at ASC
         """,
     )
@@ -508,7 +506,7 @@ async def get_pending_triggers(pool: asyncpg.Pool) -> list[dict]:
         """
         SELECT id, source_agent_id, target_agent_name, payload
         FROM agent_trigger_queue
-        WHERE processed_at IS NULL
+        WHERE processed_at IS NULL AND scheduled_for <= NOW()
         ORDER BY created_at ASC
         """,
     )

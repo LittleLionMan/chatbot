@@ -70,19 +70,12 @@ async def serve_dashboard() -> HTMLResponse:
     return HTMLResponse(html)
 
 
-class AgentConfigPatch(BaseModel):
-    instruction: str | None = None
-    schedule: str | None = None
+class AgentPatch(BaseModel):
     name: str | None = None
-    work_capability: str | None = None
+    schedule: str | None = None
+    instruction: str | None = None
     pipeline: list | None = None
-    pipeline_template: dict | None = None
     pipeline_after_template: list | None = None
-    pipeline_step: dict | None = None
-    pipeline_step_index: int | None = None
-    pipeline_step_delete: int | None = None
-    pipeline_step_add: dict | None = None
-    pipeline_step_add_index: int | None = None
 
 
 class MemoryBody(BaseModel):
@@ -116,10 +109,31 @@ async def get_capabilities() -> list[str]:
         "SELECT DISTINCT unnest(capabilities) as cap FROM model_registry ORDER BY cap"
     )
     caps = [r["cap"] for r in rows]
-    if "finance" not in caps:
-        caps.append("finance")
-        caps.sort()
     return caps
+
+
+@app.get("/api/step-types")
+async def get_step_types() -> list[str]:
+    return [
+        "router_match",
+        "router_llm",
+        "llm_extract",
+        "llm_decide",
+        "llm_summarize",
+        "web_search",
+        "finance",
+        "state_read",
+        "state_write",
+        "state_read_external",
+        "state_write_external",
+        "data_read",
+        "data_write",
+        "data_read_external",
+        "data_write_external",
+        "transform",
+        "trigger_agent",
+        "notify_user",
+    ]
 
 
 @app.get("/api/agents")
@@ -143,11 +157,8 @@ async def get_agents() -> list[dict]:
             "schedule": r["schedule"],
             "instruction": config.get("instruction", ""),
             "type": config.get("type", ""),
-            "work_capability": config.get("work_capability", "chat"),
             "pipeline": config.get("pipeline", []),
-            "pipeline_template": config.get("pipeline_template"),
             "pipeline_after_template": config.get("pipeline_after_template", []),
-            "state_keys": config.get("state_keys", []),
             "data_reads": config.get("data_reads", []),
             "last_run_at": r["last_run_at"].isoformat() if r["last_run_at"] else None,
             "next_run_at": r["next_run_at"].isoformat() if r["next_run_at"] else None,
@@ -158,7 +169,7 @@ async def get_agents() -> list[dict]:
 
 
 @app.patch("/api/agents/{agent_id}")
-async def patch_agent(agent_id: int, body: AgentConfigPatch) -> dict:
+async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
     row = await pool().fetchrow(
         "SELECT name, config, schedule FROM agents WHERE id = $1", agent_id
     )
@@ -169,32 +180,10 @@ async def patch_agent(agent_id: int, body: AgentConfigPatch) -> dict:
     new_schedule = body.schedule if body.schedule is not None else row["schedule"]
     if body.instruction is not None:
         config["instruction"] = body.instruction
-    if body.work_capability is not None:
-        config["work_capability"] = body.work_capability
     if body.pipeline is not None:
         config["pipeline"] = body.pipeline
-    if body.pipeline_template is not None:
-        config["pipeline_template"] = body.pipeline_template
     if body.pipeline_after_template is not None:
         config["pipeline_after_template"] = body.pipeline_after_template
-    if body.pipeline_step is not None and body.pipeline_step_index is not None:
-        pipeline: list = config.get("pipeline", [])
-        if 0 <= body.pipeline_step_index < len(pipeline):
-            pipeline[body.pipeline_step_index] = body.pipeline_step
-            config["pipeline"] = pipeline
-    if body.pipeline_step_delete is not None:
-        pipeline = config.get("pipeline", [])
-        if 0 <= body.pipeline_step_delete < len(pipeline):
-            pipeline.pop(body.pipeline_step_delete)
-            config["pipeline"] = pipeline
-    if body.pipeline_step_add is not None:
-        pipeline = config.get("pipeline", [])
-        idx = body.pipeline_step_add_index
-        if idx is None or idx >= len(pipeline):
-            pipeline.append(body.pipeline_step_add)
-        else:
-            pipeline.insert(idx, body.pipeline_step_add)
-        config["pipeline"] = pipeline
     await pool().execute(
         "UPDATE agents SET name = $1, schedule = $2, config = $3 WHERE id = $4",
         new_name, new_schedule, json.dumps(config), agent_id,

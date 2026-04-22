@@ -3,10 +3,12 @@ import json
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from croniter import croniter
 import asyncpg
+
 from bot import brain, memory
-from bot.agent_parser import _classify_work_capability, _generate_pipeline
+from bot.agent_parser import _decompose_task, _generate_pipeline
 from bot.models import CAPABILITY_DEEP_REASONING
 from bot.utils import clean_llm_json
 
@@ -19,37 +21,26 @@ Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 Felder:
 - "agents": Liste von Agent-Konfigurationen. Jeder Agent hat:
   - "name": Thematisch passender menschlicher Name
-  - "instruction": Vollständige eigenständige Anweisung in natürlicher Sprache. So formulieren dass der Agent sie ohne weiteren Kontext ausführen kann.
-  - "state_keys": Keys die zwischen Läufen im State bleiben. Immer "last_run_summary". Nur kompakte Daten — Listen, Flags, kurze Zusammenfassungen. Keine langen Texte.
-  - "data_reads": Lesevorgänge vor jedem Lauf. Zwei Typen:
-    - {"type": "state", "agent_name": "..."} — liest den State eines anderen Agents
-    - {"type": "namespace", "namespace": "...", "agent_name": "...", "key": "..."} — liest DB-Namespace eines anderen Agents, key optional, Template-Variablen möglich
-    Leer wenn keine fremden Daten nötig.
-  - "type": Schlagwort: monitoring, research, finance, news, coding, market
+  - "instruction": Vollständige eigenständige Anweisung in natürlicher Sprache.
   - "schedule": Cron-Expression (5 Felder)
   - "target": "same" oder "dm"
-- "description": Menschenlesbare Zusammenfassung des geplanten Systems. Erkläre jeden Agent mit Name, Zeitplan und Aufgabe. Benenne explizit welcher Agent wessen State liest und welche Trigger-Beziehungen bestehen. Formuliere so dass Missverständnisse sofort auffallen. Schließe mit "Soll ich das so anlegen?"
+- "description": Menschenlesbare Zusammenfassung des geplanten Systems. Erkläre jeden Agent mit Name, Zeitplan und Aufgabe. Benenne explizit welcher Agent wessen Daten liest und welche Trigger-Beziehungen bestehen. Schließe mit "Soll ich das so anlegen?"
 
 Regeln für gute Architektur:
-- Der erste Agent (Sammler/Screener) hat keine data_reads — er ist die primäre Datenquelle
-- Folge-Agents lesen den State des Sammlers via type:state
+- Sammler-Agents haben keine Abhängigkeiten zu anderen Agents
+- Analyse-Agents lesen Daten von Sammler-Agents
 - Lange Texte (Analysen, Berichte) gehören in einen Namespace, nicht in den State
-- Trigger-Beziehungen: Ein Agent kann andere Agents via trigger_agent Tool-Call in seinem Output-Step anstoßen — beschreibe diese Beziehungen in der instruction des triggernden Agents
-- Schedules staffeln: Sammler früh, Analyst danach, Monitor abends
+- Schedules staffeln: Sammler früh, Analyst danach
 - Namen thematisch passend: Finance → Gordon/Warren, News → Wolf/Anna, Monitoring → Argus/HAL
-- Jede Pipeline endet mit einem is_output-Step der direkt JSON ausgibt — das wird automatisch generiert
 
 Externe Monitor-Services:
-Wenn ein Agent kontinuierlich auf neue Ereignisse reagieren soll (News, Preisänderungen, API-Updates), kann ein Monitor-Service helfen der den Agent automatisch triggert statt dass er selbst pollt.
-Verfügbare Monitor-Typen:
-- "rss": Überwacht RSS/Google-News-Feeds für Items aus einem Agent-State. Triggert den Ziel-Agent wenn neue Artikel erscheinen. Ideal für: News-Monitoring, Marktbeobachtung, Themen-Tracking.
-Wenn ein Agent dieses Muster braucht, füge in der description einen Hinweis ein: "Hinweis: Für [Agent-Name] wird ein RSS-Monitor-Service empfohlen. Bob erklärt nach dem Anlegen wie er eingerichtet wird."
-Erkennungsmerkmale für Monitor-Bedarf: "überwache kontinuierlich", "reagiere auf News", "benachrichtige sofort wenn", "halte mich auf dem neuesten Stand zu".
-
-Beispiel-Input: "Beobachte GPU-Preise täglich, analysiere interessante Funde und halte mich über Marktveränderungen auf dem Laufenden"
+Wenn ein Agent kontinuierlich auf neue Ereignisse reagieren soll, kann ein Monitor-Service helfen.
+Verfügbare Monitor-Typen: "rss" für News/Artikel-Tracking.
+Wenn relevant, füge in der description einen Hinweis ein:
+"Hinweis: Für [Agent-Name] wird ein RSS-Monitor-Service empfohlen."
 
 Beispiel-Output:
-{"agents": [{"name": "Linus", "instruction": "Suche täglich nach Grafikkarten-Angeboten auf deutschen und internationalen Secondhand-Plattformen. Pflege eine Liste aller bekannten Angebote mit Preis, Zustand und Link in deinem State.", "state_keys": ["last_run_summary", "known_listings", "price_baseline"], "data_reads": [], "type": "research", "schedule": "0 8 * * *", "target": "same"}, {"name": "Gordon", "instruction": "Lies Linus' Angebotsliste. Analysiere ob neue Angebote einen echten Deal darstellen — Preisvergleich, Zustand, Verkäufer-Reputation. Melde nur echte Schnäppchen.", "state_keys": ["last_run_summary", "analyzed_listings"], "data_reads": [{"type": "state", "agent_name": "Linus"}], "type": "market", "schedule": "0 9 * * *", "target": "same"}], "description": "Ich würde das so aufsetzen:\\n\\n**Linus** (täglich 8 Uhr) — sucht GPU-Angebote und pflegt eine Liste in seinem State.\\n\\n**Gordon** (täglich 9 Uhr) — liest Linus' State und bewertet neue Angebote.\\n\\nAbhängigkeiten: Gordon liest Linus.\\n\\nSoll ich das so anlegen?"}"""
+{"agents": [{"name": "Linus", "instruction": "Suche täglich nach GPU-Angeboten...", "schedule": "0 8 * * *", "target": "same"}, {"name": "Gordon", "instruction": "Analysiere Linus' gefundene Angebote...", "schedule": "0 9 * * *", "target": "same"}], "description": "Linus sammelt täglich um 8 Uhr GPU-Angebote. Gordon analysiert diese um 9 Uhr...\\n\\nSoll ich das so anlegen?"}"""
 
 
 async def parse_agent_system(
@@ -66,7 +57,7 @@ async def parse_agent_system(
             caller="agent_system_parser",
             pool=pool,
         )
-        logger.debug("System parser raw output: %r", raw[:200])
+        logger.debug("system parser raw: %r", raw[:200])
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict):
             return None
@@ -89,38 +80,39 @@ async def parse_agent_system(
         for agent_raw in agents_raw:
             schedule = agent_raw.get("schedule")
             if not schedule or not croniter.is_valid(schedule):
-                logger.warning("System parser: invalid schedule for agent %s: %s", agent_raw.get("name"), schedule)
+                logger.warning("system parser: invalid schedule for %s: %s", agent_raw.get("name"), schedule)
                 return None
 
             instruction = agent_raw.get("instruction", "").strip()
             if not instruction:
                 return None
 
-            work_capability = await _classify_work_capability(instruction)
-            logger.info("Agent '%s' work_capability classified as: %s", agent_raw.get("name"), work_capability)
+            decomposition = await _decompose_task(instruction)
+            if decomposition is None:
+                logger.warning("system parser: decomposition failed for %s", agent_raw.get("name"))
+                return None
 
-            state_keys: list[str] = agent_raw.get("state_keys", ["last_run_summary"])
-            pipeline_result = await _generate_pipeline(instruction, work_capability, state_keys)
-            if pipeline_result:
-                has_tmpl = bool(pipeline_result.get("pipeline_template"))
-                total = len(pipeline_result.get("pipeline", [])) + len(pipeline_result.get("pipeline_after_template", []))
-                logger.info("Agent '%s' pipeline: %d fixed steps, template=%s", agent_raw.get("name"), total, has_tmpl)
+            pipeline_result = await _generate_pipeline(instruction, decomposition)
+            agent_type: str = decomposition.get("type", "default")
+
+            logger.info(
+                "system parser: agent '%s' type=%s pipeline=%s",
+                agent_raw.get("name"),
+                agent_type,
+                "yes" if pipeline_result else "no",
+            )
 
             next_run_local = croniter(schedule, now).get_next(datetime)
             next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
 
             agent_config: dict = {
                 "instruction": instruction,
-                "state_keys": state_keys,
-                "data_reads": agent_raw.get("data_reads", []),
-                "type": agent_raw.get("type", "default"),
-                "work_capability": work_capability,
+                "type": agent_type,
+                "data_reads": [],
             }
             if pipeline_result:
                 if pipeline_result.get("pipeline"):
                     agent_config["pipeline"] = pipeline_result["pipeline"]
-                if pipeline_result.get("pipeline_template"):
-                    agent_config["pipeline_template"] = pipeline_result["pipeline_template"]
                 if pipeline_result.get("pipeline_after_template"):
                     agent_config["pipeline_after_template"] = pipeline_result["pipeline_after_template"]
 
@@ -138,5 +130,5 @@ async def parse_agent_system(
         }
 
     except Exception as e:
-        logger.warning("Agent system parsing failed: %s", e)
+        logger.warning("agent system parsing failed: %s", e)
         return None

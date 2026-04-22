@@ -71,10 +71,10 @@ CREATE TABLE IF NOT EXISTS agents (
     target_chat_id BIGINT NOT NULL,
     name TEXT NOT NULL,
     config JSONB NOT NULL,
-    schedule TEXT NOT NULL,
+    schedule TEXT,
     is_active BOOLEAN DEFAULT TRUE,
     last_run_at TIMESTAMPTZ,
-    next_run_at TIMESTAMPTZ NOT NULL,
+    next_run_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
