@@ -9,7 +9,7 @@ import asyncpg
 
 from bot import brain, memory
 from bot.agent_parser import _decompose_task, _generate_pipeline, _pick_name_for_topic
-from bot.models import CAPABILITY_DEEP_REASONING
+from bot.models import CAPABILITY_DEEP_REASONING, CAPABILITY_REASONING
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -308,7 +308,7 @@ async def _build_instruction(
         instruction = await brain.chat(
             system=_INSTRUCTION_BUILDER_SYSTEM,
             messages=[{"role": "user", "content": content}],
-            capability=CAPABILITY_DEEP_REASONING,
+            capability=CAPABILITY_REASONING,
             caller=f"instruction_builder:{agent_name}",
             pool=pool,
         )

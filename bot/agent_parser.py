@@ -119,7 +119,7 @@ async def _decompose_task(instruction: str) -> dict | None:
         raw = await brain.chat(
             system=_DECOMPOSE_SYSTEM,
             messages=[{"role": "user", "content": instruction}],
-            capability=CAPABILITY_DEEP_REASONING,
+            capability=CAPABILITY_REASONING,
             caller="task_decomposition",
         )
         logger.debug("decompose raw: %r", raw[:300])

@@ -168,15 +168,13 @@ async def _handle_pending_plan(
     message = update.effective_message
     accumulated = pending["accumulated_context"]
     rounds = pending.get("clarification_rounds", 0)
-    plan = pending.get("plan", {})
+    current_plan = pending.get("plan", {})
 
     accumulated += f"\n\nUser: {text}"
-    pending["accumulated_context"] = accumulated
 
     new_plan = await agent_planner.plan(accumulated, pool, rounds)
 
-    if new_plan["status"] == "confirmed" or plan.get("status") == "ready" and new_plan["status"] == "confirmed":
-        current_plan = pending.get("plan", {})
+    if new_plan["status"] == "confirmed":
         if current_plan.get("status") != "ready":
             await message.reply_text("Ich habe noch keinen fertigen Plan — beschreib mir erst was ich bauen soll.")
             return True
@@ -194,25 +192,50 @@ async def _handle_pending_plan(
             await message.reply_text("Beim Anlegen ist etwas schiefgelaufen. Versuch's nochmal.")
             return True
 
-        for agent_cfg in prepared:
-            await memory.create_agent(
-                pool,
-                user_id=user_id,
-                target_chat_id=agent_cfg["target_chat_id"],
-                name=agent_cfg["name"],
-                config_json=agent_cfg["config"],
-                schedule=agent_cfg["schedule"],
-                next_run_at=agent_cfg["next_run_at"],
-            )
+        expected = len(current_plan.get("agents", []))
+        created = 0
+        failed: list[str] = []
 
-        names = ", ".join(a["name"] for a in prepared)
-        await message.reply_text(f"Angelegt: {names}.")
+        for agent_cfg in prepared:
+            try:
+                await memory.create_agent(
+                    pool,
+                    user_id=user_id,
+                    target_chat_id=agent_cfg["target_chat_id"],
+                    name=agent_cfg["name"],
+                    config_json=agent_cfg["config"],
+                    schedule=agent_cfg["schedule"],
+                    next_run_at=agent_cfg["next_run_at"],
+                )
+                created += 1
+                logger.info("created agent: %s", agent_cfg["name"])
+            except Exception as e:
+                logger.error("failed to create agent %s: %s", agent_cfg["name"], e)
+                failed.append(agent_cfg["name"])
+
+        names = ", ".join(a["name"] for a in prepared if a["name"] not in failed)
+        if failed:
+            await message.reply_text(
+                f"Angelegt: {names}.\n"
+                f"Fehlgeschlagen: {', '.join(failed)} — schau in die Logs."
+            )
+        else:
+            if created < expected:
+                await message.reply_text(
+                    f"Angelegt: {names}. "
+                    f"Hinweis: {expected - created} Agent(en) aus dem Plan konnten nicht erstellt werden."
+                )
+            else:
+                await message.reply_text(f"Angelegt: {names}.")
         return True
 
     if new_plan["status"] == "needs_clarification":
         pending["clarification_rounds"] = rounds + 1
         pending["plan"] = new_plan
-        reply = await message.reply_text(new_plan.get("question", "Kannst du das konkretisieren?"))
+        pending["accumulated_context"] = accumulated
+        question = new_plan.get("question", "Kannst du das konkretisieren?")
+        pending["accumulated_context"] += f"\n\nBob: {question}"
+        reply = await message.reply_text(question)
         pending["bot_message_id"] = reply.message_id
         return True
 
@@ -220,9 +243,9 @@ async def _handle_pending_plan(
         pending["plan"] = new_plan
         pending["clarification_rounds"] = rounds
         plan_text = agent_planner.format_plan_message(new_plan)
-        reply = await message.reply_text(
-            plan_text + "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
-        )
+        full_message = plan_text + "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
+        pending["accumulated_context"] = accumulated + f"\n\nBob: {plan_text}"
+        reply = await message.reply_text(full_message)
         pending["bot_message_id"] = reply.message_id
         return True
 
@@ -282,21 +305,27 @@ async def _handle_agent_intent(
         return
 
     if intent == "agent_system" or intent == "agent_create":
+        initial_context = f"User: {text}"
         initial_plan = await agent_planner.plan(
-            accumulated_context=f"User: {text}",
+            accumulated_context=initial_context,
             pool=pool,
             clarification_rounds=0,
         )
-        _pending_plans[user_id] = {
-            "plan": initial_plan,
-            "accumulated_context": f"User: {text}",
-            "clarification_rounds": 0 if initial_plan["status"] == "needs_clarification" else 0,
-            "bot_message_id": None,
-        }
         plan_text = agent_planner.format_plan_message(initial_plan)
         if initial_plan["status"] == "ready":
-            plan_text += "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
-        reply = await message.reply_text(plan_text)
+            accumulated_with_bob = initial_context + f"\n\nBob: {plan_text}"
+            full_message = plan_text + "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
+        else:
+            accumulated_with_bob = initial_context + f"\n\nBob: {plan_text}"
+            full_message = plan_text
+
+        _pending_plans[user_id] = {
+            "plan": initial_plan,
+            "accumulated_context": accumulated_with_bob,
+            "clarification_rounds": 1 if initial_plan["status"] == "needs_clarification" else 0,
+            "bot_message_id": None,
+        }
+        reply = await message.reply_text(full_message)
         _pending_plans[user_id]["bot_message_id"] = reply.message_id
         return
 
