@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 from bot import (
     brain, memory, decider, config, ratelimit, extractor,
     greeter, voice, task_parser, agent_parser, agent_runner,
-    intent_classifier, agent_system_parser,
+    intent_classifier, agent_system_parser, agent_planner,
 )
 from bot.brain import ProviderRateLimitError, ProviderAuthError
 from bot.models import CAPABILITY_CHAT, CAPABILITY_MULTIMODAL
@@ -17,7 +17,15 @@ from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
 
-_pending_agent_systems: dict[int, dict] = {}
+from typing import TypedDict
+
+class _PendingPlan(TypedDict):
+    plan: dict
+    accumulated_context: str
+    clarification_rounds: int
+    bot_message_id: int | None
+
+_pending_plans: dict[int, _PendingPlan] = {}
 
 
 def _display_name(user) -> str:
@@ -141,19 +149,52 @@ async def _handle_file_content(
     await message.reply_text(response)
 
 
-async def _handle_pending_confirmation(
+async def _handle_pending_plan(
     update: Update,
     pool: asyncpg.Pool,
     user_id: int,
+    chat_id: int,
     text: str,
+    reply_to_message_id: int | None,
 ) -> bool:
-    pending_plan = _pending_agent_systems.get(user_id)
-    if not pending_plan:
+    pending = _pending_plans.get(user_id)
+    if not pending:
         return False
+
+    bot_message_id: int | None = pending.get("bot_message_id")
+    if bot_message_id is not None and reply_to_message_id != bot_message_id:
+        return False
+
     message = update.effective_message
-    normalized = text.strip().lower()
-    if normalized in ("ja", "yes", "ok", "anlegen", "mach es", "los"):
-        for agent_cfg in pending_plan["agents"]:
+    accumulated = pending["accumulated_context"]
+    rounds = pending.get("clarification_rounds", 0)
+    plan = pending.get("plan", {})
+
+    accumulated += f"\n\nUser: {text}"
+    pending["accumulated_context"] = accumulated
+
+    new_plan = await agent_planner.plan(accumulated, pool, rounds)
+
+    if new_plan["status"] == "confirmed" or plan.get("status") == "ready" and new_plan["status"] == "confirmed":
+        current_plan = pending.get("plan", {})
+        if current_plan.get("status") != "ready":
+            await message.reply_text("Ich habe noch keinen fertigen Plan — beschreib mir erst was ich bauen soll.")
+            return True
+
+        prepared = await agent_planner.finalize(
+            plan_result=current_plan,
+            accumulated_context=accumulated,
+            user_id=user_id,
+            source_chat_id=chat_id,
+            pool=pool,
+        )
+        _pending_plans.pop(user_id, None)
+
+        if not prepared:
+            await message.reply_text("Beim Anlegen ist etwas schiefgelaufen. Versuch's nochmal.")
+            return True
+
+        for agent_cfg in prepared:
             await memory.create_agent(
                 pool,
                 user_id=user_id,
@@ -163,15 +204,29 @@ async def _handle_pending_confirmation(
                 schedule=agent_cfg["schedule"],
                 next_run_at=agent_cfg["next_run_at"],
             )
-        names = ", ".join(a["name"] for a in pending_plan["agents"])
-        _pending_agent_systems.pop(user_id, None)
+
+        names = ", ".join(a["name"] for a in prepared)
         await message.reply_text(f"Angelegt: {names}.")
         return True
-    if normalized in ("nein", "no", "abbruch", "cancel", "stopp"):
-        _pending_agent_systems.pop(user_id, None)
-        await message.reply_text("Abgebrochen.")
+
+    if new_plan["status"] == "needs_clarification":
+        pending["clarification_rounds"] = rounds + 1
+        pending["plan"] = new_plan
+        reply = await message.reply_text(new_plan.get("question", "Kannst du das konkretisieren?"))
+        pending["bot_message_id"] = reply.message_id
         return True
-    return False
+
+    if new_plan["status"] == "ready":
+        pending["plan"] = new_plan
+        pending["clarification_rounds"] = rounds
+        plan_text = agent_planner.format_plan_message(new_plan)
+        reply = await message.reply_text(
+            plan_text + "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
+        )
+        pending["bot_message_id"] = reply.message_id
+        return True
+
+    return True
 
 
 async def _handle_agent_intent(
@@ -226,87 +281,23 @@ async def _handle_agent_intent(
         )
         return
 
-    if intent == "agent_system":
-        parsed_system = await agent_system_parser.parse_agent_system(text, user_id, chat_id, pool)
-        if parsed_system:
-            _pending_agent_systems[user_id] = parsed_system
-            await message.reply_text(parsed_system["description"])
-        else:
-            await message.reply_text("Ich konnte kein sinnvolles Agent-System erkennen. Versuch's konkreter.")
-        return
-
-    if intent == "agent_create":
-        parsed_agent = await agent_parser.parse_agent_creation(text, user_id, chat_id, pool)
-        if parsed_agent:
-            suggested = parsed_agent.get("suggested_name")
-            name = suggested if suggested else agent_parser._pick_name_for_topic(
-                parsed_agent["config"].get("type", "default")
-            )
-            agent_id = await memory.create_agent(
-                pool,
-                user_id=user_id,
-                target_chat_id=parsed_agent["target_chat_id"],
-                name=name,
-                config_json=parsed_agent["config"],
-                schedule=parsed_agent["schedule"],
-                next_run_at=parsed_agent["next_run_at"],
-            )
-            instruction_preview = parsed_agent["config"].get("instruction", "")[:80]
-            if parsed_agent.get("next_run_display"):
-                timing = f"ab {parsed_agent['next_run_display'].strftime('%d.%m.%Y %H:%M')}"
-            else:
-                timing = "wartet auf Trigger"
-            await message.reply_text(
-                f"Agent angelegt: {name} — {instruction_preview}… — {timing}.\n"
-                f"Soll er einen anderen Namen bekommen?",
-                reply_markup=_agent_keyboard(agent_id),
-            )
-            if parsed_agent.get("wants_monitor"):
-                monitor_params = await intent_classifier.extract_monitor_create_params(text, pool)
-                if monitor_params and monitor_params.get("target_agent"):
-                    monitor_id = await memory.create_monitor_config(
-                        pool,
-                        monitor_type=monitor_params.get("monitor_type", "rss"),
-                        name=monitor_params.get("name", f"Monitor für {name}"),
-                        source_agent=monitor_params.get("source_agent", name),
-                        source_state_key=monitor_params.get("source_state_key", ""),
-                        source_format=monitor_params.get("source_format", "comma_list"),
-                        target_agent=monitor_params["target_agent"],
-                        feed_templates=[
-                            "https://news.google.com/rss/search?q={query}+stock&hl=en&gl=US&ceid=US:en",
-                            "https://news.google.com/rss/search?q={query}&hl=de&gl=DE&ceid=DE:de",
-                        ],
-                        poll_interval_seconds=monitor_params.get("poll_interval_seconds", 900),
-                    )
-                    await message.reply_text(
-                        f"RSS-Monitor eingerichtet (ID: {monitor_id}): triggert {name} bei neuen Artikeln."
-                    )
-            if parsed_agent.get("wants_scraper"):
-                scraper_params = await intent_classifier.extract_scraper_create_params(text, pool)
-                platforms_s: list[str] = scraper_params.get("platforms", [])
-                query_s: str = scraper_params.get("query", "")
-                if platforms_s and query_s:
-                    for platform in platforms_s:
-                        await memory.create_scraper_config(
-                            pool,
-                            platform=platform,
-                            category=scraper_params.get("category", parsed_agent["config"].get("type", "general")),
-                            query=query_s,
-                            target_agent=name,
-                            filters=scraper_params.get("filters", {}),
-                            poll_interval_seconds=scraper_params.get("poll_interval_seconds", 3600),
-                        )
-                    interval_display = f"{scraper_params.get('poll_interval_seconds', 3600) // 60} Minuten"
-                    await message.reply_text(
-                        f"Scraper eingerichtet: '{query_s}' auf {', '.join(platforms_s)} "
-                        f"alle {interval_display} → {name}."
-                    )
-                else:
-                    await message.reply_text(
-                        f"Scraper-Parameter nicht vollständig erkannt — richte ihn für {name} manuell ein."
-                    )
-        else:
-            await message.reply_text("Ich konnte keinen sinnvollen Beobachtungsauftrag erkennen. Versuch's konkreter.")
+    if intent == "agent_system" or intent == "agent_create":
+        initial_plan = await agent_planner.plan(
+            accumulated_context=f"User: {text}",
+            pool=pool,
+            clarification_rounds=0,
+        )
+        _pending_plans[user_id] = {
+            "plan": initial_plan,
+            "accumulated_context": f"User: {text}",
+            "clarification_rounds": 0 if initial_plan["status"] == "needs_clarification" else 0,
+            "bot_message_id": None,
+        }
+        plan_text = agent_planner.format_plan_message(initial_plan)
+        if initial_plan["status"] == "ready":
+            plan_text += "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
+        reply = await message.reply_text(plan_text)
+        _pending_plans[user_id]["bot_message_id"] = reply.message_id
         return
 
     if not active_agents:
@@ -563,7 +554,11 @@ async def _reply(
         await message.reply_text(explicit_reply)
         return
 
-    if await _handle_pending_confirmation(update, pool, user.id, text):
+    reply_to_id: int | None = None
+    if message.reply_to_message is not None:
+        reply_to_id = message.reply_to_message.message_id
+
+    if await _handle_pending_plan(update, pool, user.id, chat.id, text, reply_to_id):
         return
 
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
