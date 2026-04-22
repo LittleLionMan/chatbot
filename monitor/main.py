@@ -41,21 +41,25 @@ def _parse_since_date(since: str) -> datetime | None:
         return None
 
 
+def _matches_keywords(title: str, text: str, keywords: list[str]) -> bool:
+    if not keywords:
+        return True
+    combined = (title + " " + text).lower()
+    return any(kw.lower() in combined for kw in keywords)
+
+
 async def _fetch_article_text(client: httpx.AsyncClient, url: str) -> str:
     import re
-
     try:
         resp = await client.get(url, timeout=ARTICLE_FETCH_TIMEOUT, follow_redirects=True)
         resp.raise_for_status()
         html = resp.text
-
         html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(r"<nav[^>]*>.*?</nav>", "", html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(r"<header[^>]*>.*?</header>", "", html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(r"<footer[^>]*>.*?</footer>", "", html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(r"<aside[^>]*>.*?</aside>", "", html, flags=re.DOTALL | re.IGNORECASE)
-
         for pattern in [
             r"<article[^>]*>(.*?)</article>",
             r'<main[^>]*>(.*?)</main>',
@@ -66,11 +70,9 @@ async def _fetch_article_text(client: httpx.AsyncClient, url: str) -> str:
             if match:
                 html = match.group(1)
                 break
-
         text = re.sub(r"<[^>]+>", " ", html)
         text = re.sub(r"&[a-zA-Z]+;", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
-
         return text[:ARTICLE_MAX_CHARS]
     except Exception as e:
         logger.debug("Article fetch failed for %s: %s", url[:80], e)
@@ -141,7 +143,7 @@ async def _enqueue_trigger(pool: asyncpg.Pool, target_agent: str, payload: dict)
         """,
         target_agent, json.dumps(payload),
     )
-    logger.info("Trigger → %s: [%s] %s", target_agent, payload.get("key"), payload.get("reason", "")[:60])
+    logger.info("Trigger → %s: [%s] %s", target_agent, payload.get("key", ""), payload.get("reason", "")[:60])
 
 
 async def _fetch_feed(client: httpx.AsyncClient, url: str) -> list[dict]:
@@ -164,66 +166,117 @@ async def _fetch_feed(client: httpx.AsyncClient, url: str) -> list[dict]:
         return []
 
 
-async def _run_rss_config(pool: asyncpg.Pool, config: dict) -> None:
+async def _process_feed_items(
+    pool: asyncpg.Pool,
+    client: httpx.AsyncClient,
+    config: dict,
+    feed_url: str,
+    item_key: str,
+    item_name: str,
+    item_date: str,
+    seen: set[str],
+    keywords: list[str],
+) -> None:
     config_id: int = config["id"]
     target_agent: str = config["target_agent"]
-    feed_templates_raw = config["feed_templates"]
-    feed_templates: list[str] = list(feed_templates_raw) if not isinstance(feed_templates_raw, str) else [feed_templates_raw]
     extra_raw = config.get("extra_config") or {}
     extra: dict = extra_raw if isinstance(extra_raw, dict) else {}
 
-    watchlist = await _resolve_watchlist(pool, config)
-    if not watchlist:
-        logger.info("Config %d: empty watchlist", config_id)
-        return
+    since_dt = _parse_since_date(item_date)
+    articles = await _fetch_feed(client, feed_url)
+
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+
+        pub_dt = _parse_pub_date(article["published"])
+        if since_dt and pub_dt and pub_dt < since_dt:
+            fp = _fingerprint(article["url"])
+            seen.add(fp)
+            await _mark_seen(pool, config_id, fp)
+            continue
+
+        fp = _fingerprint(article["url"])
+        if fp in seen:
+            continue
+
+        if not _matches_keywords(article["title"], "", keywords):
+            seen.add(fp)
+            await _mark_seen(pool, config_id, fp)
+            logger.debug("Skipping non-matching article: %s", article["title"][:60])
+            continue
+
+        seen.add(fp)
+        await _mark_seen(pool, config_id, fp)
+
+        article_text = await _fetch_article_text(client, article["url"])
+
+        if article_text and not _matches_keywords(article["title"], article_text, keywords):
+            logger.debug("Skipping after full-text check: %s", article["title"][:60])
+            continue
+
+        payload: dict = {
+            "key": item_key,
+            "name": item_name,
+            "reason": f"{article['title']} ({article['source']})",
+            "article_text": article_text,
+            "article_url": article["url"],
+            "published": article["published"],
+            "since_date": item_date,
+        }
+        payload.update(extra.get("payload_extra", {}))
+        await _enqueue_trigger(pool, target_agent, payload)
+
+
+async def _run_rss_config(pool: asyncpg.Pool, config: dict) -> None:
+    config_id: int = config["id"]
+    source: str = config.get("source", "agent")
+    feed_templates_raw = config["feed_templates"]
+    feed_templates: list[str] = list(feed_templates_raw) if not isinstance(feed_templates_raw, str) else [feed_templates_raw]
+    keywords: list[str] = list(config.get("keywords") or [])
 
     seen = await _get_seen(pool, config_id)
-    logger.info("Config %d (%s → %s): %d items, %d seen", config_id, config["source_agent"], target_agent, len(watchlist), len(seen))
 
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0 (compatible; BobMonitor/1.0)"}) as client:
-        for item_key, (item_name, item_date) in watchlist.items():
-            since_dt = _parse_since_date(item_date)
-            query = f"{item_key} {item_name}".strip().replace(" ", "+")
 
-            for template in feed_templates:
-                url = template.format(query=query, key=item_key, name=item_name)
-                articles = await _fetch_feed(client, url)
+        if source == "static":
+            logger.info("Config %d (static): %d feeds, %d keywords, %d seen",
+                        config_id, len(feed_templates), len(keywords), len(seen))
+            for feed_url in feed_templates:
+                await _process_feed_items(
+                    pool, client, config,
+                    feed_url=feed_url,
+                    item_key="static",
+                    item_name="static",
+                    item_date="",
+                    seen=seen,
+                    keywords=keywords,
+                )
+                await asyncio.sleep(1)
 
-                for article in articles:
-                    if not isinstance(article, dict):
-                        continue
+        else:
+            watchlist = await _resolve_watchlist(pool, config)
+            if not watchlist:
+                logger.info("Config %d: empty watchlist", config_id)
+                return
 
-                    # Artikel filtern die älter als die letzte Analyse sind
-                    pub_dt = _parse_pub_date(article["published"])
-                    if since_dt and pub_dt and pub_dt < since_dt:
-                        logger.debug("Skipping old article for %s: %s (%s)", item_key, article["title"][:50], article["published"])
-                        fp = _fingerprint(article["url"])
-                        seen.add(fp)
-                        await _mark_seen(pool, config_id, fp)
-                        continue
+            logger.info("Config %d (agent): %d items, %d keywords, %d seen",
+                        config_id, len(watchlist), len(keywords), len(seen))
 
-                    fp = _fingerprint(article["url"])
-                    if fp in seen:
-                        continue
-                    seen.add(fp)
-                    await _mark_seen(pool, config_id, fp)
-
-                    # Artikel-Content fetchen
-                    article_text = await _fetch_article_text(client, article["url"])
-
-                    payload: dict = {
-                        "key": item_key,
-                        "name": item_name,
-                        "reason": f"{article['title']} ({article['source']})",
-                        "article_text": article_text,
-                        "article_url": article["url"],
-                        "published": article["published"],
-                        "since_date": item_date,
-                    }
-                    payload.update(extra.get("payload_extra", {}))
-                    await _enqueue_trigger(pool, target_agent, payload)
-
-            await asyncio.sleep(1)
+            for item_key, (item_name, item_date) in watchlist.items():
+                query = f"{item_key} {item_name}".strip().replace(" ", "+")
+                for template in feed_templates:
+                    feed_url = template.format(query=query, key=item_key, name=item_name)
+                    await _process_feed_items(
+                        pool, client, config,
+                        feed_url=feed_url,
+                        item_key=item_key,
+                        item_name=item_name,
+                        item_date=item_date,
+                        seen=seen,
+                        keywords=keywords,
+                    )
+                await asyncio.sleep(1)
 
 
 async def _run_cycle(pool: asyncpg.Pool) -> None:

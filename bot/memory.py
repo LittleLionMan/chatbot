@@ -562,24 +562,27 @@ async def create_monitor_config(
     pool: asyncpg.Pool,
     monitor_type: str,
     name: str,
-    source_agent: str,
-    source_state_key: str,
-    source_format: str,
+    source: str,
     target_agent: str,
     feed_templates: list[str],
     poll_interval_seconds: int = 900,
+    source_agent: str = "",
+    source_state_key: str = "",
+    source_format: str = "comma_list",
+    keywords: list[str] | None = None,
     extra_config: dict | None = None,
 ) -> int:
     row = await pool.fetchrow(
         """
         INSERT INTO monitor_configs
-            (monitor_type, name, source_agent, source_state_key, source_format,
-             target_agent, feed_templates, poll_interval_seconds, extra_config)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            (monitor_type, name, source, source_agent, source_state_key, source_format,
+             target_agent, feed_templates, poll_interval_seconds, keywords, extra_config)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id
         """,
-        monitor_type, name, source_agent, source_state_key, source_format,
+        monitor_type, name, source, source_agent, source_state_key, source_format,
         target_agent, feed_templates, poll_interval_seconds,
+        keywords or [],
         json.dumps(extra_config or {}),
     )
     return row["id"]
