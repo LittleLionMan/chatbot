@@ -15,32 +15,14 @@ search:
   max_page: 1
 
 engines:
-  - name: google
-    engine: google
-    shortcut: g
-    use_mobile_ui: false
-
-  - name: bing
-    engine: bing
-    shortcut: b
-
-  - name: duckduckgo
-    engine: duckduckgo
-    shortcut: ddg
-
-  - name: brave
-    engine: brave
-    shortcut: br
+  - name: startpage
+    engine: startpage
+    shortcut: sp
     categories: general
 
   - name: google news
     engine: google_news
     shortcut: gn
-    categories: news
-
-  - name: bing news
-    engine: bing_news
-    shortcut: bn
     categories: news
 
   - name: yahoo finance
