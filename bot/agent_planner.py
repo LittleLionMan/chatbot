@@ -8,7 +8,7 @@ from croniter import croniter
 import asyncpg
 
 from bot import brain, memory
-from bot.agent_parser import _decompose_task, _generate_pipeline, _pick_name_for_topic
+from bot.agent_parser import _decompose_task, _generate_pipeline
 from bot.models import CAPABILITY_DEEP_REASONING, CAPABILITY_REASONING
 from bot.utils import clean_llm_json
 
