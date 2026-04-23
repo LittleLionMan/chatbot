@@ -279,6 +279,8 @@ function transformOpOptions(selected) {
     "json_path",
     "xml_extract",
     "regex_extract",
+    "arithmetic",
+    "compare",
   ]
     .map(
       (o) =>
@@ -519,6 +521,13 @@ function buildStepFormBody(step) {
         `<div id="sf-attribute-wrap">${field("attribute (für xml_extract, z.B. rate)", textInput("sf-attribute", step.attribute, ""))}</div>` +
         `<div id="sf-pattern-wrap">${field("pattern (für regex_extract)", textInput("sf-pattern", step.pattern, ""))}</div>` +
         `<div id="sf-group-num-wrap">${field("group (für regex_extract, Standard 1)", textInput("sf-group-num", step.group, "1"))}</div>` +
+        `<div id="sf-expression-wrap">${field("expression (für arithmetic, z.B. price / exchange_rate)", textInput("sf-expression", step.expression, ""))}</div>` +
+        `<div id="sf-round-wrap">${field("round (für arithmetic, Nachkommastellen)", textInput("sf-round", step.round, "2"))}</div>` +
+        `<div id="sf-left-key-wrap">${field("left_key (für compare, Dot-Notation möglich)", textInput("sf-left-key", step.left_key, ""))}</div>` +
+        `<div id="sf-right-key-wrap">${field("right_key (für compare, Dot-Notation möglich)", textInput("sf-right-key", step.right_key, ""))}</div>` +
+        `<div id="sf-operator-wrap">${field("operator (für compare)", `<select class="modal-select" id="sf-operator"><option ${(step.operator || "<=") === "<=" ? "selected" : ""}>&lt;=</option><option ${step.operator === "<" ? "selected" : ""}>&lt;</option><option ${step.operator === ">=" ? "selected" : ""}>>=</option><option ${step.operator === ">" ? "selected" : ""}>></option><option ${step.operator === "==" ? "selected" : ""}">==</option><option ${step.operator === "!=" ? "selected" : ""}">!=</option></select>`)}</div>` +
+        `<div id="sf-output-true-wrap">${field("output_true (für compare)", textInput("sf-output-true", step.output_true, "true"))}</div>` +
+        `<div id="sf-output-false-wrap">${field("output_false (für compare)", textInput("sf-output-false", step.output_false, "false"))}</div>` +
         outputKey;
       break;
     }
@@ -590,6 +599,15 @@ function onTransformOpChange() {
   show("sf-attribute-wrap", op === "xml_extract");
   show("sf-pattern-wrap", op === "regex_extract");
   show("sf-group-num-wrap", op === "regex_extract");
+  show("sf-expression-wrap", op === "arithmetic");
+  show("sf-round-wrap", op === "arithmetic");
+  show("sf-left-key-wrap", op === "compare");
+  show("sf-right-key-wrap", op === "compare");
+  show("sf-operator-wrap", op === "compare");
+  show("sf-output-true-wrap", op === "compare");
+  show("sf-output-false-wrap", op === "compare");
+  show("sf-source-key", !["arithmetic", "compare"].includes(op));
+  show("sf-target-key", op === "array_append");
 }
 
 function _val(id) {
@@ -741,6 +759,22 @@ function _readStepFromForm() {
         if (grp) step.group = parseInt(grp);
         const def = _val("sf-default");
         if (def) step.default = def;
+      }
+      if (step.operation === "arithmetic") {
+        step.expression = _val("sf-expression") || "";
+        const rnd = _val("sf-round");
+        if (rnd !== "" && rnd !== undefined) step.round = parseInt(rnd);
+        const def = _val("sf-default");
+        if (def) step.default = def;
+      }
+      if (step.operation === "compare") {
+        step.left_key = _val("sf-left-key") || "";
+        step.right_key = _val("sf-right-key") || "";
+        step.operator = _val("sf-operator") || "<=";
+        const ot = _val("sf-output-true");
+        if (ot) step.output_true = ot;
+        const of_ = _val("sf-output-false");
+        if (of_) step.output_false = of_;
       }
       break;
     }

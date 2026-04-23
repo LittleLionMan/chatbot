@@ -557,6 +557,71 @@ def _transform_regex_extract(step: dict, context: dict[str, str]) -> str:
         return step.get("default", "")
 
 
+def _transform_arithmetic(step: dict, context: dict[str, str]) -> str:
+    expression: str = step.get("expression", "")
+    default: str = step.get("default", "")
+
+    import re as _re
+    tokens = _re.findall(r"[a-zA-Z_][a-zA-Z0-9_.]*", expression)
+    resolved = expression
+    for token in sorted(tokens, key=len, reverse=True):
+        val = _get(context, token)
+        if val == "":
+            logger.warning("transform arithmetic: variable %r not found in context", token)
+            return default
+        try:
+            float(val)
+        except ValueError:
+            logger.warning("transform arithmetic: variable %r is not numeric: %r", token, val)
+            return default
+        resolved = resolved.replace(token, val)
+
+    allowed = set("0123456789+-*/()., \t")
+    if not all(c in allowed for c in resolved):
+        logger.warning("transform arithmetic: expression contains invalid characters: %r", resolved)
+        return default
+
+    try:
+        result = eval(resolved, {"__builtins__": {}}, {})  # noqa: S307
+        rounded = step.get("round")
+        if rounded is not None:
+            result = round(float(result), int(rounded))
+        return str(result)
+    except Exception as e:
+        logger.warning("transform arithmetic: eval failed for %r: %s", resolved, e)
+        return default
+
+
+def _transform_compare(step: dict, context: dict[str, str]) -> str:
+    left_key: str = step.get("left_key", "")
+    right_key: str = step.get("right_key", "")
+    operator: str = step.get("operator", "<=")
+    output_true: str = step.get("output_true", "true")
+    output_false: str = step.get("output_false", "false")
+
+    left_raw = _get(context, left_key)
+    right_raw = _get(context, right_key)
+
+    try:
+        left = float(left_raw)
+        right = float(right_raw)
+    except (ValueError, TypeError):
+        logger.warning("transform compare: could not parse %r=%r or %r=%r as float", left_key, left_raw, right_key, right_raw)
+        return output_false
+
+    result = (
+        left < right if operator == "<" else
+        left <= right if operator == "<=" else
+        left > right if operator == ">" else
+        left >= right if operator == ">=" else
+        left == right if operator == "==" else
+        left != right if operator == "!=" else
+        False
+    )
+    logger.info("transform compare: %s %s %s → %s", left, operator, right, result)
+    return output_true if result else output_false
+
+
 _TRANSFORM_OPERATIONS: dict[str, Callable[[dict, dict[str, str]], str]] = {
     "array_append": _transform_array_append,
     "iqr_bounds": _transform_iqr_bounds,
@@ -564,6 +629,8 @@ _TRANSFORM_OPERATIONS: dict[str, Callable[[dict, dict[str, str]], str]] = {
     "json_extract": _transform_json_path,
     "xml_extract": _transform_xml_extract,
     "regex_extract": _transform_regex_extract,
+    "arithmetic": _transform_arithmetic,
+    "compare": _transform_compare,
 }
 
 

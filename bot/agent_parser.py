@@ -46,7 +46,7 @@ Felder:
   - "classification": Einer der verfügbaren Baustein-Typen (siehe unten)
   - "inputs": Liste von Eingaben (z.B. "trigger_payload.url", "state:baselines", "context:search_result")
   - "outputs": Liste von Ausgaben (z.B. "context:extracted", "state:baselines")
-  - "operation": Nur für transform-Bausteine. Einer von: array_append, iqr_bounds, json_path, xml_extract, regex_extract
+  - "operation": Nur für transform-Bausteine. Einer von: array_append, iqr_bounds, json_path, xml_extract, regex_extract, arithmetic, compare
   - "condition": Nur wenn diese Teilaufgabe nur unter bestimmten Bedingungen läuft. Freitext.
   - "route": Nur wenn diese Teilaufgabe nur auf einem bestimmten Route-Pfad läuft.
 
@@ -72,7 +72,7 @@ DATENZUGRIFF — deterministisch:
 
 TRANSFORMATION — deterministisch, operiert auf Context-Werten:
 - transform: Berechnung oder Strukturänderung auf bereits im Context vorhandenen Daten.
-  Operationen: array_append, iqr_bounds, json_path, xml_extract, regex_extract
+  Operationen: array_append, iqr_bounds, json_path, xml_extract, regex_extract, arithmetic, compare
 
 KOORDINATION — deterministisch:
 - trigger_agent: Anderen Agenten mit Payload anstoßen.
@@ -87,6 +87,8 @@ Was ist deterministisch — verwende NIE ein LLM dafür:
 - Wert aus Text per Regex → transform(regex_extract)
 - Zahl/Wert in Liste einpflegen → state_read + transform(array_append) + state_write
 - Statistiken auf gesammelten Zahlen → transform(iqr_bounds)
+- Arithmetik zwischen zwei Werten (z.B. Währungsumrechnung) → transform(arithmetic)
+- Numerischer Vergleich (z.B. Preis <= Schwellenwert) → transform(compare)
 - Kurze Fakten im State speichern → state_write
 - Lange Dokumente speichern → data_write
 - Anderen Agent starten → trigger_agent
@@ -187,8 +189,13 @@ data_read_external / data_write_external:
 transform array_append:
 {"id": "append", "type": "transform", "operation": "array_append", "source_key": "extracted", "group_by": "group_field", "value_key": "value_field", "condition": "boolean_field", "target_key": "list_in_context", "output_key": "list_in_context", "max_items": 200}
 
-transform iqr_bounds:
-{"id": "stats", "type": "transform", "operation": "iqr_bounds", "source_key": "list_in_context", "multiplier": 1.5, "output_key": "bounds"}
+transform arithmetic:
+{"id": "convert", "type": "transform", "operation": "arithmetic", "expression": "price / exchange_rate_eur_usd", "round": 2, "output_key": "price_eur", "default": ""}
+Variablen im expression werden aus dem Context aufgelöst. Dot-Notation funktioniert (z.B. price_stats.lower_bound). Nur +, -, *, / und Klammern erlaubt.
+
+transform compare:
+{"id": "is_bargain", "type": "transform", "operation": "compare", "left_key": "price_eur", "right_key": "price_stats.lower_bound", "operator": "<=", "output_true": "true", "output_false": "false", "output_key": "is_bargain"}
+operator: "<", "<=", ">", ">=", "==", "!=" — vergleicht zwei numerische Context-Werte.
 
 transform json_path:
 {"id": "extract_field", "type": "transform", "operation": "json_path", "source_key": "json_string", "path": "nested.field", "output_key": "value", "default": ""}
