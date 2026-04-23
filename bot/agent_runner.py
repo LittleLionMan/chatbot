@@ -862,16 +862,16 @@ async def execute_agent(
             injected = await _load_data_reads(pool, agent_id, data_reads, flat_payload)
             flat_payload.update(injected)
 
-        pipeline: list[dict] = config_data.get("pipeline", [])
-        after: list[dict] = config_data.get("pipeline_after_template", [])
-        all_steps = pipeline + after
-
+        steps: list[dict] = (
+            config_data.get("steps")
+            or config_data.get("pipeline", []) + config_data.get("pipeline_after_template", [])
+        )
         output_step_result, has_output_step = await _execute_pipeline(
             pool=pool,
             bot=bot,
             agent_id=agent_id,
             name=name,
-            steps=all_steps,
+            steps=steps,
             state=state,
             trigger_payload=flat_payload,
             config_data=config_data,

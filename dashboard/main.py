@@ -66,7 +66,7 @@ async def serve_dashboard() -> HTMLResponse:
     host = os.environ.get("DASHBOARD_HOST", "localhost")
     port = os.environ.get("DASHBOARD_PORT", "8001")
     with open(os.path.join(os.path.dirname(__file__), "index.html")) as f:
-        html = f.read()
+        html = f.read().replace("__API_URL__", f"http://{host}:{port}")
     return HTMLResponse(html)
 
 
@@ -75,7 +75,7 @@ class AgentPatch(BaseModel):
     schedule: str | None = None
     instruction: str | None = None
     pipeline: list | None = None
-    pipeline_after_template: list | None = None
+    steps: list | None = None
 
 
 class MemoryBody(BaseModel):
@@ -157,8 +157,7 @@ async def get_agents() -> list[dict]:
             "schedule": r["schedule"],
             "instruction": config.get("instruction", ""),
             "type": config.get("type", ""),
-            "pipeline": config.get("pipeline", []),
-            "pipeline_after_template": config.get("pipeline_after_template", []),
+            "steps": config.get("steps") or config.get("pipeline", []) + config.get("pipeline_after_template", []),
             "data_reads": config.get("data_reads", []),
             "last_run_at": r["last_run_at"].isoformat() if r["last_run_at"] else None,
             "next_run_at": r["next_run_at"].isoformat() if r["next_run_at"] else None,
@@ -180,10 +179,10 @@ async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
     new_schedule = body.schedule if body.schedule is not None else row["schedule"]
     if body.instruction is not None:
         config["instruction"] = body.instruction
-    if body.pipeline is not None:
-        config["pipeline"] = body.pipeline
-    if body.pipeline_after_template is not None:
-        config["pipeline_after_template"] = body.pipeline_after_template
+    if body.steps is not None:
+        config["steps"] = body.steps
+        config.pop("pipeline", None)
+        config.pop("pipeline_after_template", None)
     await pool().execute(
         "UPDATE agents SET name = $1, schedule = $2, config = $3 WHERE id = $4",
         new_name, new_schedule, json.dumps(config), agent_id,

@@ -136,8 +136,7 @@ Deine Aufgabe ist ausschließlich Übersetzung — du erfindest keine neue Logik
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
 Felder:
-- "pipeline": Feste Steps — Router und alle Steps die vor variablen Teilen laufen
-- "pipeline_after_template": Steps die nach variablen Teilen laufen — Analyse, Output
+- "steps": Alle Steps der Pipeline in Ausführungsreihenfolge
 
 Step-Schemas nach Typ:
 
@@ -235,17 +234,15 @@ async def _generate_pipeline(
             logger.warning("pipeline generator returned non-dict")
             return None
 
-        has_pipeline = isinstance(parsed.get("pipeline"), list)
-        has_after = isinstance(parsed.get("pipeline_after_template"), list)
+        has_steps = isinstance(parsed.get("steps"), list)
 
-        if not has_pipeline and not has_after:
+        if not has_steps:
             logger.warning("pipeline generator returned empty structure")
             return None
 
         logger.info(
-            "pipeline generated: %d steps + %d after-steps",
-            len(parsed.get("pipeline", [])),
-            len(parsed.get("pipeline_after_template", [])),
+            "pipeline generated: %d steps",
+            len(parsed.get("steps", [])),
         )
         return parsed
     except Exception as e:
@@ -364,10 +361,7 @@ async def parse_agent_creation(
             "data_reads": [],
         }
         if pipeline_result:
-            if pipeline_result.get("pipeline"):
-                agent_config["pipeline"] = pipeline_result["pipeline"]
-            if pipeline_result.get("pipeline_after_template"):
-                agent_config["pipeline_after_template"] = pipeline_result["pipeline_after_template"]
+            agent_config["steps"] = pipeline_result.get("steps", [])
 
         raw_suggested: str | None = parsed.get("suggested_name")
         if raw_suggested and raw_suggested.strip().lower() == config.BOT_NAME.lower():
@@ -402,7 +396,7 @@ Mögliche Anfragen:
 - Umbenennung → bestätige knapp, gib neuen Namen zurück: ```name\\nNeuerName\\n```
 
 Wenn du die Konfiguration änderst: gib das vollständige config-Objekt zurück mit ALLEN bestehenden Feldern.
-Ändere NUR instruction und type — niemals pipeline, pipeline_after_template direkt."""
+Ändere NUR instruction und type — niemals steps direkt."""
 
 
 async def handle_agent_talk(
@@ -476,8 +470,9 @@ async def handle_agent_talk(
                     if decomposition:
                         new_pipeline = await _generate_pipeline(new_config["instruction"], decomposition)
                         if new_pipeline:
-                            new_config["pipeline"] = new_pipeline.get("pipeline", [])
-                            new_config["pipeline_after_template"] = new_pipeline.get("pipeline_after_template", [])
+                            new_config["steps"] = new_pipeline.get("steps", [])
+                            new_config.pop("pipeline", None)
+                            new_config.pop("pipeline_after_template", None)
                             new_config["type"] = decomposition.get("type", config_data.get("type", "default"))
             response = response[:response.index("```config")].strip()
         except Exception as e:
@@ -511,8 +506,9 @@ async def regenerate_pipeline_for_agent(agent_config: dict) -> dict:
         return agent_config
 
     updated = dict(agent_config)
-    updated["pipeline"] = pipeline_result.get("pipeline", [])
-    updated["pipeline_after_template"] = pipeline_result.get("pipeline_after_template", [])
+    updated["steps"] = pipeline_result.get("steps", [])
+    updated.pop("pipeline", None)
+    updated.pop("pipeline_after_template", None)
     updated["type"] = decomposition.get("type", agent_config.get("type", "default"))
     updated.pop("work_capability", None)
     return updated

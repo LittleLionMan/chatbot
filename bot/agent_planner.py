@@ -287,10 +287,7 @@ async def finalize(
             "data_reads": [],
         }
         if pipeline_result:
-            if pipeline_result.get("pipeline"):
-                agent_config["pipeline"] = pipeline_result["pipeline"]
-            if pipeline_result.get("pipeline_after_template"):
-                agent_config["pipeline_after_template"] = pipeline_result["pipeline_after_template"]
+            agent_config["steps"] = pipeline_result.get("steps", [])
 
         target_chat_id = source_chat_id
 
@@ -307,7 +304,7 @@ async def finalize(
             agent_name,
             agent_type,
             schedule or "trigger-only",
-            len(agent_config.get("pipeline", [])) + len(agent_config.get("pipeline_after_template", [])),
+            len(agent_config.get("steps", [])),
         )
 
     return prepared if prepared else None

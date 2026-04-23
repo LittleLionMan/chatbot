@@ -778,7 +778,7 @@ function _readStepFromForm() {
 
 // ── Pipeline rendering ────────────────────────────────────────────────────────
 
-function renderStep(step, idx, section, agentId) {
+function renderStep(step, idx, agentId) {
   const summary = stepSummary(step);
   return `
     <div class="pipeline-step">
@@ -789,8 +789,8 @@ function renderStep(step, idx, section, agentId) {
           ${step.is_output ? '<span class="badge badge-active">output</span>' : ""}
         </div>
         <div class="pipeline-step-actions">
-          <button class="btn btn-sm" onclick="editStep(${agentId}, ${idx}, '${section}')">Bearbeiten</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteStep(${agentId}, ${idx}, '${section}')">Löschen</button>
+          <button class="btn btn-sm" onclick="editStep(${agentId}, ${idx})">Bearbeiten</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteStep(${agentId}, ${idx})">Löschen</button>
         </div>
       </div>
       ${summary ? `<div class="pipeline-step-prompt">${summary}</div>` : ""}
@@ -798,43 +798,30 @@ function renderStep(step, idx, section, agentId) {
   `;
 }
 
-function editStep(agentId, idx, section) {
+function editStep(agentId, idx) {
   const a = agentsData.find((x) => x.id === agentId);
-  const steps =
-    section === "pipeline_after_template"
-      ? a.pipeline_after_template || []
-      : a.pipeline || [];
+  const steps = a.steps || [];
   const step = steps[idx];
   openModal(
     "Step bearbeiten",
     buildStepFormBody(step),
     `<button class="btn" onclick="closeModal()">Abbrechen</button>
-     <button class="btn btn-accent" onclick="saveStep(${agentId}, ${idx}, '${section}')">Speichern</button>`,
+     <button class="btn btn-accent" onclick="saveStep(${agentId}, ${idx})">Speichern</button>`,
   );
   if (step.type === "transform") onTransformOpChange();
 }
 
-async function saveStep(agentId, idx, section) {
+async function saveStep(agentId, idx) {
   const a = agentsData.find((x) => x.id === agentId);
-  const steps = [
-    ...(section === "pipeline_after_template"
-      ? a.pipeline_after_template || []
-      : a.pipeline || []),
-  ];
+  const steps = [...(a.steps || [])];
   steps[idx] = _readStepFromForm();
-  const patchKey =
-    section === "pipeline_after_template"
-      ? "pipeline_after_template"
-      : "pipeline";
   try {
     await api("/api/agents/" + agentId, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [patchKey]: steps }),
+      body: JSON.stringify({ steps }),
     });
-    if (section === "pipeline_after_template")
-      a.pipeline_after_template = steps;
-    else a.pipeline = steps;
+    a.steps = steps;
     closeModal();
     toast("Gespeichert.");
     selectAgent(agentId);
@@ -843,28 +830,18 @@ async function saveStep(agentId, idx, section) {
   }
 }
 
-function deleteStep(agentId, idx, section) {
+function deleteStep(agentId, idx) {
   confirmModal("Step wirklich löschen?", async () => {
     const a = agentsData.find((x) => x.id === agentId);
-    const steps = [
-      ...(section === "pipeline_after_template"
-        ? a.pipeline_after_template || []
-        : a.pipeline || []),
-    ];
+    const steps = [...(a.steps || [])];
     steps.splice(idx, 1);
-    const patchKey =
-      section === "pipeline_after_template"
-        ? "pipeline_after_template"
-        : "pipeline";
     try {
       await api("/api/agents/" + agentId, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [patchKey]: steps }),
+        body: JSON.stringify({ steps }),
       });
-      if (section === "pipeline_after_template")
-        a.pipeline_after_template = steps;
-      else a.pipeline = steps;
+      a.steps = steps;
       toast("Gelöscht.");
       selectAgent(agentId);
     } catch {
@@ -874,19 +851,10 @@ function deleteStep(agentId, idx, section) {
 }
 
 function addStep(agentId) {
-  const a = agentsData.find((x) => x.id === agentId);
-  const hasAfter = (a.pipeline_after_template || []).length > 0;
   const emptyStep = { id: "", type: "llm_extract" };
   openModal(
     "Neuen Step hinzufügen",
     `<div class="modal-field">
-       <div class="modal-label">Sektion</div>
-       <select class="modal-select" id="sf-section">
-         <option value="pipeline">pipeline</option>
-         ${hasAfter ? '<option value="pipeline_after_template">pipeline_after_template</option>' : ""}
-       </select>
-     </div>
-     <div class="modal-field">
        <div class="modal-label">Position (leer = ans Ende)</div>
        <input class="modal-input" id="sf-position" type="number" placeholder="0 = Anfang" />
      </div>` + buildStepFormBody(emptyStep),
@@ -901,30 +869,19 @@ async function saveNewStep(agentId) {
     toast("ID ist Pflichtfeld.", true);
     return;
   }
-  const section = _val("sf-section") || "pipeline";
   const posRaw = _val("sf-position");
   const pos = posRaw !== "" && posRaw !== undefined ? parseInt(posRaw) : null;
   const a = agentsData.find((x) => x.id === agentId);
-  const steps = [
-    ...(section === "pipeline_after_template"
-      ? a.pipeline_after_template || []
-      : a.pipeline || []),
-  ];
+  const steps = [...(a.steps || [])];
   if (pos === null || pos >= steps.length) steps.push(step);
   else steps.splice(pos, 0, step);
-  const patchKey =
-    section === "pipeline_after_template"
-      ? "pipeline_after_template"
-      : "pipeline";
   try {
     await api("/api/agents/" + agentId, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [patchKey]: steps }),
+      body: JSON.stringify({ steps }),
     });
-    if (section === "pipeline_after_template")
-      a.pipeline_after_template = steps;
-    else a.pipeline = steps;
+    a.steps = steps;
     closeModal();
     toast("Hinzugefügt.");
     selectAgent(agentId);
@@ -976,8 +933,7 @@ function renderAgentsList(filter) {
   }
   document.getElementById("agents-list").innerHTML = filtered
     .map((a) => {
-      const totalSteps =
-        (a.pipeline || []).length + (a.pipeline_after_template || []).length;
+      const totalSteps = (a.steps || []).length;
       return `
       <div class="sidebar-item" data-id="${a.id}" onclick="selectAgent(${a.id})">
         <div class="si-name">${a.name}
@@ -1017,9 +973,8 @@ async function selectAgent(id) {
       nsMap[d.namespace].push({ ...d, _idx: i });
     });
 
-    const pipelineSteps = a.pipeline || [];
-    const afterSteps = a.pipeline_after_template || [];
-    const totalSteps = pipelineSteps.length + afterSteps.length;
+    const allSteps = a.steps || [];
+    const totalSteps = allSteps.length;
 
     const pipelineHtml = `
       <div class="detail-block">
@@ -1027,23 +982,7 @@ async function selectAgent(id) {
           Pipeline (${totalSteps} Steps)
           <button class="btn btn-sm btn-accent" onclick="addStep(${id})">+ Step</button>
         </div>
-        ${
-          pipelineSteps.length
-            ? `
-          <div class="ns-label" style="margin-bottom:6px;">pipeline</div>
-          ${pipelineSteps.map((s, i) => renderStep(s, i, "pipeline", id)).join("")}
-        `
-            : ""
-        }
-        ${
-          afterSteps.length
-            ? `
-          <div class="ns-label" style="margin:10px 0 6px;">pipeline_after_template</div>
-          ${afterSteps.map((s, i) => renderStep(s, i, "pipeline_after_template", id)).join("")}
-        `
-            : ""
-        }
-        ${totalSteps === 0 ? '<div style="font-size:13px;color:var(--text3);">Keine Pipeline.</div>' : ""}
+        ${allSteps.length ? allSteps.map((s, i) => renderStep(s, i, id)).join("") : '<div style="font-size:13px;color:var(--text3);">Keine Pipeline.</div>'}
       </div>
     `;
 
