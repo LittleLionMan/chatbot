@@ -64,6 +64,12 @@ _RSS_MONITOR_PAYLOAD_SCHEMA = {
 }
 
 
+_AVAILABLE_SCRAPER_PLATFORMS = [
+    "kleinanzeigen", "ebay", "reddit",
+    "immoscout", "wggesucht",
+    "stepstone", "linkedin",
+]
+
 _PLAN_SYSTEM = f"""Du bist Bob. Du planst ein Agent-System für einen User.
 
 Dir wird der bisherige Gesprächsverlauf übergeben — der ursprüngliche Prompt des Users und alle bisherigen Klärungsrunden.
@@ -78,6 +84,9 @@ Verfügbare Transform-Operationen (für deterministisches Parsing ohne LLM):
 
 Externe Services die Agents triggern können:
 {json.dumps(_EXTERNAL_SERVICES, ensure_ascii=False)}
+
+Verfügbare Scraper-Plattformen (können sofort eingerichtet werden):
+{json.dumps(_AVAILABLE_SCRAPER_PLATFORMS, ensure_ascii=False)}
 
 Wenn ein Scraper einen Agent triggert, enthält der Trigger-Payload immer diese Felder:
 {json.dumps(_SCRAPER_PAYLOAD_SCHEMA, ensure_ascii=False)}
@@ -95,13 +104,38 @@ Mögliche Status-Werte:
 2. Du hast genug und präsentierst einen Plan:
 {{
   "status": "ready",
-  "description": "Menschenlesbare Zusammenfassung in Bobs Stimme. Beschreibe jeden Agent mit Name, Aufgabe und Zeitplan/Trigger. Benenne explizit welcher Agent wessen Daten liest. Nenne Annahmen die du getroffen hast. Wenn RSS-Monitore geplant sind, nenne konkret welche Feeds du vorschlägst und warum — der User weiß oft nicht welche Feeds existieren. Schließe mit: Passt das so, oder soll ich etwas anpassen?",
+  "description": "Menschenlesbare Zusammenfassung in Bobs Stimme. Beschreibe jeden Agent mit Name, Aufgabe und Zeitplan/Trigger. Benenne explizit welcher Agent wessen Daten liest. Nenne Annahmen die du getroffen hast. Wenn RSS-Monitore geplant sind, nenne konkret welche Feeds du vorschlägst und warum — der User weiß oft nicht welche Feeds existieren. Wenn Scraper geplant sind, nenne welche Plattformen verfügbar sind und ob eine gewünschte Plattform noch nicht existiert. Schließe mit: Passt das so, oder soll ich etwas anpassen?",
   "agents": [
     {{
       "name": "thematisch passender menschlicher Name",
       "role": "ein Satz was dieser Agent tut",
       "schedule": "Cron-Expression oder null wenn trigger-only",
       "trigger": "womit wird der Agent getriggert, oder null"
+    }}
+  ],
+  "monitors": [
+    {{
+      "name": "beschreibender Name",
+      "source": "static oder agent",
+      "target_agent": "Name des Agents der getriggert wird",
+      "feed_urls": ["https://... (nur bei source=static)"],
+      "feed_templates": ["https://...{{query}}... (nur bei source=agent)"],
+      "source_agent": "Name des Quell-Agents (nur bei source=agent)",
+      "source_state_key": "State-Key der Watchlist (nur bei source=agent)",
+      "source_format": "comma_list (nur bei source=agent)",
+      "keywords": ["optionale Filterkeywords"],
+      "poll_interval_seconds": 3600
+    }}
+  ],
+  "scrapers": [
+    {{
+      "platform": "eine der verfügbaren Plattformen",
+      "category": "kurzes Schlagwort z.B. gpu, apartment, job",
+      "query": "Suchbegriff 1-5 Wörter",
+      "target_agent": "Name des Agents der getriggert wird",
+      "filters": {{}},
+      "poll_interval_seconds": 3600,
+      "unavailable": false
     }}
   ],
   "assumptions": ["Annahme 1", "Annahme 2"],
@@ -129,6 +163,12 @@ Regeln für RSS-Monitore:
 - Nenne konkrete Feed-URLs aus deinem Wissen — der User weiß oft nicht welche Feeds existieren
 - Wenn Keywords sinnvoll sind um irrelevante Artikel herauszufiltern → im Plan nennen
 - Frage den User ob die vorgeschlagenen Feeds passen oder ob er andere bevorzugt
+
+Regeln für Scraper:
+- Wenn ein Agent auf neue Listings von Marktplätzen reagieren soll → Scraper vorschlagen
+- Nur Plattformen aus der verfügbaren Liste können sofort eingerichtet werden
+- Wenn eine gewünschte Plattform nicht verfügbar ist: setze unavailable=true und erkläre es in der description
+- Scraper mit unavailable=true werden nicht angelegt, aber dem User erklärt
 """
 
 
@@ -271,6 +311,83 @@ async def finalize(
         )
 
     return prepared if prepared else None
+
+
+async def finalize_monitors(
+    plan_result: dict,
+    pool: asyncpg.Pool,
+) -> list[dict]:
+    monitors_in_plan: list[dict] = plan_result.get("monitors", [])
+    created: list[dict] = []
+
+    for mon in monitors_in_plan:
+        source: str = mon.get("source", "static")
+        target_agent: str = mon.get("target_agent", "")
+        if not target_agent:
+            logger.warning("finalize_monitors: monitor without target_agent, skipping")
+            continue
+        try:
+            monitor_id = await memory.create_monitor_config(
+                pool,
+                monitor_type=mon.get("monitor_type", "rss"),
+                name=mon.get("name", f"Monitor für {target_agent}"),
+                source=source,
+                target_agent=target_agent,
+                feed_templates=mon.get("feed_urls", []) if source == "static" else mon.get("feed_templates", []),
+                poll_interval_seconds=mon.get("poll_interval_seconds", 3600),
+                source_agent=mon.get("source_agent", ""),
+                source_state_key=mon.get("source_state_key", ""),
+                source_format=mon.get("source_format", "comma_list"),
+                keywords=mon.get("keywords", []),
+            )
+            created.append({"id": monitor_id, "name": mon.get("name", ""), "target_agent": target_agent})
+            logger.info("finalize_monitors: created monitor %d for %s", monitor_id, target_agent)
+        except Exception as e:
+            logger.error("finalize_monitors: failed for %s: %s", target_agent, e)
+
+    return created
+
+
+_AVAILABLE_SCRAPER_PLATFORMS_SET = set(_AVAILABLE_SCRAPER_PLATFORMS)
+
+
+async def finalize_scrapers(
+    plan_result: dict,
+    pool: asyncpg.Pool,
+) -> tuple[list[dict], list[dict]]:
+    scrapers_in_plan: list[dict] = plan_result.get("scrapers", [])
+    created: list[dict] = []
+    unavailable: list[dict] = []
+
+    for scraper in scrapers_in_plan:
+        platform: str = scraper.get("platform", "")
+        target_agent: str = scraper.get("target_agent", "")
+
+        if scraper.get("unavailable", False) or platform not in _AVAILABLE_SCRAPER_PLATFORMS_SET:
+            unavailable.append({"platform": platform, "target_agent": target_agent})
+            logger.info("finalize_scrapers: platform %s unavailable, skipping", platform)
+            continue
+
+        if not target_agent or not platform:
+            logger.warning("finalize_scrapers: missing platform or target_agent, skipping")
+            continue
+
+        try:
+            scraper_id = await memory.create_scraper_config(
+                pool,
+                platform=platform,
+                category=scraper.get("category", ""),
+                query=scraper.get("query", ""),
+                target_agent=target_agent,
+                filters=scraper.get("filters", {}),
+                poll_interval_seconds=scraper.get("poll_interval_seconds", 3600),
+            )
+            created.append({"id": scraper_id, "platform": platform, "target_agent": target_agent})
+            logger.info("finalize_scrapers: created scraper %d on %s for %s", scraper_id, platform, target_agent)
+        except Exception as e:
+            logger.error("finalize_scrapers: failed for %s/%s: %s", platform, target_agent, e)
+
+    return created, unavailable
 
 
 _INSTRUCTION_BUILDER_SYSTEM = """Du formulierst eine vollständige, eigenständige Instruction für einen einzelnen Agenten.

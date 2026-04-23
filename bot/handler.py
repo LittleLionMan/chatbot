@@ -214,19 +214,31 @@ async def _handle_pending_plan(
                 failed.append(agent_cfg["name"])
 
         names = ", ".join(a["name"] for a in prepared if a["name"] not in failed)
+
+        created_monitors = await agent_planner.finalize_monitors(current_plan, pool)
+        created_scrapers, unavailable_scrapers = await agent_planner.finalize_scrapers(current_plan, pool)
+
+        reply_parts: list[str] = []
         if failed:
-            await message.reply_text(
-                f"Angelegt: {names}.\n"
-                f"Fehlgeschlagen: {', '.join(failed)} — schau in die Logs."
-            )
+            reply_parts.append(f"Angelegt: {names}.\nFehlgeschlagen: {', '.join(failed)} — schau in die Logs.")
+        elif created < expected:
+            reply_parts.append(f"Angelegt: {names}. Hinweis: {expected - created} Agent(en) konnten nicht erstellt werden.")
         else:
-            if created < expected:
-                await message.reply_text(
-                    f"Angelegt: {names}. "
-                    f"Hinweis: {expected - created} Agent(en) aus dem Plan konnten nicht erstellt werden."
-                )
-            else:
-                await message.reply_text(f"Angelegt: {names}.")
+            reply_parts.append(f"Angelegt: {names}.")
+
+        if created_monitors:
+            monitor_names = ", ".join(m["name"] for m in created_monitors)
+            reply_parts.append(f"RSS-Monitor(e) eingerichtet: {monitor_names}.")
+
+        if created_scrapers:
+            scraper_summary = ", ".join(f"{s['platform']} → {s['target_agent']}" for s in created_scrapers)
+            reply_parts.append(f"Scraper eingerichtet: {scraper_summary}.")
+
+        if unavailable_scrapers:
+            missing = ", ".join(s["platform"] for s in unavailable_scrapers)
+            reply_parts.append(f"Hinweis: Scraper für {missing} sind noch nicht verfügbar und wurden nicht angelegt.")
+
+        await message.reply_text("\n".join(reply_parts))
         return True
 
     if new_plan["status"] == "needs_clarification":
