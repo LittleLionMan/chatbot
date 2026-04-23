@@ -275,7 +275,7 @@ function categoryOptions(selected) {
 function transformOpOptions(selected) {
   return [
     "array_push",
-    "iqr_bounds",
+    "statistics",
     "json_path",
     "xml_extract",
     "regex_extract",
@@ -514,7 +514,9 @@ function buildStepFormBody(step) {
         `<div id="sf-group-key-wrap">${field("group_key (Context-Key mit Gruppenname)", textInput("sf-group-key", step.group_key, "z.B. extracted_model"))}</div>` +
         `<div id="sf-max-items-wrap">${field("max_items", textInput("sf-max-items", step.max_items, "500"))}</div>` +
         targetKey +
-        `<div id="sf-multiplier-wrap">${field("multiplier (für iqr_bounds)", textInput("sf-multiplier", step.multiplier, "1.5"))}</div>` +
+        `<div id="sf-multiplier-wrap">${field("multiplier (für statistics, Standard 1.5)", textInput("sf-multiplier", step.multiplier, "1.5"))}</div>` +
+        `<div id="sf-model-key-wrap">${field("model_key (für statistics, optional)", textInput("sf-model-key", step.model_key, "z.B. extracted_model"))}</div>` +
+        `<div id="sf-functions-wrap">${field("functions (für statistics, kommasepariert)", textInput("sf-functions", (step.functions || []).join(", "), "q1, q3, iqr, lower_bound"))}</div>` +
         `<div id="sf-path-wrap">${field("path (für json_path, z.B. rates.USD)", textInput("sf-path", step.path, ""))}</div>` +
         `<div id="sf-xpath-wrap">${field("xpath (für xml_extract, z.B. .//Cube[@currency='USD'])", textInput("sf-xpath", step.xpath, ""))}</div>` +
         `<div id="sf-attribute-wrap">${field("attribute (für xml_extract, z.B. rate)", textInput("sf-attribute", step.attribute, ""))}</div>` +
@@ -591,7 +593,9 @@ function onTransformOpChange() {
   show("sf-value-key-wrap", op === "array_push");
   show("sf-group-key-wrap", op === "array_push");
   show("sf-max-items-wrap", op === "array_push");
-  show("sf-multiplier-wrap", op === "iqr_bounds");
+  show("sf-multiplier-wrap", op === "statistics");
+  show("sf-model-key-wrap", op === "statistics");
+  show("sf-functions-wrap", op === "statistics");
   show("sf-path-wrap", op === "json_path");
   show("sf-xpath-wrap", op === "xml_extract");
   show("sf-attribute-wrap", op === "xml_extract");
@@ -733,9 +737,17 @@ function _readStepFromForm() {
         const maxItems = _val("sf-max-items");
         if (maxItems) step.max_items = parseInt(maxItems);
       }
-      if (step.operation === "iqr_bounds") {
+      if (step.operation === "statistics") {
         const mult = _val("sf-multiplier");
         if (mult) step.multiplier = parseFloat(mult);
+        const mk = _val("sf-model-key");
+        if (mk) step.model_key = mk;
+        const fns = _val("sf-functions");
+        if (fns)
+          step.functions = fns
+            .split(",")
+            .map((f) => f.trim())
+            .filter(Boolean);
       }
       if (step.operation === "json_path") {
         step.path = _val("sf-path") || "";

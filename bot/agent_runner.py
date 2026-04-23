@@ -441,35 +441,69 @@ def _transform_array_push(step: dict, context: dict[str, str]) -> str:
     return result
 
 
-def _transform_iqr_bounds(step: dict, context: dict[str, str]) -> str:
+def _transform_statistics(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
+    model_key: str | None = step.get("model_key")
+    functions: list[str] = step.get("functions", ["count", "mean", "median", "q1", "q3", "iqr", "lower_bound", "upper_bound"])
     multiplier: float = float(step.get("multiplier", 1.5))
 
-    raw = context.get(source_key, "{}")
+    raw = _get(context, source_key)
     try:
-        baselines: dict[str, list] = json.loads(raw)
-        if not isinstance(baselines, dict):
+        data = json.loads(raw)
+        if not isinstance(data, dict):
             raise ValueError
     except Exception:
-        logger.warning("transform iqr_bounds: source %r is not a valid dict", source_key)
+        logger.warning("transform statistics: source %r is not a valid dict", source_key)
         return "{}"
 
-    result: dict[str, dict] = {}
-    for model, prices in baselines.items():
-        floats = [float(p) for p in prices if p is not None]
-        if len(floats) < 20:
-            result[model] = {"count": len(floats), "lower_bound": None, "q1": None, "q3": None}
-            continue
-        q1 = statistics.quantiles(floats, n=4)[0]
-        q3 = statistics.quantiles(floats, n=4)[2]
-        iqr = q3 - q1
-        result[model] = {
-            "count": len(floats),
-            "q1": round(q1, 2),
-            "q3": round(q3, 2),
-            "lower_bound": round(q1 - multiplier * iqr, 2),
-        }
+    def _calc(prices: list) -> dict:
+        floats = sorted([float(p) for p in prices if p is not None])
+        count = len(floats)
+        result: dict = {"count": count}
+        if "mean" in functions:
+            result["mean"] = round(statistics.mean(floats), 2) if count else None
+        if "median" in functions:
+            result["median"] = round(statistics.median(floats), 2) if count else None
+        if "std_dev" in functions:
+            result["std_dev"] = round(statistics.stdev(floats), 2) if count >= 2 else None
+        if "min" in functions:
+            result["min"] = round(min(floats), 2) if count else None
+        if "max" in functions:
+            result["max"] = round(max(floats), 2) if count else None
+        if any(f in functions for f in ["q1", "q3", "iqr", "lower_bound", "upper_bound"]):
+            if count >= 4:
+                q1 = statistics.quantiles(floats, n=4)[0]
+                q3 = statistics.quantiles(floats, n=4)[2]
+                iqr = q3 - q1
+                if "q1" in functions:
+                    result["q1"] = round(q1, 2)
+                if "q3" in functions:
+                    result["q3"] = round(q3, 2)
+                if "iqr" in functions:
+                    result["iqr"] = round(iqr, 2)
+                if "lower_bound" in functions:
+                    result["lower_bound"] = round(q1 - multiplier * iqr, 2)
+                if "upper_bound" in functions:
+                    result["upper_bound"] = round(q3 + multiplier * iqr, 2)
+            else:
+                for f in ["q1", "q3", "iqr", "lower_bound", "upper_bound"]:
+                    if f in functions:
+                        result[f] = None
+        return result
 
+    if model_key:
+        model = _get(context, model_key)
+        if not model:
+            logger.warning("transform statistics: model_key %r is empty", model_key)
+            return "{}"
+        prices = data.get(model, [])
+        result = _calc(prices)
+        logger.info("transform statistics: model=%r count=%d", model, result["count"])
+        return json.dumps(result, ensure_ascii=False)
+
+    result: dict[str, dict] = {}
+    for model, prices in data.items():
+        result[model] = _calc(prices)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -613,7 +647,7 @@ def _transform_compare(step: dict, context: dict[str, str]) -> str:
 
 _TRANSFORM_OPERATIONS: dict[str, Callable[[dict, dict[str, str]], str]] = {
     "array_push": _transform_array_push,
-    "iqr_bounds": _transform_iqr_bounds,
+    "statistics": _transform_statistics,
     "json_path": _transform_json_path,
     "json_extract": _transform_json_path,
     "xml_extract": _transform_xml_extract,

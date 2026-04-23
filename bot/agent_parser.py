@@ -1,7 +1,6 @@
 from __future__ import annotations
 import json
 import logging
-import random
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -13,22 +12,6 @@ from bot.models import CAPABILITY_CHAT, CAPABILITY_REASONING, CAPABILITY_DEEP_RE
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
-
-_NAMES_BY_TOPIC = {
-    "gpu": ["Linus", "Jensen"],
-    "finance": ["Gordon", "Warren", "Floyd"],
-    "news": ["Wolf", "Peter", "Anna"],
-    "research": ["Ada", "Grace", "Alan"],
-    "market": ["Gordon", "Floyd", "Morgan"],
-    "monitoring": ["Argus", "HAL", "Watcher"],
-    "coding": ["Dennis", "Guido", "Ada"],
-    "default": ["Iris", "Hermes", "Scout", "Remy"],
-}
-
-
-def _pick_name_for_topic(topic_type: str) -> str:
-    candidates = _NAMES_BY_TOPIC.get(topic_type.lower(), _NAMES_BY_TOPIC["default"])
-    return random.choice(candidates)
 
 
 # ── Task Decomposition ────────────────────────────────────────────────────────
@@ -46,7 +29,7 @@ Felder:
   - "classification": Einer der verfügbaren Baustein-Typen (siehe unten)
   - "inputs": Liste von Eingaben (z.B. "trigger_payload.url", "state:baselines", "context:search_result")
   - "outputs": Liste von Ausgaben (z.B. "context:extracted", "state:baselines")
-  - "operation": Nur für transform-Bausteine. Einer von: array_push, iqr_bounds, json_path, xml_extract, regex_extract, arithmetic, compare
+  - "operation": Nur für transform-Bausteine. Einer von: array_push, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
   - "condition": Nur wenn diese Teilaufgabe nur unter bestimmten Bedingungen läuft. Freitext.
   - "route": Nur wenn diese Teilaufgabe nur auf einem bestimmten Route-Pfad läuft.
 
@@ -72,7 +55,7 @@ DATENZUGRIFF — deterministisch:
 
 TRANSFORMATION — deterministisch, operiert auf Context-Werten:
 - transform: Berechnung oder Strukturänderung auf bereits im Context vorhandenen Daten.
-  Operationen: array_push, iqr_bounds, json_path, xml_extract, regex_extract, arithmetic, compare
+  Operationen: array_push, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
 
 KOORDINATION — deterministisch:
 - trigger_agent: Anderen Agenten mit Payload anstoßen.
@@ -87,7 +70,7 @@ Was ist deterministisch — verwende NIE ein LLM dafür:
 - Wert aus Text per Regex → transform(regex_extract)
 - Zahl/Wert in Liste einpflegen → state_read + transform(array_push) + state_write
 - Werte an gruppiertes Array anhängen → transform(array_push)
-- Statistiken auf gesammelten Zahlen → transform(iqr_bounds)
+- Statistiken auf gesammelten Zahlen → transform(statistics)
 - Arithmetik zwischen zwei Werten (z.B. Währungsumrechnung) → transform(arithmetic)
 - Numerischer Vergleich (z.B. Preis <= Schwellenwert) → transform(compare)
 - Kurze Fakten im State speichern → state_write
@@ -190,6 +173,10 @@ data_read_external / data_write_external:
 transform array_push:
 {"id": "append", "type": "transform", "operation": "array_push", "value_key": "price_eur", "group_key": "extracted_model", "target_key": "historical_prices", "output_key": "historical_prices", "max_items": 500}
 value_key: Context-Key mit dem anzuhängenden Wert. group_key: Context-Key mit dem Gruppennamen. target_key: Context-Key des bestehenden Dict {gruppe: [werte]}.
+
+transform statistics:
+{"id": "stats", "type": "transform", "operation": "statistics", "source_key": "historical_prices", "model_key": "extracted_model", "functions": ["q1", "q3", "iqr", "lower_bound"], "multiplier": 1.5, "output_key": "price_stats"}
+Verfügbare functions: mean, median, std_dev, min, max, count, q1, q3, iqr, lower_bound, upper_bound. Mit model_key: gibt Stats nur für das angegebene Modell zurück — lower_bound/q1/q3 sind null wenn weniger als 4 Datensätze. Ohne model_key: gibt Dict aller Modelle zurück. multiplier gilt für lower_bound/upper_bound (Standard 1.5).
 
 transform arithmetic:
 {"id": "convert", "type": "transform", "operation": "arithmetic", "expression": "price / exchange_rate_eur_usd", "round": 2, "output_key": "price_eur", "default": ""}
