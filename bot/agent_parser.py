@@ -214,7 +214,8 @@ STRUKTURREGELN:
 - LLM-Prompts für llm_extract/llm_decide enden mit "Antworte NUR mit rohem JSON: {Felder}"
 - Jeder Step der Daten eines anderen Steps braucht — {{output_key}} als Template-Variable im prompt
 - only_if_route weglassen wenn der Step auf allen Routen läuft
-- Keine Steps erfinden die nicht in der Klassifikation stehen"""
+- Keine Steps erfinden die nicht in der Klassifikation stehen
+- Dot-Notation für verschachtelte Felder: wenn ein LLM-Step {"merged_list": [...], "new_models": [...]} zurückgibt mit output_key "merge_result", kann ein nachfolgender Step source_key "merge_result.merged_list" oder condition_key "merge_result.new_models" verwenden — kein extra Transform-Step nötig"""
 
 
 async def _generate_pipeline(

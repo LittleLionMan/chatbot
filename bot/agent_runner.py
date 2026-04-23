@@ -33,8 +33,26 @@ def _resolve_template(template: str, context: dict[str, str]) -> str:
     return template
 
 
-def _get(context: dict[str, str], key: str) -> str:
-    return context.get(key, "")
+def _get(context: dict[str, str], key: str, default: str = "") -> str:
+    if "." not in key:
+        return context.get(key, default)
+    parts = key.split(".", 1)
+    raw = context.get(parts[0], "")
+    if not raw:
+        return default
+    try:
+        parsed = json.loads(raw)
+        result = parsed
+        for part in parts[1].split("."):
+            if isinstance(result, dict):
+                result = result.get(part)
+            else:
+                return default
+        if result is None:
+            return default
+        return json.dumps(result) if isinstance(result, (dict, list)) else str(result)
+    except Exception:
+        return default
 
 
 def _set(context: dict[str, str], key: str, value: str) -> None:
@@ -267,7 +285,7 @@ async def _handle_state_write(
 ) -> str:
     key: str = step["key"]
     source_key: str = step["source_key"]
-    value = context.get(source_key, "")
+    value = _get(context, source_key)
     state[key] = value
     logger.info("state_write: %r = %d chars", key, len(value))
     return value
@@ -298,7 +316,7 @@ async def _handle_data_write(
     key_template: str = step.get("key_template", "")
     key = _resolve_template(key_template, context)
     source_key: str = step["source_key"]
-    raw = context.get(source_key, "")
+    raw = _get(context, source_key)
     value = clean_llm_json(raw) if raw.strip().startswith("```") else raw
     await memory.write_agent_data(pool, agent_id, namespace, key, value)
     logger.info("data_write: %s/%s (%d chars)", namespace, key, len(value))
@@ -336,7 +354,7 @@ async def _handle_data_write_external(
     key_template: str = step.get("key_template", "")
     key = _resolve_template(key_template, context)
     source_key: str = step["source_key"]
-    value = context.get(source_key, "")
+    value = _get(context, source_key)
 
     target_id = await memory.get_agent_id_by_name(pool, agent_name)
     if target_id is None:
@@ -374,7 +392,7 @@ async def _handle_state_write_external(
     agent_name: str = step["agent_name"]
     key: str = step["key"]
     source_key: str = step["source_key"]
-    value = context.get(source_key, "")
+    value = _get(context, source_key)
 
     target_id = await memory.get_agent_id_by_name(pool, agent_name)
     if target_id is None:
@@ -625,11 +643,24 @@ async def _handle_notify_user(
     target_chat_id: int,
     **_,
 ) -> str:
+    condition_key: str | None = step.get("condition_key")
+    if condition_key:
+        condition_val = _get(context, condition_key)
+        try:
+            parsed = json.loads(condition_val)
+            if not parsed:
+                logger.info("notify_user: condition_key %r is empty/falsy, skipping", condition_key)
+                return ""
+        except Exception:
+            if not condition_val:
+                logger.info("notify_user: condition_key %r is empty, skipping", condition_key)
+                return ""
+
     message_template: str = step.get("message_template", "")
     source_key: str | None = step.get("source_key")
 
     if source_key:
-        message = context.get(source_key, "")
+        message = _get(context, source_key)
     else:
         message = _resolve_template(message_template, context)
 
