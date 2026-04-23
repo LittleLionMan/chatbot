@@ -503,21 +503,29 @@ def _transform_json_path(step: dict, context: dict[str, str]) -> str:
 
 
 def _transform_xml_extract(step: dict, context: dict[str, str]) -> str:
+    import io
     import xml.etree.ElementTree as ET
 
     source_key: str = step["source_key"]
     xpath: str = step["xpath"]
     attribute: str | None = step.get("attribute")
 
-    raw = context.get(source_key, "")
+    raw = _get(context, source_key)
     if not raw:
         logger.warning("transform xml_extract: source_key %r is empty", source_key)
         return step.get("default", "")
     try:
+        namespaces: dict[str, str] = {}
+        for _, (prefix, uri) in ET.iterparse(io.StringIO(raw), events=["start-ns"]):
+            if prefix:
+                namespaces[prefix] = uri
+            else:
+                namespaces["ns"] = uri
+
         root = ET.fromstring(raw)
-        elements = root.findall(xpath)
+        elements = root.findall(xpath, namespaces) if namespaces else root.findall(xpath)
         if not elements:
-            logger.warning("transform xml_extract: xpath %r found no elements", xpath)
+            logger.warning("transform xml_extract: xpath %r found no elements (namespaces: %s)", xpath, list(namespaces.keys()))
             return step.get("default", "")
         el = elements[0]
         if attribute:

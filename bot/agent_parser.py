@@ -194,7 +194,8 @@ transform json_path:
 {"id": "extract_field", "type": "transform", "operation": "json_path", "source_key": "json_string", "path": "nested.field", "output_key": "value", "default": ""}
 
 transform xml_extract:
-{"id": "extract_xml", "type": "transform", "operation": "xml_extract", "source_key": "xml_string", "xpath": ".//Element[@attr='value']", "attribute": "rate", "output_key": "value", "default": ""}
+{"id": "extract_xml", "type": "transform", "operation": "xml_extract", "source_key": "xml_string", "xpath": ".//ns:Element[@attr='value']", "attribute": "rate", "output_key": "value", "default": ""}
+Hinweis: Namespaces werden automatisch erkannt. Default-Namespace wird als "ns:" registriert, benannte Prefixe bleiben erhalten (z.B. gesmes:). XPath muss entsprechende Prefixe verwenden.
 
 transform regex_extract:
 {"id": "extract_pattern", "type": "transform", "operation": "regex_extract", "source_key": "text", "pattern": "Pattern: ([\\d.]+)", "group": 1, "output_key": "value", "default": ""}
