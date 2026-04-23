@@ -543,6 +543,14 @@ function buildStepFormBody(step) {
     case "notify_user":
       typeSpecific =
         field(
+          "condition_key (leer = immer senden, Dot-Notation möglich)",
+          textInput(
+            "sf-condition-key",
+            step.condition_key,
+            "z.B. merge_result.new_models",
+          ),
+        ) +
+        field(
           "source_key (Context-Key mit Nachrichtentext)",
           textInput("sf-source-key", step.source_key, "z.B. report"),
         ) +
@@ -765,6 +773,8 @@ function _readStepFromForm() {
       break;
     }
     case "notify_user": {
+      const ck = _val("sf-condition-key");
+      if (ck) step.condition_key = ck;
       const sk = _val("sf-source-key");
       if (sk) step.source_key = sk;
       const mt = _val("sf-message-template");
