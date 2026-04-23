@@ -406,30 +406,17 @@ async def _handle_state_write_external(
 
 # ── Transform ─────────────────────────────────────────────────────────────────
 
-def _transform_array_append(step: dict, context: dict[str, str]) -> str:
-    source_key: str = step["source_key"]
-    group_by: str = step["group_by"]
+def _transform_array_push(step: dict, context: dict[str, str]) -> str:
     value_key: str = step["value_key"]
+    group_key: str = step["group_key"]
     target_key: str = step["target_key"]
     max_items: int = int(step.get("max_items", 500))
-    condition_key: str | None = step.get("condition")
 
-    raw_source = context.get(source_key, "")
-    try:
-        source_data = json.loads(raw_source)
-    except Exception:
-        logger.warning("transform array_append: source %r is not valid JSON", source_key)
-        return context.get(target_key, "{}")
+    value = _get(context, value_key)
+    group = _get(context, group_key)
 
-    if condition_key and not source_data.get(condition_key):
-        logger.info("transform array_append: condition %r not met", condition_key)
-        return context.get(target_key, "{}")
-
-    group_value = source_data.get(group_by)
-    append_value = source_data.get(value_key)
-
-    if group_value is None or append_value is None:
-        logger.warning("transform array_append: missing %r or %r in source", group_by, value_key)
+    if not value or not group:
+        logger.warning("transform array_push: value_key %r or group_key %r is empty", value_key, group_key)
         return context.get(target_key, "{}")
 
     raw_target = context.get(target_key, "{}")
@@ -440,15 +427,17 @@ def _transform_array_append(step: dict, context: dict[str, str]) -> str:
     except Exception:
         target = {}
 
-    group_key = str(group_value)
-    target.setdefault(group_key, [])
-    target[group_key].append(append_value)
+    target.setdefault(group, [])
+    try:
+        target[group].append(float(value))
+    except ValueError:
+        target[group].append(value)
 
-    if len(target[group_key]) > max_items:
-        target[group_key] = target[group_key][-max_items:]
+    if len(target[group]) > max_items:
+        target[group] = target[group][-max_items:]
 
     result = json.dumps(target, ensure_ascii=False)
-    logger.info("transform array_append: %s[%s] now %d entries", target_key, group_key, len(target[group_key]))
+    logger.info("transform array_push: %s[%s] now %d entries", target_key, group, len(target[group]))
     return result
 
 
@@ -623,7 +612,7 @@ def _transform_compare(step: dict, context: dict[str, str]) -> str:
 
 
 _TRANSFORM_OPERATIONS: dict[str, Callable[[dict, dict[str, str]], str]] = {
-    "array_append": _transform_array_append,
+    "array_push": _transform_array_push,
     "iqr_bounds": _transform_iqr_bounds,
     "json_path": _transform_json_path,
     "json_extract": _transform_json_path,

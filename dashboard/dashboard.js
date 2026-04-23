@@ -274,7 +274,7 @@ function categoryOptions(selected) {
 
 function transformOpOptions(selected) {
   return [
-    "array_append",
+    "array_push",
     "iqr_bounds",
     "json_path",
     "xml_extract",
@@ -503,17 +503,16 @@ function buildStepFormBody(step) {
       break;
 
     case "transform": {
-      const op = step.operation || "array_append";
+      const op = step.operation || "array_push";
       typeSpecific =
         field(
           "operation",
           `<select class="modal-select" id="sf-operation" onchange="onTransformOpChange()">${transformOpOptions(op)}</select>`,
         ) +
         sourceKey +
-        `<div id="sf-group-wrap">${field("group_by", textInput("sf-group-by", step.group_by, "z.B. model"))}</div>` +
-        `<div id="sf-value-key-wrap">${field("value_key", textInput("sf-value-key", step.value_key, "z.B. price"))}</div>` +
-        `<div id="sf-condition-wrap">${field("condition (boolean field name im source JSON)", textInput("sf-condition", step.condition, "z.B. relevant"))}</div>` +
-        `<div id="sf-max-items-wrap">${field("max_items", textInput("sf-max-items", step.max_items, "200"))}</div>` +
+        `<div id="sf-value-key-wrap">${field("value_key (Context-Key mit anzuhängendem Wert)", textInput("sf-value-key", step.value_key, "z.B. price_eur"))}</div>` +
+        `<div id="sf-group-key-wrap">${field("group_key (Context-Key mit Gruppenname)", textInput("sf-group-key", step.group_key, "z.B. extracted_model"))}</div>` +
+        `<div id="sf-max-items-wrap">${field("max_items", textInput("sf-max-items", step.max_items, "500"))}</div>` +
         targetKey +
         `<div id="sf-multiplier-wrap">${field("multiplier (für iqr_bounds)", textInput("sf-multiplier", step.multiplier, "1.5"))}</div>` +
         `<div id="sf-path-wrap">${field("path (für json_path, z.B. rates.USD)", textInput("sf-path", step.path, ""))}</div>` +
@@ -589,10 +588,9 @@ function onTransformOpChange() {
     const el = document.getElementById(id);
     if (el) el.style.display = visible ? "" : "none";
   };
-  show("sf-group-wrap", op === "array_append");
-  show("sf-value-key-wrap", op === "array_append");
-  show("sf-condition-wrap", op === "array_append");
-  show("sf-max-items-wrap", op === "array_append");
+  show("sf-value-key-wrap", op === "array_push");
+  show("sf-group-key-wrap", op === "array_push");
+  show("sf-max-items-wrap", op === "array_push");
   show("sf-multiplier-wrap", op === "iqr_bounds");
   show("sf-path-wrap", op === "json_path");
   show("sf-xpath-wrap", op === "xml_extract");
@@ -607,7 +605,7 @@ function onTransformOpChange() {
   show("sf-output-true-wrap", op === "compare");
   show("sf-output-false-wrap", op === "compare");
   show("sf-source-key", !["arithmetic", "compare"].includes(op));
-  show("sf-target-key", op === "array_append");
+  show("sf-target-key", op === "array_push");
 }
 
 function _val(id) {
@@ -725,15 +723,13 @@ function _readStepFromForm() {
       step.source_key = _val("sf-source-key") || "";
       break;
     case "transform": {
-      step.operation = _val("sf-operation") || "array_append";
+      step.operation = _val("sf-operation") || "array_push";
       step.source_key = _val("sf-source-key") || "";
       const tk = _val("sf-target-key");
       if (tk) step.target_key = tk;
-      if (step.operation === "array_append") {
-        step.group_by = _val("sf-group-by") || "";
+      if (step.operation === "array_push") {
         step.value_key = _val("sf-value-key") || "";
-        const cond = _val("sf-condition");
-        if (cond) step.condition = cond;
+        step.group_key = _val("sf-group-key") || "";
         const maxItems = _val("sf-max-items");
         if (maxItems) step.max_items = parseInt(maxItems);
       }
