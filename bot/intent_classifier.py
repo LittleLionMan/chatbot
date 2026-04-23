@@ -33,6 +33,7 @@ Intent-Kategorien:
 - "task_stop": User möchte eine wiederkehrende Aufgabe beenden.
 - "task_list": User möchte seine aktiven Aufgaben sehen.
 - "scraper_create": User möchte einen Scraper einrichten der eine externe Plattform kontinuierlich nach Listings durchsucht und einen Agenten bei neuen Funden triggert.
+- "monitor_create": User möchte einen RSS-Monitor einrichten der Feeds überwacht und einen Agenten bei neuen Artikeln triggert. Erkennungsmerkmale: "überwache", "feed", "rss", "reddit", "monitor", "beobachte news".
 - "none": Normale Unterhaltung, Frage, einmalige Anfrage ohne Zeitplan.
 
 Trennlinien:
@@ -59,7 +60,7 @@ Beispiele:
 _VALID_INTENTS = {
     "agent_system", "agent_create", "agent_trigger", "agent_talk",
     "task_create", "task_stop", "task_list", "agent_list",
-    "scraper_create", "none",
+    "scraper_create", "monitor_create", "none",
 }
 
 _TRIGGER_PAYLOAD_SYSTEM = """Extrahiere aus einer Nutzeranfrage den Agentennamen und alle relevanten Parameter als JSON.
@@ -96,18 +97,47 @@ Beispiele:
 "Generiere Linus' Pipeline neu" → {"agent_name": "Linus", "talk_type": "regenerate_pipeline"}
 "Benenne Scout in Hermes um" → {"agent_name": "Scout", "talk_type": "rename"}"""
 
-_MONITOR_CREATE_SYSTEM = """Extrahiere aus einer Nutzeranfrage die Parameter für einen neuen Monitor-Service.
+_MONITOR_CREATE_SYSTEM = """Extrahiere aus einer Nutzeranfrage die Parameter für einen neuen RSS-Monitor.
 
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
-Felder:
-- "monitor_type": Typ des Monitors. Aktuell verfügbar: "rss"
-- "source_agent": Name des Agents dessen State als Watchlist genutzt wird
-- "source_state_key": State-Key der die zu überwachenden Items enthält
-- "source_format": Format des State-Werts. Werte: "pipe_delimited_overview", "comma_list", "pipe_name_map"
-- "target_agent": Name des Agents der getriggert werden soll
-- "name": Beschreibender Name für diesen Monitor
-- "poll_interval_seconds": Polling-Intervall in Sekunden (Standard: 900)"""
+Zwei Modi:
+
+1. "static" — überwacht feste RSS-Feed-URLs direkt:
+{
+  "monitor_type": "rss",
+  "source": "static",
+  "name": "Beschreibender Name",
+  "target_agent": "Name des Agents der getriggert werden soll",
+  "feed_urls": ["https://...", "https://..."],
+  "keywords": ["Keyword1", "Keyword2"],
+  "poll_interval_seconds": 3600
+}
+keywords: optionale Filterliste — nur Artikel die mind. ein Keyword in Titel oder Text enthalten triggern den Agent. Leer = alle Artikel.
+
+2. "agent" — generiert Feed-URLs dynamisch aus einer Watchlist im State eines anderen Agents:
+{
+  "monitor_type": "rss",
+  "source": "agent",
+  "name": "Beschreibender Name",
+  "source_agent": "Name des Agents dessen State als Watchlist genutzt wird",
+  "source_state_key": "State-Key der die Watchlist enthält",
+  "source_format": "comma_list|pipe_delimited_overview|pipe_name_map",
+  "target_agent": "Name des Agents der getriggert werden soll",
+  "feed_templates": ["https://news.google.com/rss/search?q={query}"],
+  "keywords": [],
+  "poll_interval_seconds": 900
+}
+
+Erkennungsmerkmale für static: explizite Feed-URLs genannt, oder Suchwörter/Subbedits ohne Agenten-Watchlist.
+Erkennungsmerkmale für agent: Watchlist aus einem anderen Agent, dynamische Suche basierend auf Liste.
+
+Beispiele:
+"Beobachte [Thema] und triggere [Agent] wenn neue Artikel erscheinen" →
+{"monitor_type": "rss", "source": "static", "name": "...", "target_agent": "...", "feed_urls": ["https://..."], "keywords": ["..."], "poll_interval_seconds": 3600}
+
+"Überwache News zu den Einträgen in [Agent]s Liste und triggere ihn" →
+{"monitor_type": "rss", "source": "agent", "name": "...", "source_agent": "...", "source_state_key": "...", "source_format": "comma_list", "target_agent": "...", "feed_templates": ["https://...search?q={query}"], "keywords": [], "poll_interval_seconds": 900}"""
 
 _SCRAPER_CREATE_SYSTEM = """Extrahiere aus einer Nutzeranfrage die Parameter für einen neuen Scraper-Config.
 

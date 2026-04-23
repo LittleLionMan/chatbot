@@ -482,6 +482,83 @@ async def _handle_scraper_intent(
     )
 
 
+async def _handle_monitor_intent(
+    update: Update,
+    pool: asyncpg.Pool,
+    text: str,
+    user_id: int,
+) -> None:
+    message = update.effective_message
+    extracted = await intent_classifier.extract_monitor_create_params(text, pool)
+
+    if not extracted or not extracted.get("target_agent"):
+        await message.reply_text(
+            "Ich konnte die Monitor-Parameter nicht vollständig erkennen. "
+            "Beschreib welcher Agent getriggert werden soll und was überwacht werden soll."
+        )
+        return
+
+    source: str = extracted.get("source", "agent")
+    monitor_type: str = extracted.get("monitor_type", "rss")
+    name: str = extracted.get("name", f"Monitor für {extracted['target_agent']}")
+    target_agent: str = extracted["target_agent"]
+    keywords: list[str] = extracted.get("keywords", [])
+    poll_interval: int = extracted.get("poll_interval_seconds", 3600)
+
+    if source == "static":
+        feed_urls: list[str] = extracted.get("feed_urls", [])
+        if not feed_urls:
+            await message.reply_text("Keine Feed-URLs erkannt. Bitte gib mindestens eine RSS-URL an.")
+            return
+        monitor_id = await memory.create_monitor_config(
+            pool,
+            monitor_type=monitor_type,
+            name=name,
+            source="static",
+            target_agent=target_agent,
+            feed_templates=feed_urls,
+            poll_interval_seconds=poll_interval,
+            keywords=keywords,
+        )
+        feeds_display = ", ".join(feed_urls)
+        kw_display = f" · Keywords: {', '.join(keywords)}" if keywords else ""
+        await message.reply_text(
+            f"RSS-Monitor eingerichtet (ID: {monitor_id}): überwacht {feeds_display}{kw_display} "
+            f"und triggert {target_agent} bei neuen Artikeln."
+        )
+
+    else:
+        source_agent: str = extracted.get("source_agent", "")
+        source_state_key: str = extracted.get("source_state_key", "")
+        source_format: str = extracted.get("source_format", "comma_list")
+        feed_templates: list[str] = extracted.get("feed_templates", [
+            "https://news.google.com/rss/search?q={query}&hl=de&gl=DE&ceid=DE:de",
+        ])
+        if not source_agent or not source_state_key:
+            await message.reply_text(
+                "Für einen Agent-basierten Monitor brauche ich den Namen des Quell-Agents "
+                "und den State-Key der Watchlist."
+            )
+            return
+        monitor_id = await memory.create_monitor_config(
+            pool,
+            monitor_type=monitor_type,
+            name=name,
+            source="agent",
+            target_agent=target_agent,
+            feed_templates=feed_templates,
+            poll_interval_seconds=poll_interval,
+            source_agent=source_agent,
+            source_state_key=source_state_key,
+            source_format=source_format,
+            keywords=keywords,
+        )
+        await message.reply_text(
+            f"RSS-Monitor eingerichtet (ID: {monitor_id}): überwacht {source_agent}/{source_state_key} "
+            f"und triggert {target_agent} bei neuen Artikeln."
+        )
+
+
 async def _handle_chat(
     update: Update,
     pool: asyncpg.Pool,
@@ -614,6 +691,10 @@ async def _reply(
 
     if intent == "scraper_create":
         await _handle_scraper_intent(update, pool, text, user.id)
+        return
+
+    if intent == "monitor_create":
+        await _handle_monitor_intent(update, pool, text, user.id)
         return
 
     await _handle_chat(

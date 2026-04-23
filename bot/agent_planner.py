@@ -63,6 +63,7 @@ _RSS_MONITOR_PAYLOAD_SCHEMA = {
     "since_date": "str — Datum der letzten Analyse dieses Items",
 }
 
+
 _PLAN_SYSTEM = f"""Du bist Bob. Du planst ein Agent-System für einen User.
 
 Dir wird der bisherige Gesprächsverlauf übergeben — der ursprüngliche Prompt des Users und alle bisherigen Klärungsrunden.
@@ -94,7 +95,7 @@ Mögliche Status-Werte:
 2. Du hast genug und präsentierst einen Plan:
 {{
   "status": "ready",
-  "description": "Menschenlesbare Zusammenfassung in Bobs Stimme. Beschreibe jeden Agent mit Name, Aufgabe und Zeitplan/Trigger. Benenne explizit welcher Agent wessen Daten liest. Nenne Annahmen die du getroffen hast. Schließe mit: Passt das so, oder soll ich etwas anpassen?",
+  "description": "Menschenlesbare Zusammenfassung in Bobs Stimme. Beschreibe jeden Agent mit Name, Aufgabe und Zeitplan/Trigger. Benenne explizit welcher Agent wessen Daten liest. Nenne Annahmen die du getroffen hast. Wenn RSS-Monitore geplant sind, nenne konkret welche Feeds du vorschlägst und warum — der User weiß oft nicht welche Feeds existieren. Schließe mit: Passt das so, oder soll ich etwas anpassen?",
   "agents": [
     {{
       "name": "thematisch passender menschlicher Name",
@@ -122,6 +123,12 @@ Regeln für den Plan:
 - missing_capabilities nur wenn eine Teilaufgabe wirklich nicht mit verfügbaren Bausteinen abbildbar ist
 - Strukturierte Daten von bekannten APIs oder Feeds → http_fetch + transform, kein LLM-Call nötig
 - Scraper-Trigger-Payload ist bekannt — frage nicht danach wenn der User Scraper erwähnt
+
+Regeln für RSS-Monitore:
+- Wenn ein Agent kontinuierlich auf neue externe Inhalte reagieren soll (News, Artikel, Releases, Posts) → RSS-Monitor vorschlagen
+- Nenne konkrete Feed-URLs aus deinem Wissen — der User weiß oft nicht welche Feeds existieren
+- Wenn Keywords sinnvoll sind um irrelevante Artikel herauszufiltern → im Plan nennen
+- Frage den User ob die vorgeschlagenen Feeds passen oder ob er andere bevorzugt
 """
 
 
