@@ -870,10 +870,13 @@ async function saveNewStep(agentId) {
     return;
   }
   const posRaw = _val("sf-position");
-  const pos = posRaw !== "" && posRaw !== undefined ? parseInt(posRaw) : null;
+  const pos =
+    posRaw !== "" && posRaw !== null && posRaw !== undefined
+      ? parseInt(posRaw, 10)
+      : null;
   const a = agentsData.find((x) => x.id === agentId);
   const steps = [...(a.steps || [])];
-  if (pos === null || pos >= steps.length) steps.push(step);
+  if (pos === null || isNaN(pos) || pos >= steps.length) steps.push(step);
   else steps.splice(pos, 0, step);
   try {
     await api("/api/agents/" + agentId, {
