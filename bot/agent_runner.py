@@ -1055,18 +1055,22 @@ async def execute_agent(
         else:
             logger.info("agent %s: no change or notify suppressed", name)
 
-        tz = await memory.get_user_timezone(pool, user_id)
-        next_run = next_agent_run_after(schedule, tz)
-        await memory.update_agent_run(pool, agent_id, next_run)
-        logger.info("agent %d done. next run: %s", agent_id, next_run.isoformat())
+        if schedule:
+            tz = await memory.get_user_timezone(pool, user_id)
+            next_run = next_agent_run_after(schedule, tz)
+            await memory.update_agent_run(pool, agent_id, next_run)
+            logger.info("agent %d done. next run: %s", agent_id, next_run.isoformat())
+        else:
+            logger.info("agent %d done. trigger-only, no next run.", agent_id)
 
     except ProviderRateLimitError as e:
         logger.error("agent %d rate limit on %s", agent_id, e.provider)
     except Exception as e:
         logger.error("agent %d execution failed: %s", agent_id, e)
         try:
-            tz = await memory.get_user_timezone(pool, user_id)
-            next_run = next_agent_run_after(schedule, tz)
-            await memory.update_agent_run(pool, agent_id, next_run)
+            if schedule:
+                tz = await memory.get_user_timezone(pool, user_id)
+                next_run = next_agent_run_after(schedule, tz)
+                await memory.update_agent_run(pool, agent_id, next_run)
         except Exception as inner_e:
             logger.error("agent %d failed to update next_run: %s", agent_id, inner_e)
