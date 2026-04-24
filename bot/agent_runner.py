@@ -197,7 +197,7 @@ async def _handle_llm_step(
         caller=f"agent_{step_type}:{name}",
         pool=pool,
     )
-    logger.info("agent %s step %r (%s): %d chars", name, step["id"], step_type, len(result))
+    logger.info("agent %s step %r (%s): %d chars → %s", name, step["id"], step_type, len(result), result[:120])
     return result
 
 
