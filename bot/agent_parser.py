@@ -211,6 +211,7 @@ STRUKTURREGELN:
 - LLM-Prompts für llm_extract/llm_decide enden mit "Antworte NUR mit rohem JSON: {Felder}"
 - Jeder Step der Daten eines anderen Steps braucht — {{output_key}} als Template-Variable im prompt
 - only_if_route weglassen wenn der Step auf allen Routen läuft
+- only_if_key: {"key": "context_key", "value": "wert"} — Step läuft nur wenn Context-Key den Wert hat. Dot-Notation möglich. Nützlich um LLM-Steps deterministisch zu überspringen wenn ein vorheriger compare-Step false ergeben hat (z.B. only_if_key: {"key": "is_bargain", "value": "true"})
 - Keine Steps erfinden die nicht in der Klassifikation stehen
 - Dot-Notation für verschachtelte Felder: wenn ein LLM-Step {"merged_list": [...], "new_models": [...]} zurückgibt mit output_key "merge_result", kann ein nachfolgender Step source_key "merge_result.merged_list" oder condition_key "merge_result.new_models" verwenden — kein extra Transform-Step nötig"""
 

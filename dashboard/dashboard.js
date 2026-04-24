@@ -310,11 +310,15 @@ function buildStepFormBody(step) {
   const onlyIfRoute = Array.isArray(step.only_if_route)
     ? step.only_if_route.join(", ")
     : step.only_if_route || "";
+  const onlyIfKeyKey = step.only_if_key?.key || "";
+  const onlyIfKeyVal = step.only_if_key?.value ?? "";
 
   const commonTop = `
     ${field("ID", textInput("sf-id", step.id, "z.B. extract_gpu"))}
     ${field("Type", `<select class="modal-select" id="sf-type" onchange="onStepTypeChange()">${stepTypeOptions(type)}</select>`)}
     ${field("only_if_route (leer = immer, mehrere mit Komma)", textInput("sf-route", onlyIfRoute, "z.B. new_listing"))}
+    ${field("only_if_key.key (Context-Key als Bedingung, Dot-Notation möglich)", textInput("sf-only-if-key", onlyIfKeyKey, "z.B. is_bargain"))}
+    ${field("only_if_key.value (erwarteter Wert)", textInput("sf-only-if-val", onlyIfKeyVal, "z.B. true"))}
   `;
 
   const commonBottom = `
@@ -632,8 +636,13 @@ function _readStepFromForm() {
     onlyIfRoute = parts.length === 1 ? parts[0] : parts;
   }
 
+  const onlyIfKeyKey = _val("sf-only-if-key") || "";
+  const onlyIfKeyVal = _val("sf-only-if-val") ?? "";
+
   const step = { id, type };
   if (onlyIfRoute !== undefined) step.only_if_route = onlyIfRoute;
+  if (onlyIfKeyKey)
+    step.only_if_key = { key: onlyIfKeyKey, value: onlyIfKeyVal };
   if (_val("sf-output")) step.is_output = true;
 
   const outputKey = _val("sf-output-key");

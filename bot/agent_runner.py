@@ -28,8 +28,13 @@ def _build_relay_system(agent_name: str) -> str:
 
 
 def _resolve_template(template: str, context: dict[str, str]) -> str:
+    import re
     for k, v in context.items():
         template = template.replace(f"{{{{{k}}}}}", v)
+    for match in re.findall(r"\{\{([^}]+)\}\}", template):
+        if "." in match:
+            resolved = _get(context, match)
+            template = template.replace(f"{{{{{match}}}}}", resolved)
     return template
 
 
@@ -839,6 +844,16 @@ def _route_allows(step: dict, active_route: str | None) -> bool:
     return active_route in allowed
 
 
+def _key_condition_allows(step: dict, context: dict[str, str]) -> bool:
+    only_if_key = step.get("only_if_key")
+    if only_if_key is None:
+        return True
+    key: str = only_if_key.get("key", "")
+    expected: str = str(only_if_key.get("value", "true"))
+    actual = _get(context, key)
+    return actual == expected
+
+
 async def _execute_pipeline(
     pool: asyncpg.Pool,
     bot: telegram.Bot,
@@ -878,6 +893,12 @@ async def _execute_pipeline(
 
         if not _route_allows(step, active_route):
             logger.info("agent %s step %r skipped (route=%s)", name, step_id, active_route)
+            continue
+
+        if not _key_condition_allows(step, context):
+            only_if_key = step.get("only_if_key", {})
+            logger.info("agent %s step %r skipped (key condition: %s != %s)",
+                       name, step_id, only_if_key.get("key"), only_if_key.get("value"))
             continue
 
         handler = _STEP_HANDLERS.get(step_type)
