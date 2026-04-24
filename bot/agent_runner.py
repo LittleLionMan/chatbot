@@ -34,8 +34,10 @@ def _resolve_template(template: str, context: dict[str, str]) -> str:
 
 
 def _get(context: dict[str, str], key: str, default: str = "") -> str:
+    if key in context:
+        return context[key]
     if "." not in key:
-        return context.get(key, default)
+        return default
     parts = key.split(".", 1)
     raw = context.get(parts[0], "")
     if not raw:
@@ -865,7 +867,7 @@ async def _execute_pipeline(
         name=name,
         state=state,
         agent_system=agent_system,
-        target_chat_id=0,
+        target_chat_id=target_chat_id,
     )
 
     for step in steps:
