@@ -848,6 +848,7 @@ async def _execute_pipeline(
     state: dict[str, str],
     trigger_payload: dict[str, str],
     config_data: dict,
+    target_chat_id: int = 0,
 ) -> tuple[str, bool]:
     context: dict[str, str] = {}
     context.update({k: v for k, v in state.items() if v})
@@ -1006,6 +1007,7 @@ async def execute_agent(
             state=state,
             trigger_payload=flat_payload,
             config_data=config_data,
+            target_chat_id=target_chat_id,
         )
 
         if has_output_step:
