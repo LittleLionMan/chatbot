@@ -57,6 +57,8 @@ def _get(context: dict[str, str], key: str, default: str = "") -> str:
                 return default
         if result is None:
             return default
+        if isinstance(result, bool):
+            return "true" if result else "false"
         return json.dumps(result) if isinstance(result, (dict, list)) else str(result)
     except Exception:
         return default
