@@ -108,31 +108,20 @@ async def get_capabilities() -> list[str]:
     rows = await pool().fetch(
         "SELECT DISTINCT unnest(capabilities) as cap FROM model_registry ORDER BY cap"
     )
-    caps = [r["cap"] for r in rows]
-    return caps
+    return [r["cap"] for r in rows]
 
 
 @app.get("/api/step-types")
 async def get_step_types() -> list[str]:
     return [
-        "router_match",
-        "router_llm",
-        "llm_extract",
-        "llm_decide",
-        "llm_summarize",
-        "web_search",
-        "finance",
-        "state_read",
-        "state_write",
-        "state_read_external",
-        "state_write_external",
-        "data_read",
-        "data_write",
-        "data_read_external",
-        "data_write_external",
-        "transform",
-        "trigger_agent",
-        "notify_user",
+        "router_match", "router_llm",
+        "llm_extract", "llm_decide", "llm_summarize",
+        "web_search", "finance",
+        "state_read", "state_write",
+        "state_read_external", "state_write_external",
+        "data_read", "data_write",
+        "data_read_external", "data_write_external",
+        "transform", "trigger_agent", "notify_user",
     ]
 
 
@@ -251,7 +240,7 @@ async def get_agent_memories(agent_id: int) -> list[dict]:
     rows = await pool().fetch(
         """
         SELECT id, content, created_at FROM memories
-        WHERE subject_type = 'agent' AND subject_id = $1
+        WHERE subject_type = 'agent' AND subject_id = $1 AND memory_type = 'fact'
         ORDER BY created_at DESC LIMIT 50
         """,
         agent_id,
@@ -262,7 +251,10 @@ async def get_agent_memories(agent_id: int) -> list[dict]:
 @app.post("/api/agents/{agent_id}/memories")
 async def add_agent_memory(agent_id: int, body: MemoryBody) -> dict:
     await pool().execute(
-        "INSERT INTO memories (subject_type, subject_id, content) VALUES ('agent', $1, $2)",
+        """
+        INSERT INTO memories (subject_type, subject_id, content, memory_type)
+        VALUES ('agent', $1, $2, 'fact')
+        """,
         agent_id, body.content,
     )
     return {"ok": True}
@@ -271,7 +263,10 @@ async def add_agent_memory(agent_id: int, body: MemoryBody) -> dict:
 @app.patch("/api/agents/{agent_id}/memories")
 async def patch_agent_memory(agent_id: int, body: MemoryPatch) -> dict:
     await pool().execute(
-        "UPDATE memories SET content = $1 WHERE subject_type = 'agent' AND subject_id = $2 AND content = $3",
+        """
+        UPDATE memories SET content = $1
+        WHERE subject_type = 'agent' AND subject_id = $2 AND content = $3 AND memory_type = 'fact'
+        """,
         body.new_content, agent_id, body.old_content,
     )
     return {"ok": True}
@@ -280,7 +275,10 @@ async def patch_agent_memory(agent_id: int, body: MemoryPatch) -> dict:
 @app.delete("/api/agents/{agent_id}/memories")
 async def delete_agent_memory(agent_id: int, body: MemoryBody) -> dict:
     await pool().execute(
-        "DELETE FROM memories WHERE subject_type = 'agent' AND subject_id = $1 AND content = $2",
+        """
+        DELETE FROM memories
+        WHERE subject_type = 'agent' AND subject_id = $1 AND content = $2 AND memory_type = 'fact'
+        """,
         agent_id, body.content,
     )
     return {"ok": True}
@@ -352,7 +350,7 @@ async def get_user_memories(user_id: int) -> list[dict]:
     rows = await pool().fetch(
         """
         SELECT id, subject_type, content, created_at FROM memories
-        WHERE subject_type IN ('user', 'reflection') AND subject_id = $1
+        WHERE subject_type IN ('user', 'reflection') AND subject_id = $1 AND memory_type = 'fact'
         ORDER BY created_at DESC LIMIT 100
         """,
         user_id,
@@ -363,7 +361,10 @@ async def get_user_memories(user_id: int) -> list[dict]:
 @app.post("/api/users/{user_id}/memories")
 async def add_user_memory(user_id: int, body: MemoryBody) -> dict:
     await pool().execute(
-        "INSERT INTO memories (subject_type, subject_id, content) VALUES ($1, $2, $3)",
+        """
+        INSERT INTO memories (subject_type, subject_id, content, memory_type)
+        VALUES ($1, $2, $3, 'fact')
+        """,
         body.subject_type, user_id, body.content,
     )
     return {"ok": True}
@@ -372,7 +373,10 @@ async def add_user_memory(user_id: int, body: MemoryBody) -> dict:
 @app.patch("/api/users/{user_id}/memories")
 async def patch_user_memory(user_id: int, body: MemoryPatch) -> dict:
     await pool().execute(
-        "UPDATE memories SET content = $1 WHERE subject_type = $2 AND subject_id = $3 AND content = $4",
+        """
+        UPDATE memories SET content = $1
+        WHERE subject_type = $2 AND subject_id = $3 AND content = $4 AND memory_type = 'fact'
+        """,
         body.new_content, body.subject_type, user_id, body.old_content,
     )
     return {"ok": True}
@@ -381,7 +385,10 @@ async def patch_user_memory(user_id: int, body: MemoryPatch) -> dict:
 @app.delete("/api/users/{user_id}/memories")
 async def delete_user_memory(user_id: int, body: MemoryBody) -> dict:
     await pool().execute(
-        "DELETE FROM memories WHERE subject_type = $1 AND subject_id = $2 AND content = $3",
+        """
+        DELETE FROM memories
+        WHERE subject_type = $1 AND subject_id = $2 AND content = $3 AND memory_type = 'fact'
+        """,
         body.subject_type, user_id, body.content,
     )
     return {"ok": True}
@@ -407,7 +414,7 @@ async def get_group_memories(group_id: int) -> list[dict]:
     rows = await pool().fetch(
         """
         SELECT id, subject_type, content, created_at FROM memories
-        WHERE subject_type IN ('group', 'bot', 'reflection') AND subject_id = $1
+        WHERE subject_type IN ('group', 'bot', 'reflection') AND subject_id = $1 AND memory_type = 'fact'
         ORDER BY created_at DESC LIMIT 100
         """,
         group_id,
@@ -418,7 +425,10 @@ async def get_group_memories(group_id: int) -> list[dict]:
 @app.post("/api/groups/{group_id}/memories")
 async def add_group_memory(group_id: int, body: MemoryBody) -> dict:
     await pool().execute(
-        "INSERT INTO memories (subject_type, subject_id, content) VALUES ($1, $2, $3)",
+        """
+        INSERT INTO memories (subject_type, subject_id, content, memory_type)
+        VALUES ($1, $2, $3, 'fact')
+        """,
         body.subject_type, group_id, body.content,
     )
     return {"ok": True}
@@ -427,7 +437,10 @@ async def add_group_memory(group_id: int, body: MemoryBody) -> dict:
 @app.patch("/api/groups/{group_id}/memories")
 async def patch_group_memory(group_id: int, body: MemoryPatch) -> dict:
     await pool().execute(
-        "UPDATE memories SET content = $1 WHERE subject_type = $2 AND subject_id = $3 AND content = $4",
+        """
+        UPDATE memories SET content = $1
+        WHERE subject_type = $2 AND subject_id = $3 AND content = $4 AND memory_type = 'fact'
+        """,
         body.new_content, body.subject_type, group_id, body.old_content,
     )
     return {"ok": True}
@@ -436,8 +449,48 @@ async def patch_group_memory(group_id: int, body: MemoryPatch) -> dict:
 @app.delete("/api/groups/{group_id}/memories")
 async def delete_group_memory(group_id: int, body: MemoryBody) -> dict:
     await pool().execute(
-        "DELETE FROM memories WHERE subject_type = $1 AND subject_id = $2 AND content = $3",
+        """
+        DELETE FROM memories
+        WHERE subject_type = $1 AND subject_id = $2 AND content = $3 AND memory_type = 'fact'
+        """,
         body.subject_type, group_id, body.content,
+    )
+    return {"ok": True}
+
+
+@app.get("/api/chats/{chat_id}/observations")
+async def get_chat_observations(chat_id: int) -> list[dict]:
+    rows = await pool().fetch(
+        """
+        SELECT id, content, priority, observed_at, is_compressed, created_at
+        FROM memories
+        WHERE subject_type = 'chat' AND subject_id = $1 AND memory_type = 'observation'
+        ORDER BY observed_at DESC
+        LIMIT 50
+        """,
+        chat_id,
+    )
+    return [
+        {
+            "id": r["id"],
+            "content": r["content"],
+            "priority": r["priority"],
+            "observed_at": r["observed_at"].isoformat() if r["observed_at"] else None,
+            "is_compressed": r["is_compressed"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
+
+
+@app.delete("/api/chats/{chat_id}/observations/{observation_id}")
+async def delete_observation(chat_id: int, observation_id: int) -> dict:
+    await pool().execute(
+        """
+        DELETE FROM memories
+        WHERE id = $1 AND subject_type = 'chat' AND subject_id = $2 AND memory_type = 'observation'
+        """,
+        observation_id, chat_id,
     )
     return {"ok": True}
 
