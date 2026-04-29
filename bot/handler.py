@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 from bot import (
     brain, memory, decider, config, ratelimit, extractor,
     greeter, voice, task_parser, agent_parser, agent_runner,
-    intent_classifier, agent_system_parser, agent_planner,
+    intent_classifier, agent_system_parser, agent_planner, observer,
 )
 from bot.brain import ProviderRateLimitError, ProviderAuthError
 from bot.models import CAPABILITY_CHAT, CAPABILITY_MULTIMODAL
@@ -591,11 +591,13 @@ async def _handle_chat(
     group_memories = await memory.get_memories(pool, "group", chat_id) if is_group else []
     bot_memories = await memory.get_memories(pool, "bot", chat_id) if is_group else []
     reflection_memories = await memory.get_reflection_memories(pool, chat_id, user_id)
+    observation_context = await observer.get_observation_context(pool, chat_id)
     history = await memory.get_recent_messages(pool, chat_id)
 
     system = brain.build_system_prompt(
         user_memories, group_memories, bot_memories, reflection_memories,
         display, group_title, active_agents=active_agents,
+        observation_context=observation_context or None,
     )
     llm_messages = brain.history_to_llm_messages(history)
     quoted = _quoted_text(message)

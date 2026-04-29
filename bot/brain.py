@@ -327,8 +327,11 @@ def build_system_prompt(
     user_display_name: str,
     group_title: str | None,
     active_agents: list[dict] | None = None,
+    observation_context: str | None = None,
 ) -> str:
     parts = [SOUL]
+    if observation_context:
+        parts.append(f"\n## Gesprächsgedächtnis\n{observation_context}")
     if memories_user:
         joined = "\n- ".join(memories_user)
         parts.append(f"\n## Was du über {user_display_name} weißt\n- {joined}")

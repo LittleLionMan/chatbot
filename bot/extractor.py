@@ -80,12 +80,17 @@ async def _store_if_new(pool: asyncpg.Pool, subject_type: str, subject_id: int, 
             continue
         if sanitized.lower() in existing_lower:
             continue
-        await memory.add_memory(pool, subject_type, subject_id, sanitized)
+        await memory.add_memory(pool, subject_type, subject_id, sanitized, memory_type="fact")
         logger.info("Memory stored [%s/%d]: %s", subject_type, subject_id, sanitized)
 
 
 async def _extract_via_llm(system: str, content: str) -> list[str]:
-    raw = await brain.chat(system=system, messages=[{"role": "user", "content": content}], max_tokens=256, capability=CAPABILITY_SIMPLE_TASKS,)
+    raw = await brain.chat(
+        system=system,
+        messages=[{"role": "user", "content": content}],
+        max_tokens=256,
+        capability=CAPABILITY_SIMPLE_TASKS,
+    )
     parsed = json.loads(clean_llm_json(raw))
     if not isinstance(parsed, list):
         return []
@@ -149,7 +154,10 @@ async def extract_and_store_reflection(
             if sanitized is None:
                 continue
             subject_id = user_id if target == "user" else group_id
-            await _store_if_new(pool, "reflection", subject_id, sanitized)
+            existing = await memory.get_memories(pool, "reflection", subject_id, limit=50)
+            if sanitized.lower() in {e.lower() for e in existing}:
+                continue
+            await memory.add_memory(pool, "reflection", subject_id, sanitized, memory_type="fact")
             logger.info("Reflection stored [%s/%d]: %s", target, subject_id, sanitized)
     except Exception as e:
         logger.warning("Reflection extraction failed: %s", e)
@@ -183,7 +191,7 @@ async def handle_explicit_memory(
         existing = await memory.get_memories(pool, "user", user_id, limit=50)
         if user_fact.lower() in {e.lower() for e in existing}:
             return "Weiß ich schon."
-        await memory.add_memory(pool, "user", user_id, user_fact)
+        await memory.add_memory(pool, "user", user_id, user_fact, memory_type="fact")
         return "Gemerkt."
 
     if group_id is not None:
@@ -192,7 +200,7 @@ async def handle_explicit_memory(
             existing = await memory.get_memories(pool, "bot", group_id, limit=50)
             if bot_fact.lower() in {e.lower() for e in existing}:
                 return "Weiß ich schon."
-            await memory.add_memory(pool, "bot", group_id, bot_fact)
+            await memory.add_memory(pool, "bot", group_id, bot_fact, memory_type="fact")
             return "Gemerkt."
 
     return None

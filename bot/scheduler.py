@@ -4,7 +4,7 @@ import json
 import logging
 import asyncpg
 import telegram
-from bot import config, memory, brain, extractor, ratelimit, task_runner, agent_runner
+from bot import config, memory, brain, extractor, ratelimit, task_runner, agent_runner, observer
 from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT
 from bot.utils import clean_llm_json
 
@@ -86,7 +86,7 @@ async def _extract_reflections_for_session(
             existing = await memory.get_memories(pool, "reflection", group_id, limit=50)
             if sanitized.lower() in {e.lower() for e in existing}:
                 continue
-            await memory.add_memory(pool, "reflection", group_id, sanitized)
+            await memory.add_memory(pool, "reflection", group_id, sanitized, memory_type="fact")
             logger.info("Session reflection stored [group/%d]: %s", group_id, sanitized)
             stored.append(sanitized)
         return stored
@@ -172,11 +172,36 @@ async def _run_trigger_queue(
         logger.error("Trigger queue processing failed: %s", e)
 
 
+async def _run_observer_cycle(pool: asyncpg.Pool) -> None:
+    try:
+        rows = await pool.fetch("SELECT telegram_id FROM groups")
+        group_ids = [r["telegram_id"] for r in rows]
+
+        dm_rows = await pool.fetch(
+            "SELECT DISTINCT chat_id FROM messages WHERE chat_id > 0"
+        )
+        dm_ids = [r["chat_id"] for r in dm_rows if r["chat_id"] not in {g for g in group_ids}]
+
+        all_chat_ids = group_ids + dm_ids
+
+        for chat_id in all_chat_ids:
+            try:
+                compressed = await observer.run_observer(pool, chat_id)
+                if compressed:
+                    await observer.run_reflector(pool, chat_id)
+            except Exception as e:
+                logger.warning("observer/reflector failed for chat %d: %s", chat_id, e)
+    except Exception as e:
+        logger.error("Observer cycle failed: %s", e)
+
+
 async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
     logger.info("Scheduler started. Interval: %ds, Session timeout: %ds",
                 config.BOT_SCHEDULER_INTERVAL_SECONDS, config.BOT_SESSION_TIMEOUT_SECONDS)
+
     while True:
         await asyncio.sleep(config.BOT_SCHEDULER_INTERVAL_SECONDS)
+
         try:
             group_ids = await memory.get_sessions_due_for_extraction(
                 pool, config.BOT_SESSION_TIMEOUT_SECONDS
@@ -211,3 +236,11 @@ async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
                 logger.info("Scheduler trigger queue skipped: rate limited.")
         except Exception as e:
             logger.error("Scheduler trigger queue cycle failed: %s", e)
+
+        try:
+            if not ratelimit.is_rate_limited():
+                await _run_observer_cycle(pool)
+            else:
+                logger.info("Scheduler observer cycle skipped: rate limited.")
+        except Exception as e:
+            logger.error("Scheduler observer cycle failed: %s", e)

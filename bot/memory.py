@@ -76,10 +76,42 @@ async def get_recent_messages(pool: asyncpg.Pool, chat_id: int, limit: int = 20)
     return [dict(r) for r in reversed(rows)]
 
 
-async def add_memory(pool: asyncpg.Pool, subject_type: str, subject_id: int, content: str) -> None:
+async def count_unobserved_messages(pool: asyncpg.Pool, chat_id: int, since: datetime) -> int:
+    row = await pool.fetchrow(
+        "SELECT COUNT(*) FROM messages WHERE chat_id = $1 AND created_at > $2",
+        chat_id, since,
+    )
+    return row["count"] if row else 0
+
+
+async def get_messages_since(pool: asyncpg.Pool, chat_id: int, since: datetime) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT role, content, user_id, created_at
+        FROM messages
+        WHERE chat_id = $1 AND created_at > $2
+        ORDER BY created_at ASC
+        """,
+        chat_id, since,
+    )
+    return [dict(r) for r in rows]
+
+
+async def add_memory(
+    pool: asyncpg.Pool,
+    subject_type: str,
+    subject_id: int,
+    content: str,
+    memory_type: str = "fact",
+    priority: str | None = None,
+    observed_at: datetime | None = None,
+) -> None:
     await pool.execute(
-        "INSERT INTO memories (subject_type, subject_id, content) VALUES ($1, $2, $3)",
-        subject_type, subject_id, content,
+        """
+        INSERT INTO memories (subject_type, subject_id, memory_type, priority, observed_at, content)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        """,
+        subject_type, subject_id, memory_type, priority, observed_at, content,
     )
 
 
@@ -87,13 +119,50 @@ async def get_memories(pool: asyncpg.Pool, subject_type: str, subject_id: int, l
     rows = await pool.fetch(
         """
         SELECT content FROM memories
-        WHERE subject_type = $1 AND subject_id = $2
+        WHERE subject_type = $1 AND subject_id = $2 AND memory_type = 'fact'
         ORDER BY created_at DESC
         LIMIT $3
         """,
         subject_type, subject_id, limit,
     )
     return [r["content"] for r in rows]
+
+
+async def get_observations(pool: asyncpg.Pool, subject_id: int, limit: int = 40) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT content, priority, observed_at, is_compressed
+        FROM memories
+        WHERE subject_type = 'chat' AND subject_id = $1 AND memory_type = 'observation'
+        ORDER BY observed_at DESC
+        LIMIT $2
+        """,
+        subject_id, limit,
+    )
+    return [dict(r) for r in rows]
+
+
+async def count_observations(pool: asyncpg.Pool, subject_id: int) -> int:
+    row = await pool.fetchrow(
+        """
+        SELECT COUNT(*) FROM memories
+        WHERE subject_type = 'chat' AND subject_id = $1 AND memory_type = 'observation'
+        AND is_compressed = FALSE
+        """,
+        subject_id,
+    )
+    return row["count"] if row else 0
+
+
+async def mark_observations_compressed(pool: asyncpg.Pool, subject_id: int) -> None:
+    await pool.execute(
+        """
+        UPDATE memories SET is_compressed = TRUE
+        WHERE subject_type = 'chat' AND subject_id = $1
+        AND memory_type = 'observation' AND is_compressed = FALSE
+        """,
+        subject_id,
+    )
 
 
 async def get_reflection_memories(
@@ -105,7 +174,7 @@ async def get_reflection_memories(
     rows = await pool.fetch(
         """
         SELECT content FROM memories
-        WHERE subject_type = 'reflection'
+        WHERE memory_type = 'fact' AND subject_type = 'reflection'
           AND subject_id IN ($1, $2)
         ORDER BY created_at DESC
         LIMIT $3
@@ -181,6 +250,21 @@ async def get_last_extracted_at(pool: asyncpg.Pool, group_id: int) -> datetime:
     if not row:
         return datetime.min
     return row["last_extracted_at"].replace(tzinfo=None)
+
+
+async def get_last_observed_at(pool: asyncpg.Pool, chat_id: int) -> datetime:
+    row = await pool.fetchrow(
+        """
+        SELECT MAX(observed_at) as last_observed
+        FROM memories
+        WHERE subject_type = 'chat' AND subject_id = $1 AND memory_type = 'observation'
+        """,
+        chat_id,
+    )
+    if not row or row["last_observed"] is None:
+        return datetime.min.replace(tzinfo=None)
+    ts = row["last_observed"]
+    return ts.replace(tzinfo=None) if ts.tzinfo else ts
 
 
 async def get_cooldown_seconds_since_last_spontaneous(pool: asyncpg.Pool, group_id: int) -> float:
@@ -396,7 +480,7 @@ async def get_agent_memories(pool: asyncpg.Pool, agent_id: int, limit: int = 20)
     rows = await pool.fetch(
         """
         SELECT content FROM memories
-        WHERE subject_type = 'agent' AND subject_id = $1
+        WHERE subject_type = 'agent' AND subject_id = $1 AND memory_type = 'fact'
         ORDER BY created_at DESC
         LIMIT $2
         """,

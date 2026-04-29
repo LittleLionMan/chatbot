@@ -20,12 +20,17 @@ CREATE TABLE IF NOT EXISTS memories (
     id SERIAL PRIMARY KEY,
     subject_type TEXT NOT NULL,
     subject_id BIGINT NOT NULL,
+    memory_type TEXT NOT NULL DEFAULT 'fact',
+    priority TEXT,
+    observed_at TIMESTAMPTZ,
     content TEXT NOT NULL,
-    embedding vector(1536),
+    is_compressed BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS memories_subject_idx ON memories (subject_type, subject_id);
+CREATE INDEX IF NOT EXISTS memories_type_idx ON memories (subject_type, subject_id, memory_type);
+CREATE INDEX IF NOT EXISTS memories_observed_idx ON memories (subject_id, observed_at DESC) WHERE memory_type = 'observation';
 
 CREATE TABLE IF NOT EXISTS messages (
     id SERIAL PRIMARY KEY,
