@@ -30,7 +30,7 @@ Felder:
   - "operation": Nur für transform-Bausteine. Einer von: array_push, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
   - "condition": Nur wenn diese Teilaufgabe nur unter bestimmten Bedingungen läuft. Freitext.
   - "route": Nur wenn diese Teilaufgabe nur auf einem bestimmten Route-Pfad läuft.
-  - "parameters": Optionales Objekt mit baustein-spezifischen Parametern die direkt aus der Instruction ableitbar sind. Pflichtfeld für xlsx_fetch — enthält dort immer "columns" (Liste der in der Instruction genannten Spaltennamen) und "filters" (Liste von Filterbedingungen die in der Instruction beschrieben werden). Jede Filterbedingung hat "column", "operator" und optional "value". Verfügbare Operatoren: not_empty, empty, equals, not_equals, contains, not_contains, starts_with, ends_with.
+  - "parameters": Strukturierte Parameter die direkt aus der Instruction ableitbar sind. MUSS bei xlsx_fetch gesetzt werden — ohne parameters ist ein xlsx_fetch-Subtask unvollständig und ungültig. Bei xlsx_fetch enthält parameters zwingend: "columns" (alle in der Instruction genannten Spaltennamen als Liste) und "filters" (alle in der Instruction beschriebenen Filterbedingungen als Liste). Jede Filterbedingung hat "column", "operator" und optional "value". Verfügbare Operatoren: not_empty, empty, equals, not_equals, contains, not_contains, starts_with, ends_with. Ein xlsx_fetch-Subtask ohne parameters.filters ist ein Fehler.
 
 Verfügbare Baustein-Typen:
 
@@ -69,7 +69,7 @@ Was ist deterministisch — verwende NIE ein LLM dafür:
 - Excel-Datei (.xlsx) von einer URL → xlsx_fetch (gibt direkt JSON-Array zurück, kein weiteres Parsing nötig)
 - Bekannte URL mit strukturiertem Response (API, XML, JSON) → http_fetch + transform
 - Wert aus JSON extrahieren (einzelnes Feld aus Objekt) → transform(json_path)
-- Excel-Zeilen nach Bedingungen filtern → xlsx_fetch mit filters-Array (deterministisch, kein LLM nötig). Filterbedingungen aus der Instruction als parameters.filters im Subtask erfassen.
+- Excel-Zeilen nach Bedingungen filtern → xlsx_fetch. Filterbedingungen aus der Instruction MÜSSEN als parameters.filters im Subtask stehen — sonst fehlen sie im generierten Step.
 - Wert aus XML extrahieren → transform(xml_extract)
 - Wert aus Text per Regex → transform(regex_extract)
 - Zahl/Wert in Liste einpflegen → state_read + transform(array_push) + state_write
