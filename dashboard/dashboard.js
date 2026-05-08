@@ -122,6 +122,7 @@ const STEP_TYPE_GROUPS = {
     "web_search",
     "finance",
     "http_fetch",
+    "xlsx_fetch",
     "state_read",
     "state_write",
     "state_read_external",
@@ -144,6 +145,7 @@ const STEP_TYPE_COLORS = {
   web_search: "var(--blue)",
   finance: "var(--blue)",
   http_fetch: "var(--blue)",
+  xlsx_fetch: "var(--blue)",
   state_read: "var(--text3)",
   state_write: "var(--text3)",
   state_read_external: "var(--text3)",
@@ -199,6 +201,18 @@ function stepSummary(step) {
       parts.push(step.url || step.url_template || "?");
       if (step.method && step.method !== "GET") parts.push(step.method);
       break;
+    case "xlsx_fetch": {
+      parts.push(step.url || step.url_template || "?");
+      if (step.sheet !== undefined && step.sheet !== null)
+        parts.push(`sheet: ${step.sheet}`);
+      if (step.columns && step.columns.length)
+        parts.push(
+          `cols: ${step.columns.slice(0, 3).join(", ")}${step.columns.length > 3 ? "…" : ""}`,
+        );
+      if (step.filter)
+        parts.push(`filter: ${step.filter.column}=${step.filter.value}`);
+      break;
+    }
     case "state_read":
     case "state_write":
       parts.push(`key: ${step.key || "?"}`);
@@ -434,6 +448,50 @@ function buildStepFormBody(step) {
         defaultVal +
         outputKey;
       break;
+    case "xlsx_fetch": {
+      const filterCol = step.filter?.column || "";
+      const filterVal = step.filter?.value || "";
+      const columnsStr = Array.isArray(step.columns)
+        ? step.columns.join(", ")
+        : step.columns || "";
+      typeSpecific =
+        field(
+          "url",
+          textInput(
+            "sf-url",
+            step.url || step.url_template,
+            "https://example.com/data.xlsx",
+          ),
+        ) +
+        field(
+          "sheet (Index oder Name)",
+          textInput(
+            "sf-sheet",
+            step.sheet !== undefined ? String(step.sheet) : "0",
+            "0",
+          ),
+        ) +
+        field(
+          "columns (kommasepariert, leer = alle)",
+          textInput(
+            "sf-xlsx-columns",
+            columnsStr,
+            "Company Name, ISIN, Status, Sector",
+          ),
+        ) +
+        field(
+          "filter: Spalte",
+          textInput("sf-filter-col", filterCol, "z.B. Status"),
+        ) +
+        field(
+          "filter: Wert",
+          textInput("sf-filter-val", filterVal, "z.B. Targets Set"),
+        ) +
+        field("timeout", textInput("sf-timeout", step.timeout, "30")) +
+        defaultVal +
+        outputKey;
+      break;
+    }
     case "state_read":
       typeSpecific = keyField + outputKey + defaultVal;
       break;
@@ -483,7 +541,7 @@ function buildStepFormBody(step) {
         `<div id="sf-round-wrap">${field("round", textInput("sf-round", step.round, "2"))}</div>` +
         `<div id="sf-left-key-wrap">${field("left_key", textInput("sf-left-key", step.left_key, ""))}</div>` +
         `<div id="sf-right-key-wrap">${field("right_key", textInput("sf-right-key", step.right_key, ""))}</div>` +
-        `<div id="sf-operator-wrap">${field("operator", `<select class="modal-select" id="sf-operator"><option ${(step.operator || "<=") === ">=" ? "selected" : ""}><=</option><option ${step.operator === "<" ? "selected" : ""}><</option><option ${step.operator === ">=" ? "selected" : ""}>>=</option><option ${step.operator === ">" ? "selected" : ""}>>></option><option ${step.operator === "==" ? "selected" : ""}>==</option><option ${step.operator === "!=" ? "selected" : ""}>!=</option></select>`)}</div>` +
+        `<div id="sf-operator-wrap">${field("operator", `<select class="modal-select" id="sf-operator"><option ${(step.operator || "<=") === "<=" ? "selected" : ""}"><=</option><option ${step.operator === "<" ? "selected" : ""}><</option><option ${step.operator === ">=" ? "selected" : ""}>>=</option><option ${step.operator === ">" ? "selected" : ""}>>></option><option ${step.operator === "==" ? "selected" : ""}>==</option><option ${step.operator === "!=" ? "selected" : ""}>!=</option></select>`)}</div>` +
         `<div id="sf-output-true-wrap">${field("output_true", textInput("sf-output-true", step.output_true, "true"))}</div>` +
         `<div id="sf-output-false-wrap">${field("output_false", textInput("sf-output-false", step.output_false, "false"))}</div>` +
         outputKey;
@@ -746,6 +804,30 @@ function _readStepFromForm() {
         try {
           step.headers = JSON.parse(hdrs);
         } catch {}
+      }
+      const to = _val("sf-timeout");
+      if (to) step.timeout = parseFloat(to);
+      const def = _val("sf-default");
+      if (def) step.default = def;
+      break;
+    }
+    case "xlsx_fetch": {
+      const urlVal = _val("sf-url") || "";
+      if (urlVal.includes("{{")) step.url_template = urlVal;
+      else step.url = urlVal;
+      const sheetRaw = _val("sf-sheet") || "0";
+      step.sheet = isNaN(Number(sheetRaw)) ? sheetRaw : Number(sheetRaw);
+      const colsRaw = _val("sf-xlsx-columns") || "";
+      if (colsRaw) {
+        step.columns = colsRaw
+          .split(",")
+          .map((c) => c.trim())
+          .filter(Boolean);
+      }
+      const filterCol = _val("sf-filter-col") || "";
+      const filterVal = _val("sf-filter-val") || "";
+      if (filterCol && filterVal) {
+        step.filter = { column: filterCol, value: filterVal };
       }
       const to = _val("sf-timeout");
       if (to) step.timeout = parseFloat(to);
