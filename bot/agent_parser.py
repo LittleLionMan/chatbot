@@ -30,6 +30,7 @@ Felder:
   - "operation": Nur für transform-Bausteine. Einer von: array_push, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
   - "condition": Nur wenn diese Teilaufgabe nur unter bestimmten Bedingungen läuft. Freitext.
   - "route": Nur wenn diese Teilaufgabe nur auf einem bestimmten Route-Pfad läuft.
+  - "parameters": Optionales Objekt mit baustein-spezifischen Parametern die direkt aus der Instruction ableitbar sind. Pflichtfeld für xlsx_fetch — enthält dort immer "columns" (Liste der in der Instruction genannten Spaltennamen) und "filters" (Liste von Filterbedingungen die in der Instruction beschrieben werden). Jede Filterbedingung hat "column", "operator" und optional "value". Verfügbare Operatoren: not_empty, empty, equals, not_equals, contains, not_contains, starts_with, ends_with.
 
 Verfügbare Baustein-Typen:
 
@@ -68,7 +69,7 @@ Was ist deterministisch — verwende NIE ein LLM dafür:
 - Excel-Datei (.xlsx) von einer URL → xlsx_fetch (gibt direkt JSON-Array zurück, kein weiteres Parsing nötig)
 - Bekannte URL mit strukturiertem Response (API, XML, JSON) → http_fetch + transform
 - Wert aus JSON extrahieren (einzelnes Feld aus Objekt) → transform(json_path)
-- Excel-Zeilen nach Bedingungen filtern (z.B. nur Einträge mit ISIN, Status nicht Removed) → xlsx_fetch mit filters-Array (deterministisch, kein LLM nötig)
+- Excel-Zeilen nach Bedingungen filtern → xlsx_fetch mit filters-Array (deterministisch, kein LLM nötig). Filterbedingungen aus der Instruction als parameters.filters im Subtask erfassen.
 - Wert aus XML extrahieren → transform(xml_extract)
 - Wert aus Text per Regex → transform(regex_extract)
 - Zahl/Wert in Liste einpflegen → state_read + transform(array_push) + state_write
@@ -155,10 +156,10 @@ http_fetch:
 {"id": "fetch", "type": "http_fetch", "url_template": "https://api.example.com/{{context_key}}", "headers": {"Accept": "application/xml"}, "timeout": 15.0, "output_key": "raw_response"}
 
 xlsx_fetch:
-{"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["Company Name", "ISIN", "Status", "Sector"], "filters": [{"column": "Status", "operator": "not_contains", "value": "Removed"}, {"column": "ISIN", "operator": "not_empty"}], "output_key": "companies"}
+{"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["<spalte_1>", "<spalte_2>"], "filters": [{"column": "<spalte>", "operator": "<operator>"}, {"column": "<spalte>", "operator": "<operator>", "value": "<wert>"}], "output_key": "<key>"}
 Verfügbare Operatoren für filters: "equals", "not_equals", "contains", "not_contains", "not_empty", "empty", "starts_with", "ends_with".
-Mehrere filters werden mit AND verknüpft. Für einen einzelnen einfachen Filter kann auch die Kurzform verwendet werden: "filter": {"column": "Status", "value": "Targets Set"} (entspricht operator "equals").
-Wichtig: Wenn die Instruction Filterbedingungen für Excel-Daten beschreibt (z.B. "nur Einträge mit ISIN", "nur wenn Status nicht Removed"), müssen diese als filters-Array direkt im xlsx_fetch Step landen — nicht in einem nachfolgenden LLM-Step. Der xlsx_fetch-Step liefert dann bereits die gefilterte Liste.
+Mehrere filters werden mit AND verknüpft. Für einen einzelnen einfachen Gleichheitsfilter kann auch die Kurzform verwendet werden: "filter": {"column": "<spalte>", "value": "<wert>"}.
+Wenn der Subtask ein "parameters"-Feld hat, müssen dessen Werte direkt übernommen werden — columns aus parameters.columns, filters aus parameters.filters — ohne Interpretation, Ergänzung oder Weglassen.
 Hinweis: xlsx_fetch gibt direkt ein JSON-Array zurück. Kein http_fetch + transform für Excel-Dateien — immer xlsx_fetch verwenden.
 
 state_read:

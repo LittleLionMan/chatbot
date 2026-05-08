@@ -380,10 +380,7 @@ async def _handle_agent_intent(
             current_config = parse_agent_config(target_agent["config"])
             updated_config = await regenerate_pipeline_for_agent(current_config)
             await memory.update_agent_config(pool, target_agent["id"], updated_config)
-            steps = (
-                len(updated_config.get("pipeline", []))
-                + len(updated_config.get("pipeline_after_template", []))
-            )
+            steps = len(updated_config.get("steps", []))
             await message.reply_text(f"{target_agent['name']}: Pipeline neu generiert ({steps} Steps).")
         else:
             state = await memory.get_agent_state(pool, target_agent["id"])
