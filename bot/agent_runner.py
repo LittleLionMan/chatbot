@@ -4,10 +4,11 @@ import logging
 import re
 import statistics
 from typing import Callable, Awaitable
-
+import io
+import httpx
+import openpyxl
 import asyncpg
 import telegram
-
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
 from bot.brain import ProviderRateLimitError
@@ -722,6 +723,88 @@ async def _handle_http_fetch(
         logger.warning("http_fetch: failed for %s: %s", url[:80], e)
         return step.get("default", "")
 
+# ── xlsx Fetch ────────────────────────────────────────────────────────────────
+
+async def _handle_xlsx_fetch(
+    step: dict,
+    context: dict[str, str],
+    **_,
+) -> str:
+
+    url_template: str = step.get("url_template") or step.get("url", "")
+    url = _resolve_template(url_template, context)
+    if not url:
+        logger.warning("xlsx_fetch: no url configured")
+        return step.get("default", "[]")
+
+    sheet_ref = step.get("sheet", 0)
+    columns: list[str] = step.get("columns", [])
+    row_filter: dict | None = step.get("filter")
+    output_format: str = step.get("output_format", "json_array")
+    timeout: float = float(step.get("timeout", 30.0))
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "BobAgent/1.0"})
+            resp.raise_for_status()
+            raw_bytes = resp.content
+            logger.info("xlsx_fetch: GET %s → %d (%d bytes)", url[:80], resp.status_code, len(raw_bytes))
+
+        wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), read_only=True, data_only=True)
+
+        if isinstance(sheet_ref, int):
+            ws = wb.worksheets[sheet_ref]
+        else:
+            ws = wb[sheet_ref]
+
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return "[]"
+
+        header = [str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(rows[0])]
+
+        if columns:
+            col_indices = []
+            for col in columns:
+                if isinstance(col, int):
+                    col_indices.append(col)
+                elif col in header:
+                    col_indices.append(header.index(col))
+                else:
+                    logger.warning("xlsx_fetch: column %r not found in sheet", col)
+            use_cols = [columns[i] if isinstance(columns[i], str) else header[col_indices[i]]
+                        for i in range(len(col_indices))]
+        else:
+            col_indices = list(range(len(header)))
+            use_cols = header
+
+        filter_col_idx: int | None = None
+        filter_val: str | None = None
+        if row_filter:
+            fc = row_filter.get("column")
+            filter_val = str(row_filter.get("value", ""))
+            if fc in header:
+                filter_col_idx = header.index(fc)
+
+        result: list[dict] = []
+        for row in rows[1:]:
+            if filter_col_idx is not None and filter_val is not None:
+                cell_val = str(row[filter_col_idx]).strip() if row[filter_col_idx] is not None else ""
+                if cell_val != filter_val:
+                    continue
+            record = {}
+            for i, idx in enumerate(col_indices):
+                val = row[idx] if idx < len(row) else None
+                record[use_cols[i]] = str(val).strip() if val is not None else ""
+            result.append(record)
+
+        wb.close()
+        logger.info("xlsx_fetch: extracted %d rows from %s", len(result), url[:60])
+        return json.dumps(result, ensure_ascii=False)
+
+    except Exception as e:
+        logger.warning("xlsx_fetch: failed for %s: %s", url[:80], e)
+        return step.get("default", "[]")
 
 # ── Coordination ──────────────────────────────────────────────────────────────
 
@@ -790,6 +873,7 @@ _STEP_HANDLERS: dict[str, StepHandler] = {
     "web_search": _handle_web_search,
     "finance": _handle_finance,
     "http_fetch": _handle_http_fetch,
+    "xlsx_fetch": _handle_xlsx_fetch,
     "state_read": _handle_state_read,
     "state_write": _handle_state_write,
     "state_read_external": _handle_state_read_external,

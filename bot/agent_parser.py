@@ -152,6 +152,9 @@ http_fetch:
 {"id": "fetch", "type": "http_fetch", "url": "https://example.com/api/data", "output_key": "raw_response", "default": ""}
 {"id": "fetch", "type": "http_fetch", "url_template": "https://api.example.com/{{context_key}}", "headers": {"Accept": "application/xml"}, "timeout": 15.0, "output_key": "raw_response"}
 
+xlsx_fetch:
+{"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["Company Name", "ISIN", "Status", "Sector"], "filter": {"column": "Status", "value": "Targets Set"}, "output_key": "companies"}
+
 state_read:
 {"id": "read_data", "type": "state_read", "key": "my_key", "output_key": "data", "default": "{}"}
 

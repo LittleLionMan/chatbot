@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _AVAILABLE_STEP_TYPES = [
     "router_match", "router_llm",
     "llm_extract", "llm_decide", "llm_summarize",
-    "web_search", "finance", "http_fetch",
+    "web_search", "finance", "http_fetch", "xlsx_fetch",
     "state_read", "state_write",
     "state_read_external", "state_write_external",
     "data_read", "data_write",
@@ -27,7 +27,7 @@ _AVAILABLE_STEP_TYPES = [
 ]
 
 _TRANSFORM_OPERATIONS = [
-    "array_append", "iqr_bounds", "json_path", "xml_extract", "regex_extract",
+    "array_push", "statistics", "json_path", "xml_extract", "regex_extract", "arithmetic", "compare",
 ]
 
 _EXTERNAL_SERVICES = [
@@ -156,6 +156,7 @@ Regeln für den Plan:
 - Erkenne Bestätigungen: "ja", "gut", "mach es", "los", "ok", "passt", "stimmt so", "anlegen", "setze um"
 - missing_capabilities nur wenn eine Teilaufgabe wirklich nicht mit verfügbaren Bausteinen abbildbar ist
 - Strukturierte Daten von bekannten APIs oder Feeds → http_fetch + transform, kein LLM-Call nötig
+- Excel-Daten von einer URL → xlsx_fetch (fetcht und parsed direkt, gibt JSON-Array zurück)
 - Scraper-Trigger-Payload ist bekannt — frage nicht danach wenn der User Scraper erwähnt
 
 Regeln für RSS-Monitore:
