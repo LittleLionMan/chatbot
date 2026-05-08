@@ -39,7 +39,7 @@ ROUTING:
 
 LLM — nur wenn Urteilsvermögen, Abstraktion oder Sprachverständnis nötig ist:
 - llm_extract: Strukturierte Daten aus unstrukturiertem Text extrahieren. Gibt immer JSON zurück.
-- llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück. Auch für Mengenoperationen zwischen zwei Listen (z.B. Differenz, Schnittmenge) wenn die Logik Interpretation erfordert.
+- llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück. Auch für Set-Operationen zwischen zwei bereits im Context vorhandenen Listen (z.B. neue Einträge finden, verlorene Einträge identifizieren).
 - llm_summarize: Zusammenfassung für Menschen oder als Input für weitere Steps.
 
 DATENZUGRIFF — deterministisch:
@@ -56,6 +56,7 @@ TRANSFORMATION — deterministisch, operiert auf Context-Werten:
 - transform: Berechnung oder Strukturänderung auf bereits im Context vorhandenen Daten.
   Operationen: array_push, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
   Hinweis zu array_push: nur für das Anhängen einzelner skalarer Werte an gruppierte numerische Arrays (z.B. Preishistorie pro Modell). Nicht verwenden für Mengenoperationen zwischen zwei Listen, Set-Differenzen oder Listenvergleiche — dafür llm_decide verwenden.
+  Hinweis zu json_path: nur für die Extraktion eines einzelnen Feldes aus einem verschachtelten JSON-Objekt. Nicht verwenden für Listenfilterung, bedingte Selektion oder Mengenoperationen — dafür llm_decide verwenden.
 
 KOORDINATION — deterministisch:
 - trigger_agent: Anderen Agenten mit Payload anstoßen. Muss immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen — nie davor, da der getriggerte Agent sonst auf veralteten State zugreift.
@@ -66,7 +67,8 @@ Was ist deterministisch — verwende NIE ein LLM dafür:
 - Routing auf strukturierten Feldern (type, id, url != null) → router_match
 - Excel-Datei (.xlsx) von einer URL → xlsx_fetch (gibt direkt JSON-Array zurück, kein weiteres Parsing nötig)
 - Bekannte URL mit strukturiertem Response (API, XML, JSON) → http_fetch + transform
-- Wert aus JSON extrahieren → transform(json_path)
+- Wert aus JSON extrahieren (einzelnes Feld aus Objekt) → transform(json_path)
+- Excel-Zeilen nach Bedingungen filtern (z.B. nur Einträge mit ISIN, Status nicht Removed) → xlsx_fetch mit filters-Array (deterministisch, kein LLM nötig)
 - Wert aus XML extrahieren → transform(xml_extract)
 - Wert aus Text per Regex → transform(regex_extract)
 - Zahl/Wert in Liste einpflegen → state_read + transform(array_push) + state_write
@@ -153,7 +155,9 @@ http_fetch:
 {"id": "fetch", "type": "http_fetch", "url_template": "https://api.example.com/{{context_key}}", "headers": {"Accept": "application/xml"}, "timeout": 15.0, "output_key": "raw_response"}
 
 xlsx_fetch:
-{"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["Company Name", "ISIN", "Status", "Sector"], "filter": {"column": "Status", "value": "Targets Set"}, "output_key": "companies"}
+{"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["Company Name", "ISIN", "Status", "Sector"], "filters": [{"column": "Status", "operator": "not_contains", "value": "Removed"}, {"column": "ISIN", "operator": "not_empty"}], "output_key": "companies"}
+Verfügbare Operatoren für filters: "equals", "not_equals", "contains", "not_contains", "not_empty", "empty", "starts_with", "ends_with".
+Mehrere filters werden mit AND verknüpft. Für einen einzelnen einfachen Filter kann auch die Kurzform verwendet werden: "filter": {"column": "Status", "value": "Targets Set"} (entspricht operator "equals").
 Hinweis: xlsx_fetch gibt direkt ein JSON-Array zurück. Kein http_fetch + transform für Excel-Dateien — immer xlsx_fetch verwenden.
 
 state_read:

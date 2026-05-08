@@ -449,11 +449,21 @@ function buildStepFormBody(step) {
         outputKey;
       break;
     case "xlsx_fetch": {
-      const filterCol = step.filter?.column || "";
-      const filterVal = step.filter?.value || "";
       const columnsStr = Array.isArray(step.columns)
         ? step.columns.join(", ")
         : step.columns || "";
+      const existingFilters = Array.isArray(step.filters)
+        ? step.filters
+        : step.filter
+          ? [
+              {
+                column: step.filter.column,
+                operator: "equals",
+                value: step.filter.value,
+              },
+            ]
+          : [];
+      const filtersStr = JSON.stringify(existingFilters, null, 2);
       typeSpecific =
         field(
           "url",
@@ -476,16 +486,12 @@ function buildStepFormBody(step) {
           textInput(
             "sf-xlsx-columns",
             columnsStr,
-            "Company Name, ISIN, Status, Sector",
+            "company_name, isin, near_term_status, sector",
           ),
         ) +
         field(
-          "filter: Spalte",
-          textInput("sf-filter-col", filterCol, "z.B. Status"),
-        ) +
-        field(
-          "filter: Wert",
-          textInput("sf-filter-val", filterVal, "z.B. Targets Set"),
+          "filters (JSON-Array) — Operatoren: equals, not_equals, contains, not_contains, not_empty, empty, starts_with, ends_with",
+          textarea("sf-xlsx-filters", filtersStr, 120),
         ) +
         field("timeout", textInput("sf-timeout", step.timeout, "30")) +
         defaultVal +
@@ -824,10 +830,12 @@ function _readStepFromForm() {
           .map((c) => c.trim())
           .filter(Boolean);
       }
-      const filterCol = _val("sf-filter-col") || "";
-      const filterVal = _val("sf-filter-val") || "";
-      if (filterCol && filterVal) {
-        step.filter = { column: filterCol, value: filterVal };
+      const filtersRaw = _val("sf-xlsx-filters") || "[]";
+      try {
+        const parsed = JSON.parse(filtersRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) step.filters = parsed;
+      } catch {
+        // ungültiges JSON ignorieren
       }
       const to = _val("sf-timeout");
       if (to) step.timeout = parseFloat(to);

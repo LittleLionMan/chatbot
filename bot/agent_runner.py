@@ -740,7 +740,7 @@ async def _handle_xlsx_fetch(
     sheet_ref = step.get("sheet", 0)
     columns: list[str] = step.get("columns", [])
     row_filter: dict | None = step.get("filter")
-    output_format: str = step.get("output_format", "json_array")
+    row_filters: list[dict] = step.get("filters", [])
     timeout: float = float(step.get("timeout", 30.0))
 
     try:
@@ -778,24 +778,49 @@ async def _handle_xlsx_fetch(
             col_indices = list(range(len(header)))
             use_cols = header
 
-        filter_col_idx: int | None = None
-        filter_val: str | None = None
-        if row_filter:
-            fc = row_filter.get("column")
-            filter_val = str(row_filter.get("value", ""))
-            if fc in header:
-                filter_col_idx = header.index(fc)
+        def _cell_str(val: object) -> str:
+            return str(val).strip() if val is not None else ""
+
+        def _matches_filter(row: tuple, f: dict) -> bool:
+            col_name: str = f.get("column", "")
+            operator: str = f.get("operator", "equals")
+            value: str = str(f.get("value", ""))
+            if col_name not in header:
+                logger.warning("xlsx_fetch filter: column %r not found", col_name)
+                return True
+            col_idx = header.index(col_name)
+            cell = _cell_str(row[col_idx] if col_idx < len(row) else None)
+            if operator == "equals":
+                return cell == value
+            if operator == "not_equals":
+                return cell != value
+            if operator == "contains":
+                return value.lower() in cell.lower()
+            if operator == "not_contains":
+                return value.lower() not in cell.lower()
+            if operator == "not_empty":
+                return cell != ""
+            if operator == "empty":
+                return cell == ""
+            if operator == "starts_with":
+                return cell.lower().startswith(value.lower())
+            if operator == "ends_with":
+                return cell.lower().endswith(value.lower())
+            logger.warning("xlsx_fetch filter: unknown operator %r", operator)
+            return True
+
+        all_filters: list[dict] = list(row_filters)
+        if row_filter and not row_filters:
+            all_filters = [{"column": row_filter["column"], "operator": "equals", "value": str(row_filter["value"])}]
 
         result: list[dict] = []
         for row in rows[1:]:
-            if filter_col_idx is not None and filter_val is not None:
-                cell_val = str(row[filter_col_idx]).strip() if row[filter_col_idx] is not None else ""
-                if cell_val != filter_val:
-                    continue
-            record = {}
+            if all_filters and not all(_matches_filter(row, f) for f in all_filters):
+                continue
+            record: dict[str, str] = {}
             for i, idx in enumerate(col_indices):
                 val = row[idx] if idx < len(row) else None
-                record[use_cols[i]] = str(val).strip() if val is not None else ""
+                record[use_cols[i]] = _cell_str(val)
             result.append(record)
 
         wb.close()
