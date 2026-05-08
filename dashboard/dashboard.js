@@ -231,11 +231,17 @@ function stepSummary(step) {
       parts.push(`${step.namespace || "?"}/${step.key_template || "?"}`);
       if (step.source_key) parts.push(`<- ${step.source_key}`);
       break;
-    case "transform":
-      parts.push(`op: ${step.operation || "?"}`);
+    case "transform": {
+      const op = step.operation || "?";
+      parts.push(`op: ${op}`);
       if (step.source_key) parts.push(`<- ${step.source_key}`);
+      if (step.field) parts.push(`field: ${step.field}`);
+      if (step.group_field) parts.push(`group: ${step.group_field}`);
+      if (step.subtract_key) parts.push(`- ${step.subtract_key}`);
+      if (step.other_key) parts.push(`∪ ${step.other_key}`);
       if (step.target_key) parts.push(`-> ${step.target_key}`);
       break;
+    }
     case "trigger_agent":
       parts.push(`-> ${step.target_agent_name || "?"}`);
       break;
@@ -276,7 +282,18 @@ function categoryOptions(selected) {
 }
 function transformOpOptions(selected) {
   return [
-    "array_push",
+    "map_field",
+    "filter",
+    "first",
+    "slice",
+    "diff",
+    "intersect",
+    "union",
+    "list_append",
+    "count",
+    "group_by",
+    "flatten",
+    "sort",
     "statistics",
     "json_path",
     "xml_extract",
@@ -524,14 +541,24 @@ function buildStepFormBody(step) {
       typeSpecific = agentName + namespace + keyTemplate + sourceKey;
       break;
     case "transform": {
-      const op = step.operation || "array_push";
+      const op = step.operation || "map_field";
       typeSpecific =
         field(
           "operation",
           `<select class="modal-select" id="sf-operation" onchange="onTransformOpChange()">${transformOpOptions(op)}</select>`,
         ) +
         sourceKey +
-        `<div id="sf-value-key-wrap">${field("value_key", textInput("sf-value-key", step.value_key, "z.B. price_eur"))}</div>` +
+        `<div id="sf-value-key-wrap">${field("value_key (list_append)", textInput("sf-value-key", step.value_key, "z.B. selected_isin"))}</div>` +
+        `<div id="sf-field-wrap">${field("field (map_field / sort)", textInput("sf-field", step.field, "z.B. isin"))}</div>` +
+        `<div id="sf-group-field-wrap">${field("group_field (group_by)", textInput("sf-group-field", step.group_field, "z.B. model"))}</div>` +
+        `<div id="sf-value-field-wrap">${field("value_field (group_by, optional)", textInput("sf-value-field", step.value_field, "z.B. price"))}</div>` +
+        `<div id="sf-filters-json-wrap">${field("filters (JSON-Array)", textarea("sf-filters-json", JSON.stringify(step.filters || [], null, 2), 100))}</div>` +
+        `<div id="sf-subtract-key-wrap">${field("subtract_key (diff)", textInput("sf-subtract-key", step.subtract_key, "z.B. known_list"))}</div>` +
+        `<div id="sf-other-key-wrap">${field("other_key (intersect / union)", textInput("sf-other-key", step.other_key, "z.B. list_b"))}</div>` +
+        `<div id="sf-start-wrap">${field("start (slice)", textInput("sf-start", step.start !== undefined ? String(step.start) : "0", "0"))}</div>` +
+        `<div id="sf-end-wrap">${field("end (slice, leer = bis Ende)", textInput("sf-end", step.end !== undefined ? String(step.end) : "", ""))}</div>` +
+        `<div id="sf-reverse-wrap">${field("reverse (sort)", `<select class=\"modal-select\" id=\"sf-reverse\"><option value=\"false\" ${!step.reverse ? "selected" : ""}>false</option><option value=\"true\" ${step.reverse ? "selected" : ""}>true</option></select>`)}</div>` +
+        `<div id="sf-output-format-wrap">${field("output_format", `<select class=\"modal-select\" id=\"sf-output-format\"><option value=\"json_array\" ${(step.output_format || "json_array") === "json_array" ? "selected" : ""}>json_array</option><option value=\"comma_list\" ${step.output_format === "comma_list" ? "selected" : ""}>comma_list</option></select>`)}</div>` +
         `<div id="sf-group-key-wrap">${field("group_key", textInput("sf-group-key", step.group_key, "z.B. extracted_model"))}</div>` +
         `<div id="sf-max-items-wrap">${field("max_items", textInput("sf-max-items", step.max_items, "500"))}</div>` +
         targetKey +
@@ -608,9 +635,27 @@ function onTransformOpChange() {
     const el = document.getElementById(id);
     if (el) el.style.display = v ? "" : "none";
   };
-  show("sf-value-key-wrap", op === "array_push");
-  show("sf-group-key-wrap", op === "array_push");
-  show("sf-max-items-wrap", op === "array_push");
+  show("sf-value-key-wrap", op === "list_append");
+  show("sf-group-key-wrap", op === "group_by");
+  show("sf-group-field-wrap", op === "group_by");
+  show("sf-value-field-wrap", op === "group_by");
+  show("sf-max-items-wrap", op === "list_append" || op === "group_by");
+  show("sf-field-wrap", op === "map_field" || op === "sort");
+  show(
+    "sf-output-format-wrap",
+    op === "map_field" ||
+      op === "diff" ||
+      op === "intersect" ||
+      op === "union" ||
+      op === "list_append" ||
+      op === "flatten",
+  );
+  show("sf-filters-json-wrap", op === "filter");
+  show("sf-start-wrap", op === "slice");
+  show("sf-end-wrap", op === "slice");
+  show("sf-subtract-key-wrap", op === "diff");
+  show("sf-other-key-wrap", op === "intersect" || op === "union");
+  show("sf-reverse-wrap", op === "sort");
   show("sf-multiplier-wrap", op === "statistics");
   show("sf-model-key-wrap", op === "statistics");
   show("sf-functions-wrap", op === "statistics");
@@ -749,11 +794,56 @@ function _readStepFromForm() {
       step.source_key = _val("sf-source-key") || "";
       const tk = _val("sf-target-key");
       if (tk) step.target_key = tk;
-      if (step.operation === "array_push") {
+      if (step.operation === "map_field") {
+        step.field = _val("sf-field") || "";
+        const fmt = _val("sf-output-format");
+        if (fmt && fmt !== "json_array") step.output_format = fmt;
+      }
+      if (step.operation === "filter") {
+        try {
+          step.filters = JSON.parse(_val("sf-filters-json") || "[]");
+        } catch {
+          step.filters = [];
+        }
+      }
+      if (step.operation === "slice") {
+        const s = _val("sf-start");
+        if (s !== "") step.start = parseInt(s);
+        const e = _val("sf-end");
+        if (e !== "") step.end = parseInt(e);
+      }
+      if (step.operation === "diff") {
+        step.subtract_key = _val("sf-subtract-key") || "";
+        const fmt = _val("sf-output-format");
+        if (fmt && fmt !== "json_array") step.output_format = fmt;
+      }
+      if (step.operation === "intersect" || step.operation === "union") {
+        step.other_key = _val("sf-other-key") || "";
+        const fmt = _val("sf-output-format");
+        if (fmt && fmt !== "json_array") step.output_format = fmt;
+      }
+      if (step.operation === "list_append") {
         step.value_key = _val("sf-value-key") || "";
-        step.group_key = _val("sf-group-key") || "";
         const mi = _val("sf-max-items");
         if (mi) step.max_items = parseInt(mi);
+        const fmt = _val("sf-output-format");
+        if (fmt && fmt !== "json_array") step.output_format = fmt;
+      }
+      if (step.operation === "group_by") {
+        step.group_field = _val("sf-group-field") || "";
+        const vf = _val("sf-value-field");
+        if (vf) step.value_field = vf;
+        const mi = _val("sf-max-items");
+        if (mi) step.max_items = parseInt(mi);
+      }
+      if (step.operation === "sort") {
+        const f = _val("sf-field");
+        if (f) step.field = f;
+        step.reverse = _val("sf-reverse") === "true";
+      }
+      if (step.operation === "flatten") {
+        const fmt = _val("sf-output-format");
+        if (fmt && fmt !== "json_array") step.output_format = fmt;
       }
       if (step.operation === "statistics") {
         const mult = _val("sf-multiplier");

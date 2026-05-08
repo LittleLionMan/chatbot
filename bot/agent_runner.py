@@ -29,7 +29,6 @@ def _build_relay_system(agent_name: str) -> str:
 
 
 def _resolve_template(template: str, context: dict[str, str]) -> str:
-    import re
     for k, v in context.items():
         template = template.replace(f"{{{{{k}}}}}", v)
     for match in re.findall(r"\{\{([^}]+)\}\}", template):
@@ -69,6 +68,23 @@ def _set(context: dict[str, str], key: str, value: str) -> None:
     context[key] = value
 
 
+def _parse_json_list(raw: str) -> list:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return parsed
+        return []
+    except Exception:
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        return parts
+
+
+def _to_str_set(items: list) -> set[str]:
+    return {json.dumps(i, ensure_ascii=False) if isinstance(i, (dict, list)) else str(i) for i in items}
+
+
 # ── Router ────────────────────────────────────────────────────────────────────
 
 def _evaluate_condition(condition: str, context: dict[str, str]) -> bool:
@@ -78,9 +94,7 @@ def _evaluate_condition(condition: str, context: dict[str, str]) -> bool:
         return False
 
     lhs_key, op, rhs_raw = match.group(1), match.group(2), match.group(3).strip()
-
     lhs_raw = context.get(lhs_key.replace(".", "_"), context.get(lhs_key, ""))
-
     rhs = rhs_raw.strip("'\"")
     if rhs_raw.lower() == "null":
         rhs = None
@@ -107,14 +121,12 @@ async def _handle_router_match(
 ) -> str:
     rules: list[dict] = step.get("rules", [])
     default: str = step.get("default", "default")
-
     for rule in rules:
         condition: str = rule.get("if", "")
         route: str = rule.get("then", default)
         if _evaluate_condition(condition, context):
             logger.info("router_match: condition %r → route %r", condition, route)
             return route
-
     logger.info("router_match: no condition matched → default %r", default)
     return default
 
@@ -192,7 +204,6 @@ async def _handle_llm_step(
     system = _OUTPUT_SYSTEM if is_output else _LLM_SYSTEM_MAP[step_type]
     capability = CAPABILITY_SIMPLE_TASKS if is_output else _LLM_CAPABILITY_MAP[step_type]
     prompt = _resolve_template(step.get("prompt", ""), context)
-
     result = await brain.chat(
         system=system if is_output else f"{agent_system}\n\n{system}",
         messages=[{"role": "user", "content": prompt}],
@@ -283,8 +294,7 @@ async def _handle_state_read(
 ) -> str:
     key: str = step["key"]
     default: str = step.get("default", "")
-    value = state.get(key, default)
-    return value
+    return state.get(key, default)
 
 
 async def _handle_state_write(
@@ -343,12 +353,10 @@ async def _handle_data_read_external(
     namespace: str = step["namespace"]
     key_template: str = step.get("key_template", "")
     key = _resolve_template(key_template, context)
-
     target_id = await memory.get_agent_id_by_name(pool, agent_name)
     if target_id is None:
         logger.warning("data_read_external: agent %r not found", agent_name)
         return step.get("default", "")
-
     value = await memory.read_agent_data(pool, target_id, namespace, key)
     return value or step.get("default", "")
 
@@ -365,12 +373,10 @@ async def _handle_data_write_external(
     key = _resolve_template(key_template, context)
     source_key: str = step["source_key"]
     value = _get(context, source_key)
-
     target_id = await memory.get_agent_id_by_name(pool, agent_name)
     if target_id is None:
         logger.warning("data_write_external: agent %r not found", agent_name)
         return ""
-
     await memory.write_agent_data(pool, target_id, namespace, key, value)
     logger.info("data_write_external: %s → %s/%s (%d chars)", agent_name, namespace, key, len(value))
     return value
@@ -384,12 +390,10 @@ async def _handle_state_read_external(
 ) -> str:
     agent_name: str = step["agent_name"]
     key: str = step["key"]
-
     state = await memory.get_agent_state_by_name(pool, agent_name)
     if state is None:
         logger.warning("state_read_external: agent %r not found", agent_name)
         return step.get("default", "")
-
     return state.get(key, step.get("default", ""))
 
 
@@ -403,12 +407,10 @@ async def _handle_state_write_external(
     key: str = step["key"]
     source_key: str = step["source_key"]
     value = _get(context, source_key)
-
     target_id = await memory.get_agent_id_by_name(pool, agent_name)
     if target_id is None:
         logger.warning("state_write_external: agent %r not found", agent_name)
         return ""
-
     await memory.set_agent_state(pool, target_id, {key: value})
     logger.info("state_write_external: %s[%r] = %d chars", agent_name, key, len(value))
     return value
@@ -416,39 +418,296 @@ async def _handle_state_write_external(
 
 # ── Transform ─────────────────────────────────────────────────────────────────
 
-def _transform_array_push(step: dict, context: dict[str, str]) -> str:
+def _matches_item_filter(item: object, f: dict) -> bool:
+    field: str = f.get("field", "")
+    operator: str = f.get("operator", "equals")
+    value: str = str(f.get("value", ""))
+
+    if isinstance(item, dict):
+        cell = str(item.get(field, "")).strip()
+    else:
+        cell = str(item).strip()
+
+    if operator == "equals":
+        return cell == value
+    if operator == "not_equals":
+        return cell != value
+    if operator == "contains":
+        return value.lower() in cell.lower()
+    if operator == "not_contains":
+        return value.lower() not in cell.lower()
+    if operator == "not_empty":
+        return cell != ""
+    if operator == "empty":
+        return cell == ""
+    if operator == "starts_with":
+        return cell.lower().startswith(value.lower())
+    if operator == "ends_with":
+        return cell.lower().endswith(value.lower())
+    if operator == "gt":
+        try:
+            return float(cell) > float(value)
+        except (ValueError, TypeError):
+            return False
+    if operator == "lt":
+        try:
+            return float(cell) < float(value)
+        except (ValueError, TypeError):
+            return False
+    logger.warning("transform filter: unknown operator %r", operator)
+    return True
+
+
+def _transform_map_field(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    field: str = step["field"]
+    output_format: str = step.get("output_format", "json_array")
+
+    raw = _get(context, source_key)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError
+    except Exception:
+        logger.warning("transform map_field: source_key %r is not a valid JSON array", source_key)
+        return "[]"
+
+    values = [
+        str(item[field]).strip()
+        for item in data
+        if isinstance(item, dict) and field in item and item[field] is not None and str(item[field]).strip()
+    ]
+
+    if output_format == "comma_list":
+        return ",".join(values)
+    return json.dumps(values, ensure_ascii=False)
+
+
+def _transform_filter(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    filters: list[dict] = step.get("filters", [])
+
+    raw = _get(context, source_key)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError
+    except Exception:
+        logger.warning("transform filter: source_key %r is not a valid JSON array", source_key)
+        return "[]"
+
+    result = [item for item in data if all(_matches_item_filter(item, f) for f in filters)]
+    logger.info("transform filter: %d → %d items", len(data), len(result))
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _transform_first(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    raw = _get(context, source_key)
+    items = _parse_json_list(raw)
+    if not items:
+        return step.get("default", "")
+    first = items[0]
+    return json.dumps(first, ensure_ascii=False) if isinstance(first, (dict, list)) else str(first)
+
+
+def _transform_slice(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    start: int = int(step.get("start", 0))
+    end: int | None = step.get("end")
+
+    raw = _get(context, source_key)
+    items = _parse_json_list(raw)
+    sliced = items[start:end] if end is not None else items[start:]
+    logger.info("transform slice: [%s:%s] → %d items", start, end, len(sliced))
+    return json.dumps(sliced, ensure_ascii=False)
+
+
+def _transform_diff(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    subtract_key: str = step["subtract_key"]
+    output_format: str = step.get("output_format", "json_array")
+
+    source_items = _parse_json_list(_get(context, source_key))
+    subtract_items = _parse_json_list(_get(context, subtract_key))
+    subtract_set = _to_str_set(subtract_items)
+
+    result = [
+        item for item in source_items
+        if (json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)) not in subtract_set
+    ]
+    logger.info("transform diff: %d - %d = %d items", len(source_items), len(subtract_items), len(result))
+    if output_format == "comma_list":
+        return ",".join(str(i) for i in result)
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _transform_intersect(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    other_key: str = step["other_key"]
+    output_format: str = step.get("output_format", "json_array")
+
+    source_items = _parse_json_list(_get(context, source_key))
+    other_set = _to_str_set(_parse_json_list(_get(context, other_key)))
+
+    result = [
+        item for item in source_items
+        if (json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)) in other_set
+    ]
+    logger.info("transform intersect: %d items", len(result))
+    if output_format == "comma_list":
+        return ",".join(str(i) for i in result)
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _transform_union(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    other_key: str = step["other_key"]
+    output_format: str = step.get("output_format", "json_array")
+
+    source_items = _parse_json_list(_get(context, source_key))
+    other_items = _parse_json_list(_get(context, other_key))
+
+    seen: set[str] = set()
+    result: list = []
+    for item in source_items + other_items:
+        key = json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+
+    logger.info("transform union: %d + %d = %d unique items", len(source_items), len(other_items), len(result))
+    if output_format == "comma_list":
+        return ",".join(str(i) for i in result)
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _transform_list_append(step: dict, context: dict[str, str]) -> str:
     value_key: str = step["value_key"]
-    group_key: str = step["group_key"]
     target_key: str = step["target_key"]
-    max_items: int = int(step.get("max_items", 500))
+    max_items: int = int(step.get("max_items", 10000))
+    output_format: str = step.get("output_format", "json_array")
 
     value = _get(context, value_key)
-    group = _get(context, group_key)
+    if not value:
+        logger.warning("transform list_append: value_key %r is empty", value_key)
+        raw = context.get(target_key, "[]")
+        return raw
 
-    if not value or not group:
-        logger.warning("transform array_push: value_key %r or group_key %r is empty", value_key, group_key)
-        return context.get(target_key, "{}")
+    items = _parse_json_list(context.get(target_key, "[]"))
+    if value not in items:
+        items.append(value)
+    if len(items) > max_items:
+        items = items[-max_items:]
 
-    raw_target = context.get(target_key, "{}")
+    logger.info("transform list_append: %s now %d entries", target_key, len(items))
+    if output_format == "comma_list":
+        return ",".join(str(i) for i in items)
+    return json.dumps(items, ensure_ascii=False)
+
+
+def _transform_count(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    items = _parse_json_list(_get(context, source_key))
+    return str(len(items))
+
+
+def _transform_group_by(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    group_field: str = step["group_field"]
+    value_field: str | None = step.get("value_field")
+    max_items: int = int(step.get("max_items", 500))
+
+    raw = _get(context, source_key)
     try:
-        target: dict[str, list] = json.loads(raw_target)
-        if not isinstance(target, dict):
-            target = {}
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError
     except Exception:
-        target = {}
+        logger.warning("transform group_by: source_key %r is not a valid JSON array", source_key)
+        return "{}"
 
-    target.setdefault(group, [])
+    existing_raw = context.get(step.get("target_key", ""), "{}")
     try:
-        target[group].append(float(value))
-    except ValueError:
-        target[group].append(value)
+        result: dict[str, list] = json.loads(existing_raw)
+        if not isinstance(result, dict):
+            result = {}
+    except Exception:
+        result = {}
 
-    if len(target[group]) > max_items:
-        target[group] = target[group][-max_items:]
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        group = str(item.get(group_field, "")).strip()
+        if not group:
+            continue
+        value = item.get(value_field) if value_field else item
+        if value is None:
+            continue
+        result.setdefault(group, [])
+        entry = float(value) if value_field else value
+        try:
+            if value_field:
+                entry = float(value)
+        except (ValueError, TypeError):
+            entry = value
+        result[group].append(entry)
+        if len(result[group]) > max_items:
+            result[group] = result[group][-max_items:]
 
-    result = json.dumps(target, ensure_ascii=False)
-    logger.info("transform array_push: %s[%s] now %d entries", target_key, group, len(target[group]))
-    return result
+    logger.info("transform group_by: %d groups", len(result))
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _transform_flatten(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    output_format: str = step.get("output_format", "json_array")
+
+    raw = _get(context, source_key)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError
+    except Exception:
+        logger.warning("transform flatten: source_key %r is not a valid JSON array", source_key)
+        return "[]"
+
+    result: list = []
+    for item in data:
+        if isinstance(item, list):
+            result.extend(item)
+        else:
+            result.append(item)
+
+    logger.info("transform flatten: → %d items", len(result))
+    if output_format == "comma_list":
+        return ",".join(str(i) for i in result)
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _transform_sort(step: dict, context: dict[str, str]) -> str:
+    source_key: str = step["source_key"]
+    field: str | None = step.get("field")
+    reverse: bool = bool(step.get("reverse", False))
+
+    raw = _get(context, source_key)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError
+    except Exception:
+        logger.warning("transform sort: source_key %r is not a valid JSON array", source_key)
+        return "[]"
+
+    try:
+        if field:
+            data.sort(key=lambda x: x.get(field, "") if isinstance(x, dict) else "", reverse=reverse)
+        else:
+            data.sort(reverse=reverse)
+    except Exception as e:
+        logger.warning("transform sort: failed: %s", e)
+
+    return json.dumps(data, ensure_ascii=False)
 
 
 def _transform_statistics(step: dict, context: dict[str, str]) -> str:
@@ -520,7 +779,6 @@ def _transform_statistics(step: dict, context: dict[str, str]) -> str:
 def _transform_json_path(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     path: str = step["path"]
-
     raw = context.get(source_key, "")
     try:
         data = json.loads(raw)
@@ -536,7 +794,6 @@ def _transform_json_path(step: dict, context: dict[str, str]) -> str:
 
 
 def _transform_xml_extract(step: dict, context: dict[str, str]) -> str:
-    import io
     import xml.etree.ElementTree as ET
 
     source_key: str = step["source_key"]
@@ -554,17 +811,13 @@ def _transform_xml_extract(step: dict, context: dict[str, str]) -> str:
                 namespaces[prefix] = uri
             else:
                 namespaces["ns"] = uri
-
         root = ET.fromstring(raw)
         elements = root.findall(xpath, namespaces) if namespaces else root.findall(xpath)
         if not elements:
-            logger.warning("transform xml_extract: xpath %r found no elements (namespaces: %s)", xpath, list(namespaces.keys()))
+            logger.warning("transform xml_extract: xpath %r found no elements", xpath)
             return step.get("default", "")
         el = elements[0]
-        if attribute:
-            result = el.get(attribute, step.get("default", ""))
-        else:
-            result = el.text or step.get("default", "")
+        result = el.get(attribute, step.get("default", "")) if attribute else (el.text or step.get("default", ""))
         return str(result).strip()
     except Exception as e:
         logger.warning("transform xml_extract: failed for xpath %r: %s", xpath, e)
@@ -573,11 +826,9 @@ def _transform_xml_extract(step: dict, context: dict[str, str]) -> str:
 
 def _transform_regex_extract(step: dict, context: dict[str, str]) -> str:
     import re as _re
-
     source_key: str = step["source_key"]
     pattern: str = step["pattern"]
     group: int = int(step.get("group", 1))
-
     raw = context.get(source_key, "")
     try:
         match = _re.search(pattern, raw)
@@ -591,10 +842,9 @@ def _transform_regex_extract(step: dict, context: dict[str, str]) -> str:
 
 
 def _transform_arithmetic(step: dict, context: dict[str, str]) -> str:
+    import re as _re
     expression: str = step.get("expression", "")
     default: str = step.get("default", "")
-
-    import re as _re
     tokens = _re.findall(r"[a-zA-Z_][a-zA-Z0-9_.]*", expression)
     resolved = expression
     for token in sorted(tokens, key=len, reverse=True):
@@ -608,12 +858,10 @@ def _transform_arithmetic(step: dict, context: dict[str, str]) -> str:
             logger.warning("transform arithmetic: variable %r is not numeric: %r", token, val)
             return default
         resolved = resolved.replace(token, val)
-
     allowed = set("0123456789+-*/()., \t")
     if not all(c in allowed for c in resolved):
         logger.warning("transform arithmetic: expression contains invalid characters: %r", resolved)
         return default
-
     try:
         result = eval(resolved, {"__builtins__": {}}, {})  # noqa: S307
         rounded = step.get("round")
@@ -631,17 +879,14 @@ def _transform_compare(step: dict, context: dict[str, str]) -> str:
     operator: str = step.get("operator", "<=")
     output_true: str = step.get("output_true", "true")
     output_false: str = step.get("output_false", "false")
-
     left_raw = _get(context, left_key)
     right_raw = _get(context, right_key)
-
     try:
         left = float(left_raw)
         right = float(right_raw)
     except (ValueError, TypeError):
         logger.warning("transform compare: could not parse %r=%r or %r=%r as float", left_key, left_raw, right_key, right_raw)
         return output_false
-
     result = (
         left < right if operator == "<" else
         left <= right if operator == "<=" else
@@ -656,7 +901,18 @@ def _transform_compare(step: dict, context: dict[str, str]) -> str:
 
 
 _TRANSFORM_OPERATIONS: dict[str, Callable[[dict, dict[str, str]], str]] = {
-    "array_push": _transform_array_push,
+    "map_field": _transform_map_field,
+    "filter": _transform_filter,
+    "first": _transform_first,
+    "slice": _transform_slice,
+    "diff": _transform_diff,
+    "intersect": _transform_intersect,
+    "union": _transform_union,
+    "list_append": _transform_list_append,
+    "count": _transform_count,
+    "group_by": _transform_group_by,
+    "flatten": _transform_flatten,
+    "sort": _transform_sort,
     "statistics": _transform_statistics,
     "json_path": _transform_json_path,
     "json_extract": _transform_json_path,
@@ -687,8 +943,6 @@ async def _handle_http_fetch(
     context: dict[str, str],
     **_,
 ) -> str:
-    import httpx
-
     url_template: str = step.get("url_template") or step.get("url", "")
     url = _resolve_template(url_template, context)
     if not url:
@@ -699,7 +953,6 @@ async def _handle_http_fetch(
     headers: dict[str, str] = step.get("headers", {})
     timeout: float = float(step.get("timeout", 15.0))
     body: str | None = step.get("body")
-
     resolved_headers = {k: _resolve_template(v, context) for k, v in headers.items()}
 
     try:
@@ -711,7 +964,6 @@ async def _handle_http_fetch(
             else:
                 logger.warning("http_fetch: unsupported method %r", method)
                 return step.get("default", "")
-
             resp.raise_for_status()
             result = resp.text
             logger.info("http_fetch: %s %s → %d (%d chars)", method, url[:80], resp.status_code, len(result))
@@ -723,6 +975,7 @@ async def _handle_http_fetch(
         logger.warning("http_fetch: failed for %s: %s", url[:80], e)
         return step.get("default", "")
 
+
 # ── xlsx Fetch ────────────────────────────────────────────────────────────────
 
 async def _handle_xlsx_fetch(
@@ -730,7 +983,6 @@ async def _handle_xlsx_fetch(
     context: dict[str, str],
     **_,
 ) -> str:
-
     url_template: str = step.get("url_template") or step.get("url", "")
     url = _resolve_template(url_template, context)
     if not url:
@@ -751,12 +1003,7 @@ async def _handle_xlsx_fetch(
             logger.info("xlsx_fetch: GET %s → %d (%d bytes)", url[:80], resp.status_code, len(raw_bytes))
 
         wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), read_only=True, data_only=True)
-
-        if isinstance(sheet_ref, int):
-            ws = wb.worksheets[sheet_ref]
-        else:
-            ws = wb[sheet_ref]
-
+        ws = wb.worksheets[sheet_ref] if isinstance(sheet_ref, int) else wb[sheet_ref]
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             return "[]"
@@ -764,16 +1011,8 @@ async def _handle_xlsx_fetch(
         header = [str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(rows[0])]
 
         if columns:
-            col_indices = []
-            for col in columns:
-                if isinstance(col, int):
-                    col_indices.append(col)
-                elif col in header:
-                    col_indices.append(header.index(col))
-                else:
-                    logger.warning("xlsx_fetch: column %r not found in sheet", col)
-            use_cols = [columns[i] if isinstance(columns[i], str) else header[col_indices[i]]
-                        for i in range(len(col_indices))]
+            col_indices = [header.index(col) for col in columns if col in header]
+            use_cols = [col for col in columns if col in header]
         else:
             col_indices = list(range(len(header)))
             use_cols = header
@@ -781,32 +1020,22 @@ async def _handle_xlsx_fetch(
         def _cell_str(val: object) -> str:
             return str(val).strip() if val is not None else ""
 
-        def _matches_filter(row: tuple, f: dict) -> bool:
+        def _matches_xlsx_filter(row: tuple, f: dict) -> bool:
             col_name: str = f.get("column", "")
             operator: str = f.get("operator", "equals")
             value: str = str(f.get("value", ""))
             if col_name not in header:
-                logger.warning("xlsx_fetch filter: column %r not found", col_name)
                 return True
             col_idx = header.index(col_name)
             cell = _cell_str(row[col_idx] if col_idx < len(row) else None)
-            if operator == "equals":
-                return cell == value
-            if operator == "not_equals":
-                return cell != value
-            if operator == "contains":
-                return value.lower() in cell.lower()
-            if operator == "not_contains":
-                return value.lower() not in cell.lower()
-            if operator == "not_empty":
-                return cell != ""
-            if operator == "empty":
-                return cell == ""
-            if operator == "starts_with":
-                return cell.lower().startswith(value.lower())
-            if operator == "ends_with":
-                return cell.lower().endswith(value.lower())
-            logger.warning("xlsx_fetch filter: unknown operator %r", operator)
+            if operator == "equals": return cell == value
+            if operator == "not_equals": return cell != value
+            if operator == "contains": return value.lower() in cell.lower()
+            if operator == "not_contains": return value.lower() not in cell.lower()
+            if operator == "not_empty": return cell != ""
+            if operator == "empty": return cell == ""
+            if operator == "starts_with": return cell.lower().startswith(value.lower())
+            if operator == "ends_with": return cell.lower().endswith(value.lower())
             return True
 
         all_filters: list[dict] = list(row_filters)
@@ -815,7 +1044,7 @@ async def _handle_xlsx_fetch(
 
         result: list[dict] = []
         for row in rows[1:]:
-            if all_filters and not all(_matches_filter(row, f) for f in all_filters):
+            if all_filters and not all(_matches_xlsx_filter(row, f) for f in all_filters):
                 continue
             record: dict[str, str] = {}
             for i, idx in enumerate(col_indices):
@@ -831,6 +1060,7 @@ async def _handle_xlsx_fetch(
         logger.warning("xlsx_fetch: failed for %s: %s", url[:80], e)
         return step.get("default", "[]")
 
+
 # ── Coordination ──────────────────────────────────────────────────────────────
 
 async def _handle_trigger_agent(
@@ -844,7 +1074,6 @@ async def _handle_trigger_agent(
     delay: int = int(step.get("delay_minutes", 0))
     payload_template: dict = step.get("payload", {})
     payload = {k: _resolve_template(str(v), context) for k, v in payload_template.items()}
-
     if target_name:
         await memory.enqueue_agent_trigger(pool, agent_id, target_name, payload, delay)
         logger.info("trigger_agent: queued %r (delay: %dm)", target_name, delay)
@@ -873,11 +1102,7 @@ async def _handle_notify_user(
 
     message_template: str = step.get("message_template", "")
     source_key: str | None = step.get("source_key")
-
-    if source_key:
-        message = _get(context, source_key)
-    else:
-        message = _resolve_template(message_template, context)
+    message = _get(context, source_key) if source_key else _resolve_template(message_template, context)
 
     if message:
         await bot.send_message(chat_id=target_chat_id, text=message)
@@ -1018,12 +1243,7 @@ async def _execute_pipeline(
             continue
 
         try:
-            result = await handler(
-                step=step,
-                step_type=step_type,
-                context=context,
-                **shared_kwargs,
-            )
+            result = await handler(step=step, step_type=step_type, context=context, **shared_kwargs)
         except Exception as e:
             logger.error("agent %s step %r failed: %s", name, step_id, e)
             raise
@@ -1118,7 +1338,6 @@ async def execute_agent(
 
     try:
         state = await memory.get_agent_state(pool, agent_id)
-
         flat_payload: dict[str, str] = {k: str(v) for k, v in (trigger_payload or {}).items()}
 
         data_reads: list[dict] = config_data.get("data_reads", [])
@@ -1131,14 +1350,8 @@ async def execute_agent(
             or config_data.get("pipeline", []) + config_data.get("pipeline_after_template", [])
         )
         output_step_result, has_output_step = await _execute_pipeline(
-            pool=pool,
-            bot=bot,
-            agent_id=agent_id,
-            name=name,
-            steps=steps,
-            state=state,
-            trigger_payload=flat_payload,
-            config_data=config_data,
+            pool=pool, bot=bot, agent_id=agent_id, name=name, steps=steps,
+            state=state, trigger_payload=flat_payload, config_data=config_data,
             target_chat_id=target_chat_id,
         )
 

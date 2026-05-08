@@ -55,9 +55,32 @@ DATENZUGRIFF — deterministisch:
 
 TRANSFORMATION — deterministisch, operiert auf Context-Werten:
 - transform: Berechnung oder Strukturänderung auf bereits im Context vorhandenen Daten.
-  Operationen: array_push, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
-  Hinweis zu array_push: nur für das Anhängen einzelner skalarer Werte an gruppierte numerische Arrays (z.B. Preishistorie pro Modell). Nicht verwenden für Mengenoperationen zwischen zwei Listen, Set-Differenzen oder Listenvergleiche — dafür llm_decide verwenden.
-  Hinweis zu json_path: nur für die Extraktion eines einzelnen Feldes aus einem verschachtelten JSON-Objekt. Nicht verwenden für Listenfilterung, bedingte Selektion oder Mengenoperationen — dafür llm_decide verwenden.
+  Operationen: map_field, filter, first, slice, diff, intersect, union, list_append, count, group_by, flatten, sort, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
+
+  Selektion:
+  - map_field: Einen bestimmten Key aus jedem Objekt eines JSON-Arrays extrahieren. Ergebnis: JSON-Array oder comma_list.
+  - filter: JSON-Array nach Bedingungen filtern. filters-Array mit field, operator, value. Operatoren: equals, not_equals, contains, not_contains, not_empty, empty, starts_with, ends_with, gt, lt.
+  - first: Erstes Element eines JSON-Arrays oder einer Liste zurückgeben.
+  - slice: Teilmenge eines Arrays. Parameter: start, end (optional).
+  - json_path: Einzelnes Feld aus einem JSON-Objekt extrahieren (Dot-Notation). Nicht für Listenoperationen.
+
+  Mengenlehre (alle auf JSON-Arrays oder kommaseparierten Listen):
+  - diff: Elemente die in source_key aber nicht in subtract_key sind.
+  - intersect: Elemente die in beiden Listen source_key und other_key sind.
+  - union: Beide Listen zusammenführen ohne Duplikate.
+  - list_append: Einzelnen Wert an ein flaches Array anhängen ohne Duplikat.
+
+  Aggregation:
+  - count: Länge eines Arrays als String zurückgeben.
+  - group_by: Objekte eines Arrays nach group_field gruppieren. value_field optional — wenn gesetzt, wird nur dieser Wert pro Gruppe gesammelt (für Statistiken), sonst das ganze Objekt. Ersetzt array_push vollständig.
+  - statistics: Statistische Kennzahlen auf gruppierten numerischen Listen (erwartet Dict aus group_by).
+
+  Transformation:
+  - flatten: Verschachteltes Array flach machen (eine Ebene).
+  - sort: Array sortieren. field optional für Objekt-Arrays, reverse für absteigende Reihenfolge.
+  - xml_extract, regex_extract, arithmetic, compare: unverändert.
+
+  Hinweis zu json_path: nur für einzelne Felder aus Objekten. Für Listenoperationen die passende Mengenoperation verwenden.
 
 KOORDINATION — deterministisch:
 - trigger_agent: Anderen Agenten mit Payload anstoßen. Muss immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen — nie davor, da der getriggerte Agent sonst auf veralteten State zugreift.
@@ -66,17 +89,26 @@ KOORDINATION — deterministisch:
 ENTSCHEIDUNGSMATRIX:
 Was ist deterministisch — verwende NIE ein LLM dafür:
 - Routing auf strukturierten Feldern (type, id, url != null) → router_match
-- Excel-Datei (.xlsx) von einer URL → xlsx_fetch (gibt direkt JSON-Array zurück, kein weiteres Parsing nötig)
+- Excel-Datei (.xlsx) von einer URL → xlsx_fetch (gibt direkt JSON-Array zurück). Filterbedingungen MÜSSEN als parameters.filters im Subtask stehen.
 - Bekannte URL mit strukturiertem Response (API, XML, JSON) → http_fetch + transform
-- Wert aus JSON extrahieren (einzelnes Feld aus Objekt) → transform(json_path)
-- Excel-Zeilen nach Bedingungen filtern → xlsx_fetch. Filterbedingungen aus der Instruction MÜSSEN als parameters.filters im Subtask stehen — sonst fehlen sie im generierten Step.
+- Einen Key aus jedem Objekt eines JSON-Arrays extrahieren → transform(map_field)
+- JSON-Array nach Bedingungen filtern → transform(filter)
+- Erstes Element eines Arrays → transform(first)
+- Teilmenge eines Arrays → transform(slice)
+- Elemente in A aber nicht in B → transform(diff)
+- Schnittmenge zweier Listen → transform(intersect)
+- Zwei Listen zusammenführen ohne Duplikate → transform(union)
+- Einzelnen Wert an flaches Array anhängen → transform(list_append)
+- Länge einer Liste → transform(count)
+- Objekte nach Key gruppieren oder numerische Werte sammeln → transform(group_by)
+- Verschachteltes Array flach machen → transform(flatten)
+- Array sortieren → transform(sort)
+- Statistiken auf gruppierten numerischen Listen → transform(statistics)
+- Einzelnes Feld aus JSON-Objekt extrahieren → transform(json_path)
 - Wert aus XML extrahieren → transform(xml_extract)
 - Wert aus Text per Regex → transform(regex_extract)
-- Zahl/Wert in Liste einpflegen → state_read + transform(array_push) + state_write
-- Werte an gruppiertes Array anhängen → transform(array_push)
-- Statistiken auf gesammelten Zahlen → transform(statistics)
-- Arithmetik zwischen zwei Werten (z.B. Währungsumrechnung) → transform(arithmetic)
-- Numerischer Vergleich (z.B. Preis <= Schwellenwert) → transform(compare)
+- Arithmetik zwischen Werten → transform(arithmetic)
+- Numerischer Vergleich → transform(compare)
 - Kurze Fakten im State speichern → state_write
 - Lange Dokumente speichern → data_write
 - Anderen Agent starten → trigger_agent (immer nach allen state_write-Steps)
@@ -98,7 +130,7 @@ async def _decompose_task(instruction: str) -> dict | None:
             capability=CAPABILITY_REASONING,
             caller="task_decomposition",
         )
-        logger.info("decompose raw: %r", raw[:300])
+        logger.debug("decompose raw: %r", raw[:300])
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict) or "subtasks" not in parsed:
             logger.warning("task decomposition returned unexpected structure")
@@ -203,6 +235,49 @@ transform json_path:
 transform xml_extract:
 {"id": "extract_xml", "type": "transform", "operation": "xml_extract", "source_key": "xml_string", "xpath": ".//ns:Element[@attr='value']", "attribute": "rate", "output_key": "value", "default": ""}
 Hinweis: Namespaces werden automatisch erkannt. Default-Namespace wird als "ns:" registriert, benannte Prefixe bleiben erhalten (z.B. gesmes:). XPath muss entsprechende Prefixe verwenden.
+
+transform map_field:
+{"id": "extract_isins", "type": "transform", "operation": "map_field", "source_key": "companies", "field": "isin", "output_key": "isin_list"}
+{"id": "extract_names", "type": "transform", "operation": "map_field", "source_key": "companies", "field": "name", "output_format": "comma_list", "output_key": "name_list"}
+Extrahiert einen Key aus jedem Objekt eines JSON-Arrays. output_format: "json_array" (Standard) oder "comma_list".
+
+transform filter:
+{"id": "filter_active", "type": "transform", "operation": "filter", "source_key": "items", "filters": [{"field": "status", "operator": "equals", "value": "active"}, {"field": "isin", "operator": "not_empty"}], "output_key": "active_items"}
+Filtert ein JSON-Array nach Bedingungen (AND-verknüpft). Operatoren: equals, not_equals, contains, not_contains, not_empty, empty, starts_with, ends_with, gt, lt.
+
+transform first:
+{"id": "get_first", "type": "transform", "operation": "first", "source_key": "items", "output_key": "first_item", "default": ""}
+
+transform slice:
+{"id": "take_ten", "type": "transform", "operation": "slice", "source_key": "items", "start": 0, "end": 10, "output_key": "batch"}
+
+transform diff:
+{"id": "find_new", "type": "transform", "operation": "diff", "source_key": "current_list", "subtract_key": "known_list", "output_key": "new_items"}
+{"id": "find_new", "type": "transform", "operation": "diff", "source_key": "current_list", "subtract_key": "known_list", "output_format": "comma_list", "output_key": "new_items"}
+Gibt Elemente zurück die in source_key aber nicht in subtract_key sind. output_format: "json_array" oder "comma_list".
+
+transform intersect:
+{"id": "common", "type": "transform", "operation": "intersect", "source_key": "list_a", "other_key": "list_b", "output_key": "common_items"}
+
+transform union:
+{"id": "merged", "type": "transform", "operation": "union", "source_key": "list_a", "other_key": "list_b", "output_key": "merged_list"}
+
+transform list_append:
+{"id": "append_isin", "type": "transform", "operation": "list_append", "value_key": "selected_isin", "target_key": "already_reviewed", "output_key": "updated_reviewed"}
+Hängt einen einzelnen Wert an ein flaches Array an. Keine Duplikate. target_key ist der bestehende Array-Context-Key.
+
+transform count:
+{"id": "count_items", "type": "transform", "operation": "count", "source_key": "items", "output_key": "item_count"}
+
+transform group_by:
+{"id": "group_prices", "type": "transform", "operation": "group_by", "source_key": "listings", "group_field": "model", "value_field": "price_eur", "target_key": "historical_prices", "max_items": 500, "output_key": "historical_prices"}
+Gruppiert Objekte eines Arrays nach group_field. Mit value_field: sammelt nur diesen Wert pro Gruppe (für statistics). Ohne value_field: sammelt ganze Objekte. target_key: bestehender Dict zum Zusammenführen.
+
+transform flatten:
+{"id": "flatten", "type": "transform", "operation": "flatten", "source_key": "nested_list", "output_key": "flat_list"}
+
+transform sort:
+{"id": "sort_items", "type": "transform", "operation": "sort", "source_key": "items", "field": "price", "reverse": false, "output_key": "sorted_items"}
 
 transform regex_extract:
 {"id": "extract_pattern", "type": "transform", "operation": "regex_extract", "source_key": "text", "pattern": "Pattern: ([\\d.]+)", "group": 1, "output_key": "value", "default": ""}
