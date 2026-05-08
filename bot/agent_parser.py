@@ -158,6 +158,7 @@ xlsx_fetch:
 {"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["Company Name", "ISIN", "Status", "Sector"], "filters": [{"column": "Status", "operator": "not_contains", "value": "Removed"}, {"column": "ISIN", "operator": "not_empty"}], "output_key": "companies"}
 Verfügbare Operatoren für filters: "equals", "not_equals", "contains", "not_contains", "not_empty", "empty", "starts_with", "ends_with".
 Mehrere filters werden mit AND verknüpft. Für einen einzelnen einfachen Filter kann auch die Kurzform verwendet werden: "filter": {"column": "Status", "value": "Targets Set"} (entspricht operator "equals").
+Wichtig: Wenn die Instruction Filterbedingungen für Excel-Daten beschreibt (z.B. "nur Einträge mit ISIN", "nur wenn Status nicht Removed"), müssen diese als filters-Array direkt im xlsx_fetch Step landen — nicht in einem nachfolgenden LLM-Step. Der xlsx_fetch-Step liefert dann bereits die gefilterte Liste.
 Hinweis: xlsx_fetch gibt direkt ein JSON-Array zurück. Kein http_fetch + transform für Excel-Dateien — immer xlsx_fetch verwenden.
 
 state_read:
@@ -224,6 +225,7 @@ STRUKTURREGELN:
 - Keine Steps erfinden die nicht in der Klassifikation stehen
 - Dot-Notation für verschachtelte Felder: wenn ein LLM-Step {"merged_list": [...], "new_models": [...]} zurückgibt mit output_key "merge_result", kann ein nachfolgender Step source_key "merge_result.merged_list" oder condition_key "merge_result.new_models" verwenden — kein extra Transform-Step nötig
 - trigger_agent Steps müssen immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen — nie davor, da der getriggerte Agent sonst auf veralteten State zugreift
+- Wenn die Instruction einen anderen Agenten erwähnt der angestoßen, getriggert, benachrichtigt oder gestartet werden soll, muss ein trigger_agent Step generiert werden — auch wenn das Wort "trigger" nicht explizit vorkommt. Erkennungsmerkmale: "starte X", "löse X aus", "informiere X", "übergib an X", "X soll dann laufen"
 - xlsx_fetch nie durch http_fetch + transform ersetzen — xlsx_fetch gibt direkt ein JSON-Array zurück"""
 
 
