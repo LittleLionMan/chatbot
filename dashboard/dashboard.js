@@ -593,8 +593,12 @@ function onStepTypeChange() {
   if (!type) return;
   const currentStep = _readStepFromForm();
   currentStep.type = type;
+  const posField = document.getElementById("sf-position");
+  const posValue = posField ? posField.value : "";
+  const posParent = posField ? posField.closest(".modal-field") : null;
+  const posHtml = posParent ? posParent.outerHTML : "";
   document.getElementById("modal-body").innerHTML =
-    buildStepFormBody(currentStep);
+    posHtml + buildStepFormBody(currentStep);
   if (type === "transform") onTransformOpChange();
 }
 
@@ -889,9 +893,11 @@ function renderStep(step, idx, agentId) {
 function editStep(agentId, idx) {
   const a = agentsData.find((x) => x.id === agentId);
   const step = (a.steps || [])[idx];
+  const totalSteps = (a.steps || []).length;
+  const posField = `<div class="modal-field"><div class="modal-label">Position (aktuell: ${idx}, leer = unveraendert)</div><input class="modal-input" id="sf-position" type="number" placeholder="${idx}" /></div>`;
   openModal(
     "Step bearbeiten",
-    buildStepFormBody(step),
+    posField + buildStepFormBody(step),
     `<button class="btn" onclick="closeModal()">Abbrechen</button><button class="btn btn-accent" onclick="saveStep(${agentId},${idx})">Speichern</button>`,
   );
   if (step.type === "transform") onTransformOpChange();
@@ -900,7 +906,16 @@ function editStep(agentId, idx) {
 async function saveStep(agentId, idx) {
   const a = agentsData.find((x) => x.id === agentId);
   const steps = [...(a.steps || [])];
-  steps[idx] = _readStepFromForm();
+  const updatedStep = _readStepFromForm();
+  const posRaw = _val("sf-position");
+  const newPos =
+    posRaw !== "" && posRaw !== null && posRaw !== undefined
+      ? parseInt(posRaw, 10)
+      : null;
+  steps.splice(idx, 1);
+  if (newPos === null || isNaN(newPos) || newPos >= steps.length)
+    steps.push(updatedStep);
+  else steps.splice(newPos, 0, updatedStep);
   try {
     await api("/api/agents/" + agentId, {
       method: "PATCH",
@@ -937,10 +952,10 @@ function deleteStep(agentId, idx) {
 }
 
 function addStep(agentId) {
+  const posField = `<div class="modal-field"><div class="modal-label">Position (leer = ans Ende)</div><input class="modal-input" id="sf-position" type="number" placeholder="0 = Anfang" /></div>`;
   openModal(
     "Neuen Step hinzufuegen",
-    `<div class="modal-field"><div class="modal-label">Position (leer = ans Ende)</div><input class="modal-input" id="sf-position" type="number" placeholder="0 = Anfang" /></div>` +
-      buildStepFormBody({ id: "", type: "llm_extract" }),
+    posField + buildStepFormBody({ id: "", type: "llm_extract" }),
     `<button class="btn" onclick="closeModal()">Abbrechen</button><button class="btn btn-accent" onclick="saveNewStep(${agentId})">Hinzufuegen</button>`,
   );
 }
