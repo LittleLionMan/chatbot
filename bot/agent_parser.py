@@ -98,7 +98,7 @@ async def _decompose_task(instruction: str) -> dict | None:
             capability=CAPABILITY_REASONING,
             caller="task_decomposition",
         )
-        logger.debug("decompose raw: %r", raw[:300])
+        logger.info("decompose raw: %r", raw[:300])
         parsed = json.loads(clean_llm_json(raw))
         if not isinstance(parsed, dict) or "subtasks" not in parsed:
             logger.warning("task decomposition returned unexpected structure")
