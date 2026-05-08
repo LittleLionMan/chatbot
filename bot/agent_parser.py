@@ -14,8 +14,6 @@ from bot.utils import clean_llm_json, parse_agent_config
 logger = logging.getLogger(__name__)
 
 
-# ── Task Decomposition ────────────────────────────────────────────────────────
-
 _DECOMPOSE_SYSTEM = """Du analysierst einen Agenten-Auftrag und zerlegst ihn in Teilaufgaben.
 Für jede Teilaufgabe bestimmst du den optimalen Baustein-Typ.
 
@@ -41,13 +39,14 @@ ROUTING:
 
 LLM — nur wenn Urteilsvermögen, Abstraktion oder Sprachverständnis nötig ist:
 - llm_extract: Strukturierte Daten aus unstrukturiertem Text extrahieren. Gibt immer JSON zurück.
-- llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück.
+- llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück. Auch für Mengenoperationen zwischen zwei Listen (z.B. Differenz, Schnittmenge) wenn die Logik Interpretation erfordert.
 - llm_summarize: Zusammenfassung für Menschen oder als Input für weitere Steps.
 
 DATENZUGRIFF — deterministisch:
 - web_search: Websuche wenn die URL nicht bekannt ist oder die Ergebnisse variabel sind.
 - finance: Börsenkurse und Finanzkennzahlen für einen Ticker.
-- http_fetch: HTTP-Request an eine bekannte URL. Gibt den Response-Body als String zurück. Für strukturierte APIs, XML-Feeds, REST-Endpunkte.
+- http_fetch: HTTP-Request an eine bekannte URL. Gibt den Response-Body als String zurück. Für strukturierte APIs, XML-Feeds, REST-Endpunkte. Nie für Excel-Dateien verwenden.
+- xlsx_fetch: Lädt eine Excel-Datei (.xlsx) von einer URL und gibt ein JSON-Array der Zeilen zurück. Verwende dies immer wenn die Quelle eine .xlsx-Datei ist — nie http_fetch + transform für Excel.
 - state_read / state_write: Einzelnen Key im eigenen Agent-State lesen oder schreiben.
 - state_read_external / state_write_external: Key im State eines anderen Agenten lesen oder schreiben.
 - data_read / data_write: Längere Dokumente im eigenen agent_data Namespace lesen oder schreiben.
@@ -56,15 +55,17 @@ DATENZUGRIFF — deterministisch:
 TRANSFORMATION — deterministisch, operiert auf Context-Werten:
 - transform: Berechnung oder Strukturänderung auf bereits im Context vorhandenen Daten.
   Operationen: array_push, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
+  Hinweis zu array_push: nur für das Anhängen einzelner skalarer Werte an gruppierte numerische Arrays (z.B. Preishistorie pro Modell). Nicht verwenden für Mengenoperationen zwischen zwei Listen, Set-Differenzen oder Listenvergleiche — dafür llm_decide verwenden.
 
 KOORDINATION — deterministisch:
-- trigger_agent: Anderen Agenten mit Payload anstoßen.
+- trigger_agent: Anderen Agenten mit Payload anstoßen. Muss immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen — nie davor, da der getriggerte Agent sonst auf veralteten State zugreift.
 - notify_user: Nachricht direkt an den User senden.
 
 ENTSCHEIDUNGSMATRIX:
 Was ist deterministisch — verwende NIE ein LLM dafür:
 - Routing auf strukturierten Feldern (type, id, url != null) → router_match
-- Bekannte URL mit strukturiertem Response → http_fetch + transform
+- Excel-Datei (.xlsx) von einer URL → xlsx_fetch (gibt direkt JSON-Array zurück, kein weiteres Parsing nötig)
+- Bekannte URL mit strukturiertem Response (API, XML, JSON) → http_fetch + transform
 - Wert aus JSON extrahieren → transform(json_path)
 - Wert aus XML extrahieren → transform(xml_extract)
 - Wert aus Text per Regex → transform(regex_extract)
@@ -75,12 +76,13 @@ Was ist deterministisch — verwende NIE ein LLM dafür:
 - Numerischer Vergleich (z.B. Preis <= Schwellenwert) → transform(compare)
 - Kurze Fakten im State speichern → state_write
 - Lange Dokumente speichern → data_write
-- Anderen Agent starten → trigger_agent
+- Anderen Agent starten → trigger_agent (immer nach allen state_write-Steps)
 - User benachrichtigen → notify_user
 
 Was braucht ein LLM:
 - Unstrukturierter Text der verstanden werden muss → llm_extract
 - Bewertung, Urteil, Entscheidung mit Begründung → llm_decide
+- Mengenoperationen zwischen zwei Listen (Differenz, neue Einträge, verlorene Einträge) → llm_decide
 - Zusammenfassung für Menschen → llm_summarize
 - Websuche wenn URL nicht bekannt → web_search"""
 
@@ -108,8 +110,6 @@ async def _decompose_task(instruction: str) -> dict | None:
         logger.warning("task decomposition failed: %s", e)
         return None
 
-
-# ── Pipeline Generator ────────────────────────────────────────────────────────
 
 _PIPELINE_GENERATOR_SYSTEM = """Du übersetzt eine Aufgaben-Klassifikation in eine ausführbare Pipeline.
 
@@ -154,6 +154,7 @@ http_fetch:
 
 xlsx_fetch:
 {"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["Company Name", "ISIN", "Status", "Sector"], "filter": {"column": "Status", "value": "Targets Set"}, "output_key": "companies"}
+Hinweis: xlsx_fetch gibt direkt ein JSON-Array zurück. Kein http_fetch + transform für Excel-Dateien — immer xlsx_fetch verwenden.
 
 state_read:
 {"id": "read_data", "type": "state_read", "key": "my_key", "output_key": "data", "default": "{}"}
@@ -176,6 +177,7 @@ data_read_external / data_write_external:
 transform array_push:
 {"id": "append", "type": "transform", "operation": "array_push", "value_key": "price_eur", "group_key": "extracted_model", "target_key": "historical_prices", "output_key": "historical_prices", "max_items": 500}
 value_key: Context-Key mit dem anzuhängenden Wert. group_key: Context-Key mit dem Gruppennamen. target_key: Context-Key des bestehenden Dict {gruppe: [werte]}.
+Wichtig: array_push nur für einzelne skalare Werte an gruppierte numerische Arrays (z.B. Preishistorie). Nicht für Mengenoperationen zwischen Listen — dafür llm_decide verwenden.
 
 transform statistics:
 {"id": "stats", "type": "transform", "operation": "statistics", "source_key": "historical_prices", "model_key": "extracted_model", "functions": ["q1", "q3", "iqr", "lower_bound"], "multiplier": 1.5, "output_key": "price_stats"}
@@ -216,7 +218,9 @@ STRUKTURREGELN:
 - only_if_route weglassen wenn der Step auf allen Routen läuft
 - only_if_key: {"key": "context_key", "value": "wert"} — Step läuft nur wenn Context-Key den Wert hat. Dot-Notation möglich. Nützlich um LLM-Steps deterministisch zu überspringen wenn ein vorheriger compare-Step false ergeben hat (z.B. only_if_key: {"key": "is_bargain", "value": "true"})
 - Keine Steps erfinden die nicht in der Klassifikation stehen
-- Dot-Notation für verschachtelte Felder: wenn ein LLM-Step {"merged_list": [...], "new_models": [...]} zurückgibt mit output_key "merge_result", kann ein nachfolgender Step source_key "merge_result.merged_list" oder condition_key "merge_result.new_models" verwenden — kein extra Transform-Step nötig"""
+- Dot-Notation für verschachtelte Felder: wenn ein LLM-Step {"merged_list": [...], "new_models": [...]} zurückgibt mit output_key "merge_result", kann ein nachfolgender Step source_key "merge_result.merged_list" oder condition_key "merge_result.new_models" verwenden — kein extra Transform-Step nötig
+- trigger_agent Steps müssen immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen — nie davor, da der getriggerte Agent sonst auf veralteten State zugreift
+- xlsx_fetch nie durch http_fetch + transform ersetzen — xlsx_fetch gibt direkt ein JSON-Array zurück"""
 
 
 async def _generate_pipeline(
@@ -252,8 +256,6 @@ async def _generate_pipeline(
         return None
 
 
-# ── Agent Name Resolution ─────────────────────────────────────────────────────
-
 _NAME_RESOLUTION_SYSTEM = """Identifiziere welcher Agent aus der Liste gemeint ist.
 Antworte NUR mit der ID des Agenten als Integer, kein anderer Text.
 Wenn kein Agent eindeutig zuzuordnen ist, antworte mit 0.
@@ -285,8 +287,6 @@ async def resolve_agent_by_text(
         logger.warning("agent name resolution failed: %s", e)
         return None
 
-
-# ── Agent Creation ────────────────────────────────────────────────────────────
 
 _AGENT_PARSER_SYSTEM = """Du extrahierst einen persistenten Agenten aus einer Nutzeranfrage.
 Ein Agent läuft nach Plan, erinnert sich an frühere Ergebnisse und handelt nur wenn sich etwas Relevantes ändert.
@@ -384,8 +384,6 @@ async def parse_agent_creation(
         logger.warning("agent parsing failed: %s", e)
         return None
 
-
-# ── Agent Talk ────────────────────────────────────────────────────────────────
 
 _AGENT_TALK_SYSTEM = """Du bist Bob. Ein Nutzer fragt nach einem deiner laufenden Agenten oder möchte dessen Konfiguration ändern.
 
@@ -492,8 +490,6 @@ async def handle_agent_talk(
     return response, new_config, new_name
 
 
-# ── Pipeline Regeneration (for handler.py) ────────────────────────────────────
-
 async def regenerate_pipeline_for_agent(agent_config: dict) -> dict:
     instruction = agent_config.get("instruction", "")
     if not instruction:
@@ -515,8 +511,6 @@ async def regenerate_pipeline_for_agent(agent_config: dict) -> dict:
     updated.pop("work_capability", None)
     return updated
 
-
-# ── Scheduling Helper ─────────────────────────────────────────────────────────
 
 def next_agent_run_after(schedule: str, timezone: str) -> datetime:
     try:
