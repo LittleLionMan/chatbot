@@ -14,6 +14,8 @@ let _agentMemCache = {};
 let _agentDataCache = {};
 let _memCache = {};
 let _confirmCallback = null;
+let _stepContextKeys = [];
+let _stepRouteKeys = [];
 let _usagePage = 0;
 const _usageLimit = 10;
 
@@ -308,6 +310,32 @@ function transformOpOptions(selected) {
     .join("");
 }
 
+function contextDropdown(id, value, placeholder) {
+  const opts = _stepContextKeys
+    .map(
+      (k) =>
+        `<option value="${k}" ${k === (value || "") ? "selected" : ""}>${k}</option>`,
+    )
+    .join("");
+  return `<div style="position:relative;">
+    <input class="modal-input" id="${id}" value="${(value || "").replace(/"/g, "&quot;")}" placeholder="${placeholder || ""}" list="${id}-list" autocomplete="off" />
+    <datalist id="${id}-list">${opts}</datalist>
+  </div>`;
+}
+
+function routeDropdown(id, value, placeholder) {
+  const opts = _stepRouteKeys
+    .map(
+      (k) =>
+        `<option value="${k}" ${k === (value || "") ? "selected" : ""}>${k}</option>`,
+    )
+    .join("");
+  return `<div style="position:relative;">
+    <input class="modal-input" id="${id}" value="${(value || "").replace(/"/g, "&quot;")}" placeholder="${placeholder || ""}" list="${id}-list" autocomplete="off" />
+    <datalist id="${id}-list">${opts}</datalist>
+  </div>`;
+}
+
 function field(label, inputHtml, id) {
   return `<div class="modal-field" id="${id || ""}"><div class="modal-label">${label}</div>${inputHtml}</div>`;
 }
@@ -331,9 +359,16 @@ function buildStepFormBody(step) {
   const commonTop = `
     ${field("ID", textInput("sf-id", step.id, "z.B. extract_gpu"))}
     ${field("Type", `<select class="modal-select" id="sf-type" onchange="onStepTypeChange()">${stepTypeOptions(type)}</select>`)}
-    ${field("only_if_route", textInput("sf-route", onlyIfRoute, "z.B. new_listing"))}
-    ${field("only_if_key.key", textInput("sf-only-if-key", onlyIfKeyKey, "z.B. is_bargain"))}
-    ${field("only_if_key.value", textInput("sf-only-if-val", onlyIfKeyVal, "z.B. true"))}
+    ${field("only_if_route", routeDropdown("sf-route", onlyIfRoute, "z.B. evaluate"))}
+    <div class="modal-field">
+      <div class="modal-label">only_if_key</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <input class="modal-input" id="sf-only-if-key" value="${onlyIfKeyKey}" placeholder="Key z.B. decision.approved" oninput="document.getElementById('sf-only-if-val-wrap').style.display=this.value?'':'none'" />
+        <div id="sf-only-if-val-wrap" style="display:${onlyIfKeyKey ? "" : "none"}">
+          <input class="modal-input" id="sf-only-if-val" value="${onlyIfKeyVal}" placeholder="Wert z.B. true" />
+        </div>
+      </div>
+    </div>
   `;
   const commonBottom = `<div class="modal-field" style="display:flex;gap:16px;">${checkbox("sf-output", step.is_output, "is_output")}</div>`;
   const outputKey = field(
@@ -345,12 +380,12 @@ function buildStepFormBody(step) {
     textInput("sf-default", step.default, ""),
   );
   const sourceKey = field(
-    "source_key",
-    textInput("sf-source-key", step.source_key, "z.B. baselines"),
+    "source_key (Context-Key: woher kommt der Wert)",
+    contextDropdown("sf-source-key", step.source_key, "z.B. extracted_isins"),
   );
   const targetKey = field(
     "target_key",
-    textInput("sf-target-key", step.target_key, "z.B. baselines"),
+    contextDropdown("sf-target-key", step.target_key, "z.B. baselines"),
   );
   const agentName = field(
     "agent_name",
@@ -361,8 +396,8 @@ function buildStepFormBody(step) {
     textInput("sf-namespace", step.namespace, "z.B. analyses"),
   );
   const keyField = field(
-    "key",
-    textInput("sf-key", step.key, "z.B. price_baselines"),
+    "key (State-Key: Name unter dem gespeichert wird)",
+    textInput("sf-key", step.key, "z.B. known_isins"),
   );
   const keyTemplate = field(
     "key_template",
@@ -553,8 +588,8 @@ function buildStepFormBody(step) {
         `<div id="sf-group-field-wrap">${field("group_field (group_by)", textInput("sf-group-field", step.group_field, "z.B. model"))}</div>` +
         `<div id="sf-value-field-wrap">${field("value_field (group_by, optional)", textInput("sf-value-field", step.value_field, "z.B. price"))}</div>` +
         `<div id="sf-filters-json-wrap">${field("filters (JSON-Array)", textarea("sf-filters-json", JSON.stringify(step.filters || [], null, 2), 100))}</div>` +
-        `<div id="sf-subtract-key-wrap">${field("subtract_key (diff)", textInput("sf-subtract-key", step.subtract_key, "z.B. known_list"))}</div>` +
-        `<div id="sf-other-key-wrap">${field("other_key (intersect / union)", textInput("sf-other-key", step.other_key, "z.B. list_b"))}</div>` +
+        `<div id="sf-subtract-key-wrap">${field("subtract_key (diff)", contextDropdown("sf-subtract-key", step.subtract_key, "z.B. known_list"))}</div>` +
+        `<div id="sf-other-key-wrap">${field("other_key (intersect / union)", contextDropdown("sf-other-key", step.other_key, "z.B. list_b"))}</div>` +
         `<div id="sf-start-wrap">${field("start (slice)", textInput("sf-start", step.start !== undefined ? String(step.start) : "0", "0"))}</div>` +
         `<div id="sf-end-wrap">${field("end (slice, leer = bis Ende)", textInput("sf-end", step.end !== undefined ? String(step.end) : "", ""))}</div>` +
         `<div id="sf-reverse-wrap">${field("reverse (sort)", `<select class=\"modal-select\" id=\"sf-reverse\"><option value=\"false\" ${!step.reverse ? "selected" : ""}>false</option><option value=\"true\" ${step.reverse ? "selected" : ""}>true</option></select>`)}</div>` +
@@ -621,7 +656,6 @@ function onStepTypeChange() {
   const currentStep = _readStepFromForm();
   currentStep.type = type;
   const posField = document.getElementById("sf-position");
-  const posValue = posField ? posField.value : "";
   const posParent = posField ? posField.closest(".modal-field") : null;
   const posHtml = posParent ? posParent.outerHTML : "";
   document.getElementById("modal-body").innerHTML =
@@ -672,7 +706,7 @@ function onTransformOpChange() {
   show("sf-output-true-wrap", op === "compare");
   show("sf-output-false-wrap", op === "compare");
   show("sf-source-key", !["arithmetic", "compare"].includes(op));
-  show("sf-target-key", op === "array_push");
+  show("sf-target-key", op === "list_append");
 }
 
 function _val(id) {
@@ -982,9 +1016,21 @@ function renderStep(step, idx, agentId) {
 
 function editStep(agentId, idx) {
   const a = agentsData.find((x) => x.id === agentId);
-  const step = (a.steps || [])[idx];
-  const totalSteps = (a.steps || []).length;
-  const posField = `<div class="modal-field"><div class="modal-label">Position (aktuell: ${idx}, leer = unveraendert)</div><input class="modal-input" id="sf-position" type="number" placeholder="${idx}" /></div>`;
+  const steps = a.steps || [];
+  const step = steps[idx];
+  _stepContextKeys = steps
+    .slice(0, idx)
+    .filter((s) => s.output_key)
+    .map((s) => s.output_key);
+  _stepRouteKeys = steps
+    .slice(0, idx)
+    .filter((s) => s.type === "router_match" || s.type === "router_llm")
+    .flatMap((s) => {
+      const routes = (s.rules || []).map((r) => r.then).filter(Boolean);
+      if (s.default) routes.push(s.default);
+      return routes;
+    });
+  const posField = `<div class="modal-field"><div class="modal-label">Position</div><input class="modal-input" id="sf-position" type="number" value="${idx}" /></div>`;
   openModal(
     "Step bearbeiten",
     posField + buildStepFormBody(step),
@@ -1001,11 +1047,10 @@ async function saveStep(agentId, idx) {
   const newPos =
     posRaw !== "" && posRaw !== null && posRaw !== undefined
       ? parseInt(posRaw, 10)
-      : null;
+      : idx;
   steps.splice(idx, 1);
-  if (newPos === null || isNaN(newPos) || newPos >= steps.length)
-    steps.push(updatedStep);
-  else steps.splice(newPos, 0, updatedStep);
+  if (isNaN(newPos) || newPos >= steps.length) steps.push(updatedStep);
+  else steps.splice(Math.max(0, newPos), 0, updatedStep);
   try {
     await api("/api/agents/" + agentId, {
       method: "PATCH",
@@ -1042,6 +1087,16 @@ function deleteStep(agentId, idx) {
 }
 
 function addStep(agentId) {
+  const a = agentsData.find((x) => x.id === agentId);
+  const steps = a.steps || [];
+  _stepContextKeys = steps.filter((s) => s.output_key).map((s) => s.output_key);
+  _stepRouteKeys = steps
+    .filter((s) => s.type === "router_match" || s.type === "router_llm")
+    .flatMap((s) => {
+      const routes = (s.rules || []).map((r) => r.then).filter(Boolean);
+      if (s.default) routes.push(s.default);
+      return routes;
+    });
   const posField = `<div class="modal-field"><div class="modal-label">Position (leer = ans Ende)</div><input class="modal-input" id="sf-position" type="number" placeholder="0 = Anfang" /></div>`;
   openModal(
     "Neuen Step hinzufuegen",
