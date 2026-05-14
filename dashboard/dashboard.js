@@ -123,6 +123,7 @@ const STEP_TYPE_GROUPS = {
   Datenzugriff: [
     "web_search",
     "finance",
+    "finance_search",
     "http_fetch",
     "xlsx_fetch",
     "state_read",
@@ -148,6 +149,7 @@ const STEP_TYPE_COLORS = {
   llm_analyze: "var(--accent)",
   web_search: "var(--blue)",
   finance: "var(--blue)",
+  finance_search: "var(--blue)",
   http_fetch: "var(--blue)",
   xlsx_fetch: "var(--blue)",
   state_read: "var(--text3)",
@@ -201,6 +203,12 @@ function stepSummary(step) {
       break;
     case "finance":
       parts.push(`ticker_key: ${step.ticker_key || "selected_ticker"}`);
+      break;
+    case "finance_search":
+      parts.push(`query_key: ${step.query_key || "selected_isin"}`);
+      break;
+    case "finance_search":
+      parts.push(`query_key: ${step.query_key || "selected_isin"}`);
       break;
     case "http_fetch":
       parts.push(step.url || step.url_template || "?");
@@ -475,8 +483,17 @@ function buildStepFormBody(step) {
       typeSpecific =
         field(
           "ticker_key",
-          textInput("sf-ticker-key", step.ticker_key, "selected_ticker"),
+          contextDropdown("sf-ticker-key", step.ticker_key, "selected_ticker"),
         ) + outputKey;
+      break;
+    case "finance_search":
+      typeSpecific =
+        field(
+          "query_key (ISIN oder Suchbegriff)",
+          contextDropdown("sf-query-key", step.query_key, "selected_isin"),
+        ) +
+        outputKey +
+        defaultVal;
       break;
     case "http_fetch":
       typeSpecific =
@@ -779,6 +796,11 @@ function _readStepFromForm() {
     }
     case "finance":
       step.ticker_key = _val("sf-ticker-key") || "selected_ticker";
+      break;
+    case "finance_search":
+      step.query_key = _val("sf-query-key") || "selected_isin";
+      const fsDef = _val("sf-default");
+      if (fsDef) step.default = fsDef;
       break;
     case "state_read": {
       step.key = _val("sf-key") || "";

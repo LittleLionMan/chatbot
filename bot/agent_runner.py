@@ -290,6 +290,49 @@ async def _handle_finance(
     return result
 
 
+async def _handle_finance_search(
+    step: dict,
+    context: dict[str, str],
+    **_,
+) -> str:
+    from bot import finance as _finance
+
+    query_key = step.get("query_key", "selected_isin")
+    query = _get(context, query_key).strip()
+    if not query:
+        logger.warning("finance_search step: no query in context key %r", query_key)
+        return "{}"
+
+    result = await _finance.search_ticker(query)
+    if result is None:
+        logger.info("finance_search: no result for %r", query)
+        return step.get("default", "{}")
+
+    return json.dumps(result, ensure_ascii=False)
+
+
+async def _handle_finance_search(
+    step: dict,
+    context: dict[str, str],
+    **_,
+) -> str:
+    from bot import finance as _finance
+
+    query_key = step.get("query_key", "selected_isin")
+    query = _get(context, query_key).strip()
+    if not query:
+        logger.warning("finance_search step: no query in context key %r", query_key)
+        return "{}"
+
+    result = await _finance.search_ticker(query)
+    if result is None:
+        logger.info("finance_search: no result for %r", query)
+        return "{}"
+
+    logger.info("finance_search: found %s (%s) for %r", result.get("symbol"), result.get("longname"), query)
+    return json.dumps(result, ensure_ascii=False)
+
+
 # ── State / Data ──────────────────────────────────────────────────────────────
 
 async def _handle_state_read(
@@ -1129,6 +1172,8 @@ _STEP_HANDLERS: dict[str, StepHandler] = {
     "llm_analyze": _handle_llm_step,
     "web_search": _handle_web_search,
     "finance": _handle_finance,
+    "finance_search": _handle_finance_search,
+    "finance_search": _handle_finance_search,
     "http_fetch": _handle_http_fetch,
     "xlsx_fetch": _handle_xlsx_fetch,
     "state_read": _handle_state_read,

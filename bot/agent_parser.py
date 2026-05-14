@@ -46,7 +46,9 @@ LLM — nur wenn Urteilsvermögen, Abstraktion oder Sprachverständnis nötig is
 
 DATENZUGRIFF — deterministisch:
 - web_search: Websuche wenn die URL nicht bekannt ist oder die Ergebnisse variabel sind.
-- finance: Börsenkurse und Finanzkennzahlen für einen Ticker.
+- finance: Börsenkurse und Finanzkennzahlen für einen bekannten Ticker-Symbol.
+- finance_search: Ticker und Name eines Unternehmens über ISIN oder Suchbegriff deterministisch ermitteln. Gibt symbol, name, exchange zurück. Verwenden wenn nur ISIN bekannt und Ticker unbekannt ist — nie http_fetch auf Yahoo direkt.
+- finance_search: Ticker und Unternehmensname aus einer ISIN oder einem Suchbegriff ermitteln. Gibt symbol, longname, exchange zurück. Verwenden wenn nur eine ISIN bekannt ist und der Ticker erst ermittelt werden muss.
 - http_fetch: HTTP-Request an eine bekannte URL. Gibt den Response-Body als String zurück. Für strukturierte APIs, XML-Feeds, REST-Endpunkte. Nie für Excel-Dateien verwenden.
 - xlsx_fetch: Lädt eine Excel-Datei (.xlsx) von einer URL und gibt ein JSON-Array der Zeilen zurück. Verwende dies immer wenn die Quelle eine .xlsx-Datei ist — nie http_fetch + transform für Excel.
 - state_read / state_write: Einzelnen Key im eigenen Agent-State lesen oder schreiben.
@@ -90,6 +92,7 @@ KOORDINATION — deterministisch:
 ENTSCHEIDUNGSMATRIX:
 Was ist deterministisch — verwende NIE ein LLM dafür:
 - Routing auf strukturierten Feldern (type, id, url != null) → router_match
+- ISIN oder Name → Ticker + Unternehmensname ermitteln → finance_search
 - Excel-Datei (.xlsx) von einer URL → xlsx_fetch (gibt direkt JSON-Array zurück). Filterbedingungen MÜSSEN als parameters.filters im Subtask stehen.
 - Bekannte URL mit strukturiertem Response (API, XML, JSON) → http_fetch + transform
 - Einen Key aus jedem Objekt eines JSON-Arrays extrahieren → transform(map_field)
@@ -188,6 +191,10 @@ web_search:
 
 finance:
 {"id": "get_quote", "type": "finance", "ticker_key": "selected_ticker", "output_key": "quote_data"}
+
+finance_search:
+{"id": "resolve_ticker", "type": "finance_search", "query_key": "selected_isin", "output_key": "company_info"}
+query_key: Context-Key mit ISIN oder Suchbegriff. Gibt JSON zurück mit: symbol (Ticker), longname (Unternehmensname), exchange, quote_type.
 
 http_fetch:
 {"id": "fetch", "type": "http_fetch", "url": "https://example.com/api/data", "output_key": "raw_response", "default": ""}

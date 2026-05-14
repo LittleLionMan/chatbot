@@ -35,6 +35,34 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/search/{query}")
+async def search_ticker(query: str) -> JSONResponse:
+    try:
+        search = yf.Search(query, max_results=1)
+        results = search.quotes
+        if not results:
+            raise HTTPException(status_code=404, detail=f"No results for {query}")
+        top = results[0]
+        symbol = top.get("symbol", "")
+        name = top.get("longname") or top.get("shortname") or ""
+        exchange = top.get("exchange", "")
+        quote_type = top.get("quoteType", "")
+        if not symbol:
+            raise HTTPException(status_code=404, detail=f"No symbol found for {query}")
+        logger.info("Search %r → %s (%s)", query, symbol, name)
+        return JSONResponse({
+            "symbol": symbol,
+            "name": name,
+            "exchange": exchange,
+            "quote_type": quote_type,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Search failed for %r: %s", query, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/quote/{ticker}")
 async def get_quote(ticker: str) -> JSONResponse:
     try:
