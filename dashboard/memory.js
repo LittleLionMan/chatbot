@@ -311,3 +311,4 @@ async function saveNewMemory(subjectId) {
   } catch {
     toast("Fehler.", true);
   }
+}
