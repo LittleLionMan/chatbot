@@ -165,7 +165,10 @@ async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
         raise HTTPException(status_code=404, detail="Agent not found")
     config = _parse_config(row["config"])
     new_name = body.name if body.name is not None else row["name"]
-    new_schedule = body.schedule if body.schedule is not None else row["schedule"]
+    if "schedule" in body.model_fields_set:
+        new_schedule = body.schedule
+    else:
+        new_schedule = row["schedule"]
     if body.instruction is not None:
         config["instruction"] = body.instruction
     if body.steps is not None:
