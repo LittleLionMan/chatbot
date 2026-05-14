@@ -20,6 +20,6 @@ COPY monitors.js .
 COPY usage.js .
 COPY registry.js .
 COPY triggers.js .
-COPY main.js .
+COPY app.js .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
