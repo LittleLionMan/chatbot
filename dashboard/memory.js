@@ -311,22 +311,3 @@ async function saveNewMemory(subjectId) {
   } catch {
     toast("Fehler.", true);
   }
-}
-
-document
-  .getElementById("usage-tabs")
-  .querySelectorAll(".agent-tab")
-  .forEach((tab) =>
-    tab.addEventListener("click", function () {
-      document
-        .querySelectorAll("#usage-tabs .agent-tab")
-        .forEach((t) => t.classList.remove("active"));
-      ["models", "caller", "history"].forEach((n) =>
-        document.getElementById("usage-tab-" + n).classList.remove("active"),
-      );
-      this.classList.add("active");
-      document
-        .getElementById("usage-tab-" + this.dataset.tab)
-        .classList.add("active");
-    }),
-  );

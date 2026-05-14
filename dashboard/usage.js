@@ -1,5 +1,3 @@
-}
-
 document
   .getElementById("usage-tabs")
   .querySelectorAll(".agent-tab")

@@ -934,6 +934,9 @@
                 </button>
                 <button class="nav-btn" data-section="memory">Memory</button>
                 <button class="nav-btn" data-section="scrapers">Scraper</button>
+                <button class="nav-btn" data-section="monitors">
+                    Monitore
+                </button>
                 <button class="nav-btn" data-section="usage">Usage</button>
                 <button class="nav-btn" data-section="registry">
                     Registry
@@ -1029,6 +1032,25 @@
                 </div>
             </div>
 
+            <div class="section" id="section-monitors">
+                <div class="sidebar" id="monitors-sidebar">
+                    <div id="monitors-list">
+                        <div
+                            style="
+                                font-size: 13px;
+                                color: var(--text3);
+                                padding: 8px;
+                            "
+                        >
+                            Lade...
+                        </div>
+                    </div>
+                </div>
+                <div class="detail" id="monitors-detail">
+                    <div class="empty-state">← Monitor auswählen</div>
+                </div>
+            </div>
+
             <div class="section" id="section-usage">
                 <div
                     class="detail visible"
@@ -1117,6 +1139,12 @@
                     <path d="m21 21-4.35-4.35" />
                 </svg>
                 <span class="bottom-nav-label">Scraper</span>
+            </button>
+            <button class="bottom-nav-item" data-section="monitors">
+                <svg viewBox="0 0 24 24">
+                    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                </svg>
+                <span class="bottom-nav-label">Monitore</span>
             </button>
             <button class="bottom-nav-item" data-section="usage">
                 <svg viewBox="0 0 24 24">
