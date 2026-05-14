@@ -12,7 +12,7 @@ import telegram
 from bot import brain, memory
 from bot.agent_parser import next_agent_run_after
 from bot.brain import ProviderRateLimitError
-from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, CAPABILITY_REASONING
+from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
