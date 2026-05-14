@@ -88,7 +88,7 @@ def _to_str_set(items: list) -> set[str]:
 # ── Router ────────────────────────────────────────────────────────────────────
 
 def _evaluate_condition(condition: str, context: dict[str, str]) -> bool:
-    match = re.match(r"^([\w.]+)\s*(==|!=|>|<|>=|<=)\s*(.+)$", condition.strip())
+    match = re.match(r"^([\w.]+)\s*(==|!=|>|<|>=|<=)\s*(.*)$", condition.strip())
     if not match:
         logger.warning("router_match: unparseable condition %r", condition)
         return False
@@ -96,7 +96,7 @@ def _evaluate_condition(condition: str, context: dict[str, str]) -> bool:
     lhs_key, op, rhs_raw = match.group(1), match.group(2), match.group(3).strip()
     lhs_raw = context.get(lhs_key.replace(".", "_"), context.get(lhs_key, ""))
     rhs = rhs_raw.strip("'\"")
-    if rhs_raw.lower() == "null":
+    if rhs_raw.lower() in ("null", "") or rhs == "":
         rhs = None
 
     if op == "==" and rhs is None:
