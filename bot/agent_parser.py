@@ -39,9 +39,10 @@ ROUTING:
 - router_llm: LLM-basiertes Routing wenn die Entscheidung Interpretation erfordert.
 
 LLM — nur wenn Urteilsvermögen, Abstraktion oder Sprachverständnis nötig ist:
-- llm_extract: Strukturierte Daten aus unstrukturiertem Text extrahieren. Gibt immer JSON zurück.
-- llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück. Auch für Set-Operationen zwischen zwei bereits im Context vorhandenen Listen (z.B. neue Einträge finden, verlorene Einträge identifizieren).
-- llm_summarize: Zusammenfassung für Menschen oder als Input für weitere Steps.
+- llm_extract: Strukturierte Daten aus bekanntem Format extrahieren. Gibt immer JSON zurück. Capability: simple_tasks.
+- llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück. Auch für Set-Operationen zwischen zwei bereits im Context vorhandenen Listen. Capability: reasoning.
+- llm_summarize: Zusammenfassung für Menschen oder als Input für weitere Steps. Capability: chat.
+- llm_analyze: Tiefgehende Analyse aus heterogenen Quellen mit mehrstufigem Schlussfolgern. Gibt immer JSON zurück. Verwenden wenn Informationen aus verschiedenen Quellen gegeneinander abgewogen werden müssen, Widersprüche erkannt werden müssen, oder ein begründetes Gesamturteil gebildet werden soll (z.B. Fundamentalanalyse, komplexe Risikobewertung, strategische Einschätzung). Capability: deep_reasoning.
 
 DATENZUGRIFF — deterministisch:
 - web_search: Websuche wenn die URL nicht bekannt ist oder die Ergebnisse variabel sind.
@@ -119,7 +120,8 @@ Was braucht ein LLM:
 - Bewertung, Urteil, Entscheidung mit Begründung → llm_decide
 - Mengenoperationen zwischen zwei Listen (Differenz, neue Einträge, verlorene Einträge) → llm_decide
 - Zusammenfassung für Menschen → llm_summarize
-- Websuche wenn URL nicht bekannt → web_search"""
+- Websuche wenn URL nicht bekannt → web_search
+- Komplexe Analyse aus heterogenen Quellen, mehrstufiges Schlussfolgern, Gesamturteil aus widersprüchlichen Informationen → llm_analyze"""
 
 
 async def _decompose_task(instruction: str) -> dict | None:
@@ -172,6 +174,10 @@ llm_extract:
 
 llm_decide:
 {"id": "decide", "type": "llm_decide", "prompt": "Bewerte X anhand von {{data}}. Antworte NUR mit rohem JSON: {\"verdict\": \"...\", \"reason\": \"...\"}", "output_key": "decision", "only_if_route": "route_name"}
+
+llm_analyze:
+{"id": "analyze", "type": "llm_analyze", "prompt": "Analysiere X auf Basis von {{source_a}} und {{source_b}}. Wäge widersprüchliche Informationen ab und bilde ein begründetes Gesamturteil. Antworte NUR mit rohem JSON: {\"field\": \"...\"}", "output_key": "analysis_result"}
+Verwenden für: Fundamentalanalysen, komplexe Risikobewertungen, strategische Einschätzungen aus heterogenen Quellen. Capability: deep_reasoning.
 
 llm_summarize:
 {"id": "summarize", "type": "llm_summarize", "prompt": "Fasse zusammen.", "output_key": "summary"}

@@ -161,6 +161,7 @@ _LLM_CAPABILITY_MAP: dict[str, str] = {
     "llm_extract": CAPABILITY_SIMPLE_TASKS,
     "llm_decide": CAPABILITY_REASONING,
     "llm_summarize": CAPABILITY_CHAT,
+    "llm_analyze": CAPABILITY_DEEP_REASONING,
 }
 
 _EXTRACT_SYSTEM = """Du extrahierst strukturierte Daten. Antworte ausschließlich mit rohem JSON.
@@ -172,10 +173,15 @@ Der erste Charakter muss { sein, der letzte }. Kein anderer Text."""
 _SUMMARIZE_SYSTEM = """Du fasst zusammen. Schreibe kompaktes Markdown, maximal 300 Wörter, nur Fakten.
 Das Ergebnis wird von einem anderen Modell weiterverarbeitet."""
 
+_ANALYZE_SYSTEM = """Du erstellst tiefgehende Analysen aus heterogenen Quellen. Antworte ausschließlich mit rohem JSON.
+Der erste Charakter muss { sein, der letzte }. Kein anderer Text.
+Wäge Informationen aus verschiedenen Quellen gegeneinander ab, erkenne Widersprüche, ziehe mehrstufige Schlussfolgerungen und bilde ein begründetes Urteil."""
+
 _LLM_SYSTEM_MAP: dict[str, str] = {
     "llm_extract": _EXTRACT_SYSTEM,
     "llm_decide": _DECIDE_SYSTEM,
     "llm_summarize": _SUMMARIZE_SYSTEM,
+    "llm_analyze": _ANALYZE_SYSTEM,
 }
 
 _OUTPUT_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
@@ -1120,6 +1126,7 @@ _STEP_HANDLERS: dict[str, StepHandler] = {
     "llm_extract": _handle_llm_step,
     "llm_decide": _handle_llm_step,
     "llm_summarize": _handle_llm_step,
+    "llm_analyze": _handle_llm_step,
     "web_search": _handle_web_search,
     "finance": _handle_finance,
     "http_fetch": _handle_http_fetch,

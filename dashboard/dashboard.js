@@ -119,7 +119,7 @@ function switchSection(name) {
 
 const STEP_TYPE_GROUPS = {
   Routing: ["router_match", "router_llm"],
-  LLM: ["llm_extract", "llm_decide", "llm_summarize"],
+  LLM: ["llm_extract", "llm_decide", "llm_summarize", "llm_analyze"],
   Datenzugriff: [
     "web_search",
     "finance",
@@ -144,6 +144,8 @@ const STEP_TYPE_COLORS = {
   llm_extract: "var(--accent)",
   llm_decide: "var(--accent)",
   llm_summarize: "var(--accent)",
+  llm_analyze: "var(--accent)",
+  llm_analyze: "var(--accent)",
   web_search: "var(--blue)",
   finance: "var(--blue)",
   http_fetch: "var(--blue)",
@@ -186,6 +188,7 @@ function stepSummary(step) {
     case "llm_extract":
     case "llm_decide":
     case "llm_summarize":
+    case "llm_analyze":
       if (step.prompt)
         parts.push(
           step.prompt.slice(0, 80) + (step.prompt.length > 80 ? "..." : ""),
@@ -422,6 +425,7 @@ function buildStepFormBody(step) {
       break;
     case "llm_extract":
     case "llm_decide":
+    case "llm_analyze":
       return commonTop + promptField + outputKey + commonBottom;
     case "llm_summarize":
       return (
@@ -751,6 +755,7 @@ function _readStepFromForm() {
       break;
     case "llm_extract":
     case "llm_decide":
+    case "llm_analyze":
       step.prompt = _val("sf-prompt") || "";
       break;
     case "llm_summarize": {
