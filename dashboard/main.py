@@ -102,6 +102,17 @@ class AgentDataBody(BaseModel):
 class AgentDataPatch(BaseModel):
     value: str
 
+class MonitorPatch(BaseModel):
+    name: str | None = None
+    keywords: list[str] | None = None
+    poll_interval_seconds: int | None = None
+    feed_templates: list[str] | None = None
+    source_agent: str | None = None
+    source_state_key: str | None = None
+    source_format: str | None = None
+    target_agent: str | None = None
+
+
 
 @app.get("/api/capabilities")
 async def get_capabilities() -> list[str]:
@@ -751,3 +762,96 @@ async def get_listings(
 async def delete_listing(listing_id: int) -> dict:
     await pool().execute("DELETE FROM listings WHERE id = $1", listing_id)
     return {"ok": True}
+
+
+@app.get("/api/monitors")
+async def get_monitors() -> list[dict]:
+    rows = await pool().fetch(
+        """
+        SELECT id, monitor_type, name, source, source_agent, source_state_key,
+               source_format, target_agent, feed_templates, poll_interval_seconds,
+               keywords, extra_config, is_active, created_at
+        FROM monitor_configs
+        ORDER BY is_active DESC, created_at DESC
+        """
+    )
+    result = []
+    for r in rows:
+        result.append({
+            "id": r["id"],
+            "monitor_type": r["monitor_type"],
+            "name": r["name"],
+            "source": r["source"],
+            "source_agent": r["source_agent"],
+            "source_state_key": r["source_state_key"],
+            "source_format": r["source_format"],
+            "target_agent": r["target_agent"],
+            "feed_templates": list(r["feed_templates"]),
+            "poll_interval_seconds": r["poll_interval_seconds"],
+            "keywords": list(r["keywords"]),
+            "is_active": r["is_active"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        })
+    return result
+
+
+@app.patch("/api/monitors/{monitor_id}")
+async def patch_monitor(monitor_id: int, body: MonitorPatch) -> dict:
+    row = await pool().fetchrow(
+        "SELECT * FROM monitor_configs WHERE id = $1", monitor_id
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+    new_name = body.name if body.name is not None else row["name"]
+    new_keywords = body.keywords if body.keywords is not None else list(row["keywords"])
+    new_poll = body.poll_interval_seconds if body.poll_interval_seconds is not None else row["poll_interval_seconds"]
+    new_feeds = body.feed_templates if body.feed_templates is not None else list(row["feed_templates"])
+    new_source_agent = body.source_agent if body.source_agent is not None else row["source_agent"]
+    new_source_state_key = body.source_state_key if body.source_state_key is not None else row["source_state_key"]
+    new_source_format = body.source_format if body.source_format is not None else row["source_format"]
+    new_target_agent = body.target_agent if body.target_agent is not None else row["target_agent"]
+    await pool().execute(
+        """
+        UPDATE monitor_configs
+        SET name = $1, keywords = $2, poll_interval_seconds = $3,
+            feed_templates = $4, source_agent = $5, source_state_key = $6,
+            source_format = $7, target_agent = $8
+        WHERE id = $9
+        """,
+        new_name, new_keywords, new_poll, new_feeds,
+        new_source_agent, new_source_state_key, new_source_format,
+        new_target_agent, monitor_id,
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/monitors/{monitor_id}")
+async def deactivate_monitor(monitor_id: int) -> dict:
+    await pool().execute(
+        "UPDATE monitor_configs SET is_active = FALSE WHERE id = $1", monitor_id
+    )
+    return {"ok": True}
+
+
+@app.get("/api/monitors/{monitor_id}/seen")
+async def get_monitor_seen(monitor_id: int, limit: int = 50) -> list[dict]:
+    rows = await pool().fetch(
+        """
+        SELECT fingerprint, seen_at
+        FROM monitor_seen
+        WHERE config_id = $1
+        ORDER BY seen_at DESC
+        LIMIT $2
+        """,
+        monitor_id, limit,
+    )
+    return [{"fingerprint": r["fingerprint"], "seen_at": r["seen_at"].isoformat()} for r in rows]
+
+
+@app.delete("/api/monitors/{monitor_id}/seen")
+async def clear_monitor_seen(monitor_id: int) -> dict:
+    result = await pool().execute(
+        "DELETE FROM monitor_seen WHERE config_id = $1", monitor_id
+    )
+    count = int(result.split()[-1])
+    return {"ok": True, "deleted": count}

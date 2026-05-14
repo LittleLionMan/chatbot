@@ -12,6 +12,14 @@ RUN pip install --no-cache-dir \
 
 COPY main.py .
 COPY index.html .
-COPY dashboard.js .
+COPY utils.js .
+COPY agents.js .
+COPY memory.js .
+COPY scrapers.js .
+COPY monitors.js .
+COPY usage.js .
+COPY registry.js .
+COPY triggers.js .
+COPY main.js .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
