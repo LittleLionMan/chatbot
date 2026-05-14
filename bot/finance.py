@@ -47,3 +47,19 @@ async def is_available() -> bool:
             return resp.status_code == 200
     except Exception:
         return False
+
+async def search_ticker(query: str) -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"{_FINANCE_BASE_URL}/search/{query}")
+            if resp.status_code == 404:
+                logger.warning("Finance search: no result for %r", query)
+                return None
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        logger.warning("Finance service not reachable")
+        return None
+    except Exception as e:
+        logger.warning("Finance search error for %r: %s", query, e)
+        return None
