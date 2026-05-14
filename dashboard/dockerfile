@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir \
 COPY main.py .
 COPY index.html .
 COPY utils.js .
-COPY agents.js .
+COPY agents/ agents/
 COPY memory.js .
 COPY scrapers.js .
 COPY monitors.js .
