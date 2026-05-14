@@ -27,7 +27,7 @@ Felder:
   - "classification": Einer der verfügbaren Baustein-Typen (siehe unten)
   - "inputs": Liste von Eingaben (z.B. "trigger_payload.url", "state:baselines", "context:search_result")
   - "outputs": Liste von Ausgaben (z.B. "context:extracted", "state:baselines")
-  - "operation": Nur für transform-Bausteine. Einer von: array_push, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
+  - "operation": Nur für transform-Bausteine. Einer von: array_push, group_by, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
   - "condition": Nur wenn diese Teilaufgabe nur unter bestimmten Bedingungen läuft. Freitext.
   - "route": Nur wenn diese Teilaufgabe nur auf einem bestimmten Route-Pfad läuft.
   - "parameters": Strukturierte Parameter die direkt aus der Instruction ableitbar sind. MUSS bei xlsx_fetch gesetzt werden — ohne parameters ist ein xlsx_fetch-Subtask unvollständig und ungültig. Bei xlsx_fetch enthält parameters zwingend: "columns" (alle in der Instruction genannten Spaltennamen als Liste) und "filters" (alle in der Instruction beschriebenen Filterbedingungen als Liste). Jede Filterbedingung hat "column", "operator" und optional "value". Verfügbare Operatoren: not_empty, empty, equals, not_equals, contains, not_contains, starts_with, ends_with. Ein xlsx_fetch-Subtask ohne parameters.filters ist ein Fehler.
@@ -40,9 +40,9 @@ ROUTING:
 
 LLM — nur wenn Urteilsvermögen, Abstraktion oder Sprachverständnis nötig ist:
 - llm_extract: Strukturierte Daten aus bekanntem Format extrahieren. Gibt immer JSON zurück. Capability: simple_tasks.
-- llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück. Auch für Set-Operationen zwischen zwei bereits im Context vorhandenen Listen. Capability: reasoning.
+- llm_decide: Bewertung, Klassifikation oder Urteil mit Begründung. Gibt immer JSON zurück. Capability: reasoning.
 - llm_summarize: Zusammenfassung für Menschen oder als Input für weitere Steps. Capability: chat.
-- llm_analyze: Tiefgehende Analyse aus heterogenen Quellen mit mehrstufigem Schlussfolgern. Gibt immer JSON zurück. Verwenden wenn Informationen aus verschiedenen Quellen gegeneinander abgewogen werden müssen, Widersprüche erkannt werden müssen, oder ein begründetes Gesamturteil gebildet werden soll (z.B. Fundamentalanalyse, komplexe Risikobewertung, strategische Einschätzung). Capability: deep_reasoning.
+- llm_analyze: Tiefgehende Analyse aus heterogenen Quellen mit mehrstufigem Schlussfolgern. Gibt immer JSON zurück. Capability: deep_reasoning.
 
 DATENZUGRIFF — deterministisch:
 - web_search: Websuche wenn die URL nicht bekannt ist oder die Ergebnisse variabel sind.
@@ -57,73 +57,71 @@ DATENZUGRIFF — deterministisch:
 
 TRANSFORMATION — deterministisch, operiert auf Context-Werten:
 - transform: Berechnung oder Strukturänderung auf bereits im Context vorhandenen Daten.
-  Operationen: map_field, filter, first, slice, diff, intersect, union, list_append, count, group_by, flatten, sort, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
+  Operationen: map_field, filter, first, slice, diff, intersect, union, list_append, count, array_push, group_by, flatten, sort, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
 
   Selektion:
-  - map_field: Einen bestimmten Key aus jedem Objekt eines JSON-Arrays extrahieren. Ergebnis: JSON-Array oder comma_list.
-  - filter: JSON-Array nach Bedingungen filtern. filters-Array mit field, operator, value. Operatoren: equals, not_equals, contains, not_contains, not_empty, empty, starts_with, ends_with, gt, lt.
-  - first: Erstes Element eines JSON-Arrays oder einer Liste zurückgeben.
-  - slice: Teilmenge eines Arrays. Parameter: start, end (optional).
-  - json_path: Einzelnes Feld aus einem JSON-Objekt extrahieren (Dot-Notation). Nicht für Listenoperationen.
+  - map_field: Einen bestimmten Key aus jedem Objekt eines JSON-Arrays extrahieren.
+  - filter: JSON-Array nach Bedingungen filtern.
+  - first: Erstes Element eines JSON-Arrays zurückgeben.
+  - slice: Teilmenge eines Arrays.
+  - json_path: Einzelnes Feld aus einem JSON-Objekt extrahieren (Dot-Notation).
 
-  Mengenlehre (alle auf JSON-Arrays oder kommaseparierten Listen):
+  Mengenlehre:
   - diff: Elemente die in source_key aber nicht in subtract_key sind.
-  - intersect: Elemente die in beiden Listen source_key und other_key sind.
+  - intersect: Schnittmenge zweier Listen.
   - union: Beide Listen zusammenführen ohne Duplikate.
   - list_append: Einzelnen Wert an ein flaches Array anhängen ohne Duplikat.
 
-  Aggregation:
-  - count: Länge eines Arrays als String zurückgeben.
-  - group_by: Objekte eines Arrays nach group_field gruppieren. value_field optional — wenn gesetzt, wird nur dieser Wert pro Gruppe gesammelt (für Statistiken), sonst das ganze Objekt. Ersetzt array_push vollständig.
-  - statistics: Statistische Kennzahlen auf gruppierten numerischen Listen (erwartet Dict aus group_by).
+  Akkumulation (pro Trigger):
+  - array_push: Einzelnen skalaren Wert (value_key) an eine Gruppe in einem gruppierten Dict anhängen. group_key = Context-Key mit dem Gruppennamen (z.B. extracted_model), target_key = bestehender Dict {gruppe: [werte]}. Verwenden wenn pro Trigger ein einzelner Wert akkumuliert werden soll (z.B. Preishistorie).
+
+  Gruppierung (auf Arrays):
+  - group_by: Objekte eines Arrays nach group_field gruppieren. value_field optional — wenn gesetzt, wird nur dieser Wert pro Gruppe gesammelt. Verwenden wenn ein ganzes Array auf einmal gruppiert werden soll — nicht für Einzelwerte pro Trigger.
+  - statistics: Statistische Kennzahlen auf gruppierten numerischen Listen (erwartet Dict aus array_push oder group_by).
 
   Transformation:
-  - flatten: Verschachteltes Array flach machen (eine Ebene).
-  - sort: Array sortieren. field optional für Objekt-Arrays, reverse für absteigende Reihenfolge.
+  - count: Länge eines Arrays.
+  - flatten: Verschachteltes Array flach machen.
+  - sort: Array sortieren.
   - xml_extract, regex_extract, arithmetic, compare: unverändert.
 
-  Hinweis zu json_path: nur für einzelne Felder aus Objekten. Für Listenoperationen die passende Mengenoperation verwenden.
-
 KOORDINATION — deterministisch:
-- trigger_agent: Anderen Agenten mit Payload anstoßen. Muss immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen — nie davor, da der getriggerte Agent sonst auf veralteten State zugreift.
+- trigger_agent: Anderen Agenten mit Payload anstoßen. Muss immer nach allen state_write Steps stehen.
 - notify_user: Nachricht direkt an den User senden.
 
 ENTSCHEIDUNGSMATRIX:
 Was ist deterministisch — verwende NIE ein LLM dafür:
-- Routing auf strukturierten Feldern (type, id, url != null) → router_match
-- ISIN oder Name → Ticker + Unternehmensname ermitteln → finance_search
-- Excel-Datei (.xlsx) von einer URL → xlsx_fetch (gibt direkt JSON-Array zurück). Filterbedingungen MÜSSEN als parameters.filters im Subtask stehen.
-- Bekannte URL mit strukturiertem Response (API, XML, JSON) → http_fetch + transform
-- Einen Key aus jedem Objekt eines JSON-Arrays extrahieren → transform(map_field)
-- JSON-Array nach Bedingungen filtern → transform(filter)
-- Erstes Element eines Arrays → transform(first)
-- Teilmenge eines Arrays → transform(slice)
+- Routing auf strukturierten Feldern → router_match
+- ISIN oder Name → Ticker ermitteln → finance_search
+- Excel-Datei (.xlsx) → xlsx_fetch
+- Bekannte URL mit strukturiertem Response → http_fetch + transform
+- Einen Key aus jedem Objekt eines Arrays extrahieren → transform(map_field)
+- Array filtern → transform(filter)
+- Erstes Element → transform(first)
+- Teilmenge → transform(slice)
 - Elemente in A aber nicht in B → transform(diff)
-- Schnittmenge zweier Listen → transform(intersect)
-- Zwei Listen zusammenführen ohne Duplikate → transform(union)
-- Einzelnen Wert an flaches Array anhängen → transform(list_append)
-- Länge einer Liste → transform(count)
-- Objekte nach Key gruppieren oder numerische Werte sammeln → transform(group_by)
-- Verschachteltes Array flach machen → transform(flatten)
-- Array sortieren → transform(sort)
+- Schnittmenge → transform(intersect)
+- Zwei Listen zusammenführen → transform(union)
+- Einzelnen Wert an flaches Array → transform(list_append)
+- Einzelnen skalaren Wert pro Trigger in gruppiertes Dict akkumulieren → transform(array_push)
+- Ganzes Array auf einmal gruppieren → transform(group_by)
 - Statistiken auf gruppierten numerischen Listen → transform(statistics)
-- Einzelnes Feld aus JSON-Objekt extrahieren → transform(json_path)
-- Wert aus XML extrahieren → transform(xml_extract)
+- Einzelnes Feld aus JSON-Objekt → transform(json_path)
+- Wert aus XML → transform(xml_extract)
 - Wert aus Text per Regex → transform(regex_extract)
-- Arithmetik zwischen Werten → transform(arithmetic)
+- Arithmetik → transform(arithmetic)
 - Numerischer Vergleich → transform(compare)
-- Kurze Fakten im State speichern → state_write
-- Lange Dokumente speichern → data_write
-- Anderen Agent starten → trigger_agent (immer nach allen state_write-Steps)
+- Kurze Fakten im State → state_write
+- Lange Dokumente → data_write
+- Anderen Agent starten → trigger_agent
 - User benachrichtigen → notify_user
 
 Was braucht ein LLM:
 - Unstrukturierter Text der verstanden werden muss → llm_extract
-- Bewertung, Urteil, Entscheidung mit Begründung → llm_decide
-- Mengenoperationen zwischen zwei Listen (Differenz, neue Einträge, verlorene Einträge) → llm_decide
+- Bewertung, Urteil, Entscheidung → llm_decide
 - Zusammenfassung für Menschen → llm_summarize
-- Websuche wenn URL nicht bekannt → web_search
-- Komplexe Analyse aus heterogenen Quellen, mehrstufiges Schlussfolgern, Gesamturteil aus widersprüchlichen Informationen → llm_analyze"""
+- Websuche → web_search
+- Komplexe Analyse aus heterogenen Quellen → llm_analyze"""
 
 
 async def _decompose_task(instruction: str) -> dict | None:
@@ -175,15 +173,14 @@ llm_extract:
 {"id": "extract", "type": "llm_extract", "prompt": "Extrahiere X aus {{source_key}}. Antworte NUR mit rohem JSON: {\"field\": \"...\"}", "output_key": "extracted", "only_if_route": "route_name"}
 
 llm_decide:
-{"id": "decide", "type": "llm_decide", "prompt": "Bewerte X anhand von {{data}}. Antworte NUR mit rohem JSON: {\"verdict\": \"...\", \"reason\": \"...\"}", "output_key": "decision", "only_if_route": "route_name"}
+{"id": "decide", "type": "llm_decide", "prompt": "Bewerte X anhand von {{data}}. Antworte NUR mit rohem JSON: {\"verdict\": true oder false}", "output_key": "decision"}
 
 llm_analyze:
-{"id": "analyze", "type": "llm_analyze", "prompt": "Analysiere X auf Basis von {{source_a}} und {{source_b}}. Wäge widersprüchliche Informationen ab und bilde ein begründetes Gesamturteil. Antworte NUR mit rohem JSON: {\"field\": \"...\"}", "output_key": "analysis_result"}
-Verwenden für: Fundamentalanalysen, komplexe Risikobewertungen, strategische Einschätzungen aus heterogenen Quellen. Capability: deep_reasoning.
+{"id": "analyze", "type": "llm_analyze", "prompt": "Analysiere X auf Basis von {{source_a}} und {{source_b}}. Antworte NUR mit rohem JSON: {\"field\": \"...\"}", "output_key": "analysis_result"}
 
 llm_summarize:
 {"id": "summarize", "type": "llm_summarize", "prompt": "Fasse zusammen.", "output_key": "summary"}
-{"id": "search_and_summarize", "type": "llm_summarize", "prompt": "Fasse die Suchergebnisse zusammen.", "search_query": "kurzer Suchbegriff 1-6 Wörter", "time_range": "day|week|month|year", "categories": "general|news|finance|it|science", "output_key": "summary"}
+{"id": "search_and_summarize", "type": "llm_summarize", "prompt": "Fasse zusammen.", "search_query": "kurzer Suchbegriff", "time_range": "day|week|month|year", "categories": "general|news|finance|it|science", "output_key": "summary"}
 
 web_search:
 {"id": "search", "type": "web_search", "query_template": "{{context_key}} relevante begriffe", "prompt": "Fasse zusammen.", "time_range": "week", "categories": "general", "output_key": "search_result"}
@@ -193,7 +190,7 @@ finance:
 
 finance_search:
 {"id": "resolve_ticker", "type": "finance_search", "query_key": "selected_isin", "output_key": "company_info"}
-query_key: Context-Key mit ISIN oder Suchbegriff. Gibt JSON zurück mit: symbol (Ticker), name (Unternehmensname), exchange, quote_type.
+Gibt JSON zurück mit: symbol (Ticker), name (Unternehmensname), exchange, quote_type.
 
 http_fetch:
 {"id": "fetch", "type": "http_fetch", "url": "https://example.com/api/data", "output_key": "raw_response", "default": ""}
@@ -201,10 +198,7 @@ http_fetch:
 
 xlsx_fetch:
 {"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["<spalte_1>", "<spalte_2>"], "filters": [{"column": "<spalte>", "operator": "<operator>"}, {"column": "<spalte>", "operator": "<operator>", "value": "<wert>"}], "output_key": "<key>"}
-Verfügbare Operatoren für filters: "equals", "not_equals", "contains", "not_contains", "not_empty", "empty", "starts_with", "ends_with".
-Mehrere filters werden mit AND verknüpft.
-Wenn der Subtask ein "parameters"-Feld hat, müssen dessen Werte direkt übernommen werden — columns aus parameters.columns, filters aus parameters.filters — ohne Interpretation, Ergänzung oder Weglassen.
-Hinweis: xlsx_fetch gibt direkt ein JSON-Array zurück. Kein http_fetch + transform für Excel-Dateien — immer xlsx_fetch verwenden.
+Wenn der Subtask ein "parameters"-Feld hat: columns aus parameters.columns, filters aus parameters.filters direkt übernehmen.
 
 state_read:
 {"id": "read_data", "type": "state_read", "key": "my_key", "output_key": "data", "default": "{}"}
@@ -226,10 +220,21 @@ data_read_external / data_write_external:
 
 transform array_push:
 {"id": "append", "type": "transform", "operation": "array_push", "value_key": "price_eur", "group_key": "extracted_model", "target_key": "historical_prices", "output_key": "historical_prices", "max_items": 500}
+value_key: Context-Key mit dem anzuhängenden skalaren Wert.
+group_key: Context-Key mit dem Gruppennamen (z.B. extracted_model dessen Wert "RTX 4090" ist).
+target_key: Context-Key des bestehenden Dict {gruppe: [werte]} — wird aus data_read geladen.
+Verwenden wenn pro Trigger ein einzelner Wert in eine Gruppe akkumuliert werden soll.
+
+transform group_by:
+{"id": "group_prices", "type": "transform", "operation": "group_by", "source_key": "listings", "group_field": "model", "value_field": "price_eur", "target_key": "historical_prices", "max_items": 500, "output_key": "historical_prices"}
+source_key: Context-Key mit einem JSON-Array von Objekten.
+group_field: Feldname innerhalb der Objekte nach dem gruppiert wird.
+value_field: optional — wenn gesetzt, wird nur dieser Wert pro Gruppe gesammelt.
+Verwenden wenn ein ganzes Array auf einmal gruppiert werden soll — nicht für Einzelwerte pro Trigger.
 
 transform statistics:
 {"id": "stats", "type": "transform", "operation": "statistics", "source_key": "historical_prices", "model_key": "extracted_model", "functions": ["q1", "q3", "iqr", "lower_bound"], "multiplier": 1.5, "output_key": "price_stats"}
-Verfügbare functions: mean, median, std_dev, min, max, count, q1, q3, iqr, lower_bound, upper_bound. multiplier gilt für lower_bound/upper_bound (Standard 1.5).
+Verfügbare functions: mean, median, std_dev, min, max, count, q1, q3, iqr, lower_bound, upper_bound.
 
 transform arithmetic:
 {"id": "convert", "type": "transform", "operation": "arithmetic", "expression": "price / exchange_rate_eur_usd", "round": 2, "output_key": "price_eur", "default": ""}
@@ -245,10 +250,9 @@ transform xml_extract:
 
 transform map_field:
 {"id": "extract_isins", "type": "transform", "operation": "map_field", "source_key": "companies", "field": "isin", "output_key": "isin_list"}
-{"id": "extract_names", "type": "transform", "operation": "map_field", "source_key": "companies", "field": "name", "output_format": "comma_list", "output_key": "name_list"}
 
 transform filter:
-{"id": "filter_active", "type": "transform", "operation": "filter", "source_key": "items", "filters": [{"field": "status", "operator": "equals", "value": "active"}, {"field": "isin", "operator": "not_empty"}], "output_key": "active_items"}
+{"id": "filter_active", "type": "transform", "operation": "filter", "source_key": "items", "filters": [{"field": "status", "operator": "equals", "value": "active"}], "output_key": "active_items"}
 
 transform first:
 {"id": "get_first", "type": "transform", "operation": "first", "source_key": "items", "output_key": "first_item", "default": ""}
@@ -271,9 +275,6 @@ transform list_append:
 transform count:
 {"id": "count_items", "type": "transform", "operation": "count", "source_key": "items", "output_key": "item_count"}
 
-transform group_by:
-{"id": "group_prices", "type": "transform", "operation": "group_by", "source_key": "listings", "group_field": "model", "value_field": "price_eur", "target_key": "historical_prices", "max_items": 500, "output_key": "historical_prices"}
-
 transform flatten:
 {"id": "flatten", "type": "transform", "operation": "flatten", "source_key": "nested_list", "output_key": "flat_list"}
 
@@ -285,26 +286,19 @@ transform regex_extract:
 
 trigger_agent:
 {"id": "trigger", "type": "trigger_agent", "target_agent_name": "TargetAgent", "payload": {"key": "{{context_key}}"}, "delay_minutes": 0}
-trigger_agent akzeptiert only_if_key für bedingte Ausführung:
-{"id": "trigger", "type": "trigger_agent", "target_agent_name": "TargetAgent", "payload": {"key": "{{context_key}}"}, "only_if_key": "decision.verdict == \"approved\""}
-only_if_key: String im Format "context_key == \"wert\"" oder "context_key != \"wert\"". Dot-Notation möglich.
+Bedingt: {"id": "trigger", "type": "trigger_agent", "target_agent_name": "TargetAgent", "payload": {}, "only_if_key": {"key": "decision.verdict", "value": "true"}}
 
 notify_user:
 {"id": "notify", "type": "notify_user", "source_key": "message_context_key"}
-notify_user akzeptiert ebenfalls only_if_key:
-{"id": "notify", "type": "notify_user", "source_key": "message_context_key", "only_if_key": "decision.verdict == \"approved\""}
+Bedingt: {"id": "notify", "type": "notify_user", "source_key": "message_context_key", "only_if_key": {"key": "decision.verdict", "value": "true"}}
 
 STRUKTURREGELN:
-- Pipelines haben keinen separaten Output-Step. Es gibt kein is_output, keine llm_extract-Steps die nur zur Ausgabe dienen. State wird durch state_write geschrieben, Nachrichten durch notify_user gesendet, Trigger durch trigger_agent ausgelöst. Das sind die einzigen Ausgabekanäle.
-- only_if_key bevorzugen gegenüber router_match wenn die einzige Konsequenz einer Entscheidung ein bedingter trigger_agent oder notify_user ist. router_match nur wenn mehrere unterschiedliche Steps auf verschiedenen Routen laufen.
+- Pipelines haben keinen separaten Output-Step. Ausgabekanäle: state_write, data_write, notify_user, trigger_agent.
+- only_if_key bevorzugen gegenüber router_match wenn die einzige Konsequenz ein bedingter trigger_agent oder notify_user ist.
 - LLM-Prompts für llm_extract/llm_decide enden mit "Antworte NUR mit rohem JSON: {Felder}"
-- Jeder Step der Daten eines anderen Steps braucht — {{output_key}} als Template-Variable im prompt
-- only_if_route weglassen wenn der Step auf allen Routen läuft
-- Keine Steps erfinden die nicht in der Klassifikation stehen
-- Dot-Notation für verschachtelte Felder: wenn ein LLM-Step {"verdict": "...", "reason": "..."} zurückgibt mit output_key "decision", kann ein nachfolgender Step "decision.verdict" referenzieren — kein extra Transform-Step nötig
-- trigger_agent Steps müssen immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen
-- Wenn die Instruction einen anderen Agenten erwähnt der angestoßen werden soll, muss ein trigger_agent Step generiert werden
-- xlsx_fetch nie durch http_fetch + transform ersetzen"""
+- only_if_route weglassen wenn der Step auf allen Routen läuft.
+- trigger_agent Steps immer nach allen state_write/data_write Steps.
+- xlsx_fetch nie durch http_fetch + transform ersetzen."""
 
 
 async def _generate_pipeline(

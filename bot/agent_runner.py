@@ -507,6 +507,41 @@ def _matches_item_filter(item: object, f: dict) -> bool:
     return True
 
 
+def _transform_array_push(step: dict, context: dict[str, str]) -> str:
+    value_key: str = step["value_key"]
+    group_key: str = step["group_key"]
+    target_key: str = step["target_key"]
+    max_items: int = int(step.get("max_items", 500))
+
+    value = _get(context, value_key)
+    group = _get(context, group_key)
+
+    if not value or not group:
+        logger.warning("transform array_push: value_key %r or group_key %r is empty", value_key, group_key)
+        return context.get(target_key, "{}")
+
+    raw = context.get(target_key, "{}")
+    try:
+        result: dict[str, list] = json.loads(raw)
+        if not isinstance(result, dict):
+            result = {}
+    except Exception:
+        result = {}
+
+    result.setdefault(group, [])
+    try:
+        entry: float | str = float(value)
+    except (ValueError, TypeError):
+        entry = value
+
+    result[group].append(entry)
+    if len(result[group]) > max_items:
+        result[group] = result[group][-max_items:]
+
+    logger.info("transform array_push: %s[%r] now %d entries", target_key, group, len(result[group]))
+    return json.dumps(result, ensure_ascii=False)
+
+
 def _transform_map_field(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     field: str = step["field"]
@@ -950,6 +985,7 @@ def _transform_compare(step: dict, context: dict[str, str]) -> str:
 
 
 _TRANSFORM_OPERATIONS: dict[str, Callable[[dict, dict[str, str]], str]] = {
+    "array_push": _transform_array_push,
     "map_field": _transform_map_field,
     "filter": _transform_filter,
     "first": _transform_first,
