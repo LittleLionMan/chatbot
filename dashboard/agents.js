@@ -184,7 +184,7 @@ function field(label, inputHtml, id) {
   return `<div class="modal-field" id="${id || ""}"><div class="modal-label">${label}</div>${inputHtml}</div>`;
 }
 function textInput(id, value, placeholder) {
-  return `<input class="modal-input" id="${id}" value="${(value || "").replace(/"/g, "&quot;")}" placeholder="${placeholder || ""}" />`;
+  return `<input class="modal-input" id="${id}" value="${String(value ?? "").replace(/"/g, "&quot;")}" placeholder="${placeholder || ""}" />`;
 }
 function textarea(id, value, minHeight) {
   return `<textarea class="modal-input" id="${id}" style="min-height:${minHeight || 120}px;font-family:var(--mono);font-size:12px;">${value || ""}</textarea>`;
@@ -559,8 +559,8 @@ function onTransformOpChange() {
   show("sf-operator-wrap", op === "compare");
   show("sf-output-true-wrap", op === "compare");
   show("sf-output-false-wrap", op === "compare");
-  show("sf-source-key", !["arithmetic", "compare"].includes(op));
-  show("sf-target-key", op === "list_append");
+  show("sf-source-key", !["arithmetic", "compare", "list_append"].includes(op));
+  show("sf-target-key", op === "list_append" || op === "group_by");
 }
 
 function _val(id) {
@@ -685,7 +685,26 @@ function _readStepFromForm() {
       break;
     case "transform": {
       step.operation = _val("sf-operation") || "array_push";
-      step.source_key = _val("sf-source-key") || "";
+      const opsWithSourceKey = [
+        "map_field",
+        "filter",
+        "first",
+        "slice",
+        "diff",
+        "intersect",
+        "union",
+        "count",
+        "group_by",
+        "flatten",
+        "sort",
+        "statistics",
+        "json_path",
+        "xml_extract",
+        "regex_extract",
+      ];
+      if (opsWithSourceKey.includes(step.operation)) {
+        step.source_key = _val("sf-source-key") || "";
+      }
       const tk = _val("sf-target-key");
       if (tk) step.target_key = tk;
       if (step.operation === "map_field") {

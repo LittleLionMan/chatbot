@@ -27,7 +27,7 @@ Intent-Kategorien:
 - "agent_system": User beschreibt mehrere koordinierte Aufgaben die zusammen ein System bilden — mehrere abhängige Schritte, "sammle und analysiere dann", "für jedes gefundene", implizite Reihenfolge zwischen Agents.
 - "agent_create": User möchte einen einzelnen persistenten Agenten erstellen der nach Plan läuft oder auf Trigger reagiert. Erkennungsmerkmale: "beobachte", "verfolge", "überwache", "halte mich auf dem Laufenden", "melde wenn", "analysiere laufend".
 - "agent_trigger": User möchte etwas an einem Agenten JETZT ausführen — starten, stoppen, oder einmalig außer der Reihe ausführen. Erkennungsmerkmale: "jetzt", "sofort", "einmal", "starte", "lauf", "stopp", "deaktiviere", "außer der Reihe".
-- "agent_talk": Alles andere rund um einen bestehenden Agenten — Statusabfragen, gespeicherte Daten abrufen, Konfiguration ändern, Pipeline neu generieren. Erkennungsmerkmale: "wie läuft", "was hat gefunden", "zeig mir", "ändere", "mach in Zukunft", "generiere Pipeline".
+- "agent_talk": Alles andere rund um einen bestehenden Agenten — Statusabfragen, gespeicherte Daten abrufen, Konfiguration ändern, Pipeline neu generieren oder erstellen. Erkennungsmerkmale: "wie läuft", "was hat gefunden", "zeig mir", "ändere", "mach in Zukunft", "generiere Pipeline", "erstelle Pipeline für", "neue Pipeline für".
 - "agent_list": User möchte explizit eine Liste seiner laufenden Agenten sehen.
 - "task_create": User möchte eine neue stateless wiederkehrende Aufgabe erstellen.
 - "task_stop": User möchte eine wiederkehrende Aufgabe beenden.
@@ -38,6 +38,7 @@ Intent-Kategorien:
 
 Trennlinien:
 - agent_trigger vs agent_talk: Ausführung/Stopp JETZT → trigger. Änderung für zukünftige Läufe oder Abfrage → talk.
+- agent_talk vs agent_create: "Pipeline erstellen/generieren für [Name]" oder "neue Pipeline für [Name]" → immer agent_talk, auch wenn "erstelle" vorkommt. agent_create nur wenn ein völlig neuer Agent von Grund auf angelegt werden soll ohne dass ein bestehender Name genannt wird.
 - agent_create vs task_create: Agent hat State, erinnert sich, vergleicht. Task ist zustandslos.
 - agent_create vs scraper_create: Scraper durchsucht externe Plattformen nach Listings. Agent wertet aus.
 - agent_system vs agent_create: Mehrere abhängige Agents → system. Einer → create.
@@ -47,7 +48,7 @@ Beispiele:
 {"intent": "agent_trigger", "needs_search": false, "wants_voice": false} # "Stopp den Agenten"
 {"intent": "agent_talk", "needs_search": false, "wants_voice": false} # "Was hat Jordan bisher gefunden?"
 {"intent": "agent_talk", "needs_search": false, "wants_voice": false} # "Ändere Jordans Suchkriterium auf Small Caps"
-{"intent": "agent_talk", "needs_search": false, "wants_voice": false} # "Generiere eine neue Pipeline für Jordan"
+{"intent": "agent_talk", "needs_search": false, "wants_voice": false} # "Generiere/Erstelle eine neue Pipeline für Jordan"
 {"intent": "agent_create", "needs_search": false, "wants_voice": false} # "Überwache meine Docker Container stündlich"
 {"intent": "agent_create", "needs_search": false, "wants_voice": false} # "Reagiere auf neue GPU-Listings von Linus"
 {"intent": "agent_system", "needs_search": false, "wants_voice": false} # "Sammle täglich Unternehmen nach Kriterien, analysiere jeden Fund dann einzeln"
@@ -86,7 +87,7 @@ Felder:
 - "talk_type": Art der Anfrage.
   - "query": Statusabfrage oder Datenabruf ("wie läuft", "was hat gefunden", "zeig mir", "gib mir den Bericht")
   - "config_change": Inhaltliche Konfigurationsänderung ("ändere Suchkriterium", "mach in Zukunft", "fokussiere auf", "passe Instruction an")
-  - "regenerate_pipeline": Pipeline neu generieren ("generiere Pipeline neu", "neue Pipeline", "pipeline regenerieren")
+  - "regenerate_pipeline": Pipeline neu generieren oder erstellen ("generiere Pipeline neu", "neue Pipeline", "pipeline regenerieren", "erstelle Pipeline", "erstelle eine neue Pipeline")
   - "rename": Umbenennung des Agenten
 
 Beispiele:

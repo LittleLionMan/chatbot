@@ -48,7 +48,6 @@ DATENZUGRIFF — deterministisch:
 - web_search: Websuche wenn die URL nicht bekannt ist oder die Ergebnisse variabel sind.
 - finance: Börsenkurse und Finanzkennzahlen für einen bekannten Ticker-Symbol.
 - finance_search: Ticker und Name eines Unternehmens über ISIN oder Suchbegriff deterministisch ermitteln. Gibt symbol, name, exchange zurück. Verwenden wenn nur ISIN bekannt und Ticker unbekannt ist — nie http_fetch auf Yahoo direkt.
-- finance_search: Ticker und Unternehmensname aus einer ISIN oder einem Suchbegriff ermitteln. Gibt symbol, longname, exchange zurück. Verwenden wenn nur eine ISIN bekannt ist und der Ticker erst ermittelt werden muss.
 - http_fetch: HTTP-Request an eine bekannte URL. Gibt den Response-Body als String zurück. Für strukturierte APIs, XML-Feeds, REST-Endpunkte. Nie für Excel-Dateien verwenden.
 - xlsx_fetch: Lädt eine Excel-Datei (.xlsx) von einer URL und gibt ein JSON-Array der Zeilen zurück. Verwende dies immer wenn die Quelle eine .xlsx-Datei ist — nie http_fetch + transform für Excel.
 - state_read / state_write: Einzelnen Key im eigenen Agent-State lesen oder schreiben.
@@ -194,7 +193,7 @@ finance:
 
 finance_search:
 {"id": "resolve_ticker", "type": "finance_search", "query_key": "selected_isin", "output_key": "company_info"}
-query_key: Context-Key mit ISIN oder Suchbegriff. Gibt JSON zurück mit: symbol (Ticker), longname (Unternehmensname), exchange, quote_type.
+query_key: Context-Key mit ISIN oder Suchbegriff. Gibt JSON zurück mit: symbol (Ticker), name (Unternehmensname), exchange, quote_type.
 
 http_fetch:
 {"id": "fetch", "type": "http_fetch", "url": "https://example.com/api/data", "output_key": "raw_response", "default": ""}
@@ -203,7 +202,7 @@ http_fetch:
 xlsx_fetch:
 {"id": "fetch_data", "type": "xlsx_fetch", "url": "https://example.com/data.xlsx", "sheet": 0, "columns": ["<spalte_1>", "<spalte_2>"], "filters": [{"column": "<spalte>", "operator": "<operator>"}, {"column": "<spalte>", "operator": "<operator>", "value": "<wert>"}], "output_key": "<key>"}
 Verfügbare Operatoren für filters: "equals", "not_equals", "contains", "not_contains", "not_empty", "empty", "starts_with", "ends_with".
-Mehrere filters werden mit AND verknüpft. Für einen einzelnen einfachen Gleichheitsfilter kann auch die Kurzform verwendet werden: "filter": {"column": "<spalte>", "value": "<wert>"}.
+Mehrere filters werden mit AND verknüpft.
 Wenn der Subtask ein "parameters"-Feld hat, müssen dessen Werte direkt übernommen werden — columns aus parameters.columns, filters aus parameters.filters — ohne Interpretation, Ergänzung oder Weglassen.
 Hinweis: xlsx_fetch gibt direkt ein JSON-Array zurück. Kein http_fetch + transform für Excel-Dateien — immer xlsx_fetch verwenden.
 
@@ -227,36 +226,29 @@ data_read_external / data_write_external:
 
 transform array_push:
 {"id": "append", "type": "transform", "operation": "array_push", "value_key": "price_eur", "group_key": "extracted_model", "target_key": "historical_prices", "output_key": "historical_prices", "max_items": 500}
-value_key: Context-Key mit dem anzuhängenden Wert. group_key: Context-Key mit dem Gruppennamen. target_key: Context-Key des bestehenden Dict {gruppe: [werte]}.
-Wichtig: array_push nur für einzelne skalare Werte an gruppierte numerische Arrays (z.B. Preishistorie). Nicht für Mengenoperationen zwischen Listen — dafür llm_decide verwenden.
 
 transform statistics:
 {"id": "stats", "type": "transform", "operation": "statistics", "source_key": "historical_prices", "model_key": "extracted_model", "functions": ["q1", "q3", "iqr", "lower_bound"], "multiplier": 1.5, "output_key": "price_stats"}
-Verfügbare functions: mean, median, std_dev, min, max, count, q1, q3, iqr, lower_bound, upper_bound. Mit model_key: gibt Stats nur für das angegebene Modell zurück — lower_bound/q1/q3 sind null wenn weniger als 4 Datensätze. Ohne model_key: gibt Dict aller Modelle zurück. multiplier gilt für lower_bound/upper_bound (Standard 1.5).
+Verfügbare functions: mean, median, std_dev, min, max, count, q1, q3, iqr, lower_bound, upper_bound. multiplier gilt für lower_bound/upper_bound (Standard 1.5).
 
 transform arithmetic:
 {"id": "convert", "type": "transform", "operation": "arithmetic", "expression": "price / exchange_rate_eur_usd", "round": 2, "output_key": "price_eur", "default": ""}
-Variablen im expression werden aus dem Context aufgelöst. Dot-Notation funktioniert (z.B. price_stats.lower_bound). Nur +, -, *, / und Klammern erlaubt.
 
 transform compare:
 {"id": "is_bargain", "type": "transform", "operation": "compare", "left_key": "price_eur", "right_key": "price_stats.lower_bound", "operator": "<=", "output_true": "true", "output_false": "false", "output_key": "is_bargain"}
-operator: "<", "<=", ">", ">=", "==", "!=" — vergleicht zwei numerische Context-Werte.
 
 transform json_path:
 {"id": "extract_field", "type": "transform", "operation": "json_path", "source_key": "json_string", "path": "nested.field", "output_key": "value", "default": ""}
 
 transform xml_extract:
 {"id": "extract_xml", "type": "transform", "operation": "xml_extract", "source_key": "xml_string", "xpath": ".//ns:Element[@attr='value']", "attribute": "rate", "output_key": "value", "default": ""}
-Hinweis: Namespaces werden automatisch erkannt. Default-Namespace wird als "ns:" registriert, benannte Prefixe bleiben erhalten (z.B. gesmes:). XPath muss entsprechende Prefixe verwenden.
 
 transform map_field:
 {"id": "extract_isins", "type": "transform", "operation": "map_field", "source_key": "companies", "field": "isin", "output_key": "isin_list"}
 {"id": "extract_names", "type": "transform", "operation": "map_field", "source_key": "companies", "field": "name", "output_format": "comma_list", "output_key": "name_list"}
-Extrahiert einen Key aus jedem Objekt eines JSON-Arrays. output_format: "json_array" (Standard) oder "comma_list".
 
 transform filter:
 {"id": "filter_active", "type": "transform", "operation": "filter", "source_key": "items", "filters": [{"field": "status", "operator": "equals", "value": "active"}, {"field": "isin", "operator": "not_empty"}], "output_key": "active_items"}
-Filtert ein JSON-Array nach Bedingungen (AND-verknüpft). Operatoren: equals, not_equals, contains, not_contains, not_empty, empty, starts_with, ends_with, gt, lt.
 
 transform first:
 {"id": "get_first", "type": "transform", "operation": "first", "source_key": "items", "output_key": "first_item", "default": ""}
@@ -266,8 +258,6 @@ transform slice:
 
 transform diff:
 {"id": "find_new", "type": "transform", "operation": "diff", "source_key": "current_list", "subtract_key": "known_list", "output_key": "new_items"}
-{"id": "find_new", "type": "transform", "operation": "diff", "source_key": "current_list", "subtract_key": "known_list", "output_format": "comma_list", "output_key": "new_items"}
-Gibt Elemente zurück die in source_key aber nicht in subtract_key sind. output_format: "json_array" oder "comma_list".
 
 transform intersect:
 {"id": "common", "type": "transform", "operation": "intersect", "source_key": "list_a", "other_key": "list_b", "output_key": "common_items"}
@@ -277,14 +267,12 @@ transform union:
 
 transform list_append:
 {"id": "append_isin", "type": "transform", "operation": "list_append", "value_key": "selected_isin", "target_key": "already_reviewed", "output_key": "updated_reviewed"}
-Hängt einen einzelnen Wert an ein flaches Array an. Keine Duplikate. target_key ist der bestehende Array-Context-Key.
 
 transform count:
 {"id": "count_items", "type": "transform", "operation": "count", "source_key": "items", "output_key": "item_count"}
 
 transform group_by:
 {"id": "group_prices", "type": "transform", "operation": "group_by", "source_key": "listings", "group_field": "model", "value_field": "price_eur", "target_key": "historical_prices", "max_items": 500, "output_key": "historical_prices"}
-Gruppiert Objekte eines Arrays nach group_field. Mit value_field: sammelt nur diesen Wert pro Gruppe (für statistics). Ohne value_field: sammelt ganze Objekte. target_key: bestehender Dict zum Zusammenführen.
 
 transform flatten:
 {"id": "flatten", "type": "transform", "operation": "flatten", "source_key": "nested_list", "output_key": "flat_list"}
@@ -297,25 +285,26 @@ transform regex_extract:
 
 trigger_agent:
 {"id": "trigger", "type": "trigger_agent", "target_agent_name": "TargetAgent", "payload": {"key": "{{context_key}}"}, "delay_minutes": 0}
+trigger_agent akzeptiert only_if_key für bedingte Ausführung:
+{"id": "trigger", "type": "trigger_agent", "target_agent_name": "TargetAgent", "payload": {"key": "{{context_key}}"}, "only_if_key": "decision.verdict == \"approved\""}
+only_if_key: String im Format "context_key == \"wert\"" oder "context_key != \"wert\"". Dot-Notation möglich.
 
 notify_user:
 {"id": "notify", "type": "notify_user", "source_key": "message_context_key"}
-
-Output-Step — letzter Step jeder Route die ein Ergebnis produziert:
-{"id": "output", "type": "llm_extract", "is_output": true, "prompt": "Erstelle aus {{result}} ein JSON-Objekt.\\n\\nRegeln:\\n- state_updates: immer {}\\n- notify_user: true nur wenn ...", "output_key": "output", "only_if_route": "route_name"}
+notify_user akzeptiert ebenfalls only_if_key:
+{"id": "notify", "type": "notify_user", "source_key": "message_context_key", "only_if_key": "decision.verdict == \"approved\""}
 
 STRUKTURREGELN:
-- Der Output-Step hat immer is_output=true und type=llm_extract
-- state_updates im Output-Step ist IMMER {} — State wird ausschließlich durch state_write Steps geschrieben
+- Pipelines haben keinen separaten Output-Step. Es gibt kein is_output, keine llm_extract-Steps die nur zur Ausgabe dienen. State wird durch state_write geschrieben, Nachrichten durch notify_user gesendet, Trigger durch trigger_agent ausgelöst. Das sind die einzigen Ausgabekanäle.
+- only_if_key bevorzugen gegenüber router_match wenn die einzige Konsequenz einer Entscheidung ein bedingter trigger_agent oder notify_user ist. router_match nur wenn mehrere unterschiedliche Steps auf verschiedenen Routen laufen.
 - LLM-Prompts für llm_extract/llm_decide enden mit "Antworte NUR mit rohem JSON: {Felder}"
 - Jeder Step der Daten eines anderen Steps braucht — {{output_key}} als Template-Variable im prompt
 - only_if_route weglassen wenn der Step auf allen Routen läuft
-- only_if_key: {"key": "context_key", "value": "wert"} — Step läuft nur wenn Context-Key den Wert hat. Dot-Notation möglich. Nützlich um LLM-Steps deterministisch zu überspringen wenn ein vorheriger compare-Step false ergeben hat (z.B. only_if_key: {"key": "is_bargain", "value": "true"})
 - Keine Steps erfinden die nicht in der Klassifikation stehen
-- Dot-Notation für verschachtelte Felder: wenn ein LLM-Step {"merged_list": [...], "new_models": [...]} zurückgibt mit output_key "merge_result", kann ein nachfolgender Step source_key "merge_result.merged_list" oder condition_key "merge_result.new_models" verwenden — kein extra Transform-Step nötig
-- trigger_agent Steps müssen immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen — nie davor, da der getriggerte Agent sonst auf veralteten State zugreift
-- Wenn die Instruction einen anderen Agenten erwähnt der angestoßen, getriggert, benachrichtigt oder gestartet werden soll, muss ein trigger_agent Step generiert werden — auch wenn das Wort "trigger" nicht explizit vorkommt. Erkennungsmerkmale: "starte X", "löse X aus", "informiere X", "übergib an X", "X soll dann laufen"
-- xlsx_fetch nie durch http_fetch + transform ersetzen — xlsx_fetch gibt direkt ein JSON-Array zurück"""
+- Dot-Notation für verschachtelte Felder: wenn ein LLM-Step {"verdict": "...", "reason": "..."} zurückgibt mit output_key "decision", kann ein nachfolgender Step "decision.verdict" referenzieren — kein extra Transform-Step nötig
+- trigger_agent Steps müssen immer nach allen state_write, state_write_external, data_write und data_write_external Steps stehen
+- Wenn die Instruction einen anderen Agenten erwähnt der angestoßen werden soll, muss ein trigger_agent Step generiert werden
+- xlsx_fetch nie durch http_fetch + transform ersetzen"""
 
 
 async def _generate_pipeline(
@@ -335,9 +324,7 @@ async def _generate_pipeline(
             logger.warning("pipeline generator returned non-dict")
             return None
 
-        has_steps = isinstance(parsed.get("steps"), list)
-
-        if not has_steps:
+        if not isinstance(parsed.get("steps"), list):
             logger.warning("pipeline generator returned empty structure")
             return None
 
