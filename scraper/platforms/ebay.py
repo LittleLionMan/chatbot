@@ -17,11 +17,14 @@ _SCOPE = "https://api.ebay.com/oauth/api_scope"
 _token_cache: dict = {"token": None, "expires_at": 0.0}
 
 _CONDITION_MAP = {
-    "USED_EXCELLENT": "very_good",
-    "USED_VERY_GOOD": "very_good",
-    "USED_GOOD": "good",
-    "USED_ACCEPTABLE": "acceptable",
-    "FOR_PARTS_OR_NOT_WORKING": "acceptable",
+    "1000": "very_good",
+    "1500": "very_good",
+    "2000": "very_good",
+    "2500": "good",
+    "3000": "good",
+    "4000": "acceptable",
+    "5000": "acceptable",
+    "6000": "acceptable",
 }
 
 
@@ -103,7 +106,8 @@ async def scrape(query: str, category: str, filters: dict) -> list[dict]:
 
     for item in items:
         try:
-            ext_id = item["itemId"].split("|")[-1]
+            parts = item["itemId"].split("|")
+            ext_id = parts[1] if len(parts) >= 2 else parts[0]
             title = item.get("title", "")
             url = item.get("itemWebUrl", "")
 
