@@ -117,7 +117,8 @@ async function selectAgent(id) {
     );
     detail.removeEventListener("click", handleAgentDetailClick);
     detail.addEventListener("click", handleAgentDetailClick);
-  } catch {
+  } catch (e) {
+    console.error("selectAgent error:", e);
     detail.innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
   }

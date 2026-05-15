@@ -1,111 +1,115 @@
 from __future__ import annotations
 import logging
-import re
-from bs4 import BeautifulSoup
-from platforms.base import fetch_with_playwright, listing
+import os
+import httpx
+from platforms.base import listing
 
 logger = logging.getLogger(__name__)
 
-_SEARCH_URL = "https://www.ebay.com/sch/i.html"
+_FINDING_URL = "https://svcs.ebay.com/services/search/FindingService/v1"
+_APP_ID = os.environ.get("EBAY_APP_ID", "")
+
+_CONDITION_MAP = {
+    "2000": "very_good",
+    "2500": "very_good",
+    "3000": "good",
+    "4000": "acceptable",
+    "5000": "acceptable",
+    "6000": "acceptable",
+}
 
 
-def _parse_price(text: str) -> float | None:
-    text = re.sub(r"[^\d.,]", "", text.strip())
-    if "," in text and "." in text:
-        parts_dot = text.split(".")
-        if len(parts_dot[-1]) == 2:
-            text = text.replace(",", "")
-        else:
-            text = text.replace(".", "").replace(",", ".")
-    elif "," in text:
-        parts = text.split(",")
-        if len(parts) == 2 and len(parts[1]) == 3:
-            text = text.replace(",", "")
-        else:
-            text = text.replace(",", ".")
+def _parse_price(item: dict) -> tuple[float | None, str | None]:
     try:
-        return float(text) if text else None
-    except ValueError:
-        return None
-
-
-def _detect_currency(text: str) -> str | None:
-    if "€" in text:
-        return "EUR"
-    if "$" in text:
-        return "USD"
-    if "£" in text:
-        return "GBP"
-    return None
+        price_data = item["sellingStatus"][0]["currentPrice"][0]
+        return float(price_data["__value__"]), price_data["@currencyId"]
+    except Exception:
+        return None, None
 
 
 async def scrape(query: str, category: str, filters: dict) -> list[dict]:
-    params = {
-        "_nkw": query,
-        "_sop": "10",
-        "LH_ItemCondition": "3000",
-        "_ipg": "60",
+    if not _APP_ID:
+        logger.warning("eBay: EBAY_APP_ID not set, skipping")
+        return []
+
+    params: dict[str, str] = {
+        "OPERATION-NAME": "findItemsByKeywords",
+        "SERVICE-VERSION": "1.0.0",
+        "SECURITY-APPNAME": _APP_ID,
+        "RESPONSE-DATA-FORMAT": "JSON",
+        "keywords": query,
+        "sortOrder": "StartTimeNewest",
+        "paginationInput.entriesPerPage": "100",
+        "itemFilter(0).name": "Condition",
+        "itemFilter(0).value": "Used",
+        "itemFilter(1).name": "ListingType",
+        "itemFilter(1).value(0)": "FixedPrice",
+        "itemFilter(1).value(1)": "Auction",
     }
+
     price_min = filters.get("price_min")
     price_max = filters.get("price_max")
     if price_min:
-        params["_udlo"] = str(price_min)
+        params["itemFilter(2).name"] = "MinPrice"
+        params["itemFilter(2).value"] = str(price_min)
+        params["itemFilter(2).paramName"] = "Currency"
+        params["itemFilter(2).paramValue"] = "EUR"
     if price_max:
-        params["_udhi"] = str(price_max)
+        idx = "3" if price_min else "2"
+        params[f"itemFilter({idx}).name"] = "MaxPrice"
+        params[f"itemFilter({idx}).value"] = str(price_max)
+        params[f"itemFilter({idx}).paramName"] = "Currency"
+        params[f"itemFilter({idx}).paramValue"] = "EUR"
 
-    url = _SEARCH_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
-    logger.info("eBay scraping: %s", url)
+    logger.info("eBay API: query=%r", query)
 
     try:
-        html = await fetch_with_playwright(url, wait_selector=".srp-results")
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(_FINDING_URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
     except Exception as e:
-        logger.warning("eBay fetch failed: %s", e)
+        logger.warning("eBay API request failed: %s", e)
         return []
 
-    soup = BeautifulSoup(html, "lxml")
-    results: list[dict] = []
+    try:
+        search_result = data["findItemsByKeywordsResponse"][0]
+        if search_result.get("ack", [None])[0] != "Success":
+            logger.warning("eBay API ack not Success: %s", search_result.get("ack"))
+            return []
+        items = search_result.get("searchResult", [{}])[0].get("item", [])
+    except Exception as e:
+        logger.warning("eBay API response parse failed: %s", e)
+        return []
 
-    for item in soup.select("li.s-card")[:40]:
+    results: list[dict] = []
+    for item in items:
         try:
-            link_el = item.select_one("a[href*='/itm/']")
-            if not link_el:
-                continue
-            href = link_el.get("href", "").split("?")[0]
-            ext_id_match = re.search(r"/itm/(\d+)", href)
-            if not ext_id_match:
-                continue
-            ext_id = ext_id_match.group(1)
-            title_el = item.select_one(".s-card__title, h3, .s-item__title")
-            title = title_el.get_text(strip=True) if title_el else ""
-            if not title or "shop on ebay" in title.lower():
-                continue
-            price_el = item.select_one(".s-card__price, .s-item__price, [class*='price']")
-            price_text = price_el.get_text(strip=True) if price_el else ""
-            price = _parse_price(price_text)
-            currency = _detect_currency(price_text)
-            location_el = item.select_one(".s-card__location, .s-item__location, [class*='location']")
-            location = location_el.get_text(strip=True).replace("From ", "")[:60] if location_el else None
-            condition_el = item.select_one(".s-card__subtitle, .SECONDARY_INFO, [class*='subtitle']")
-            condition_text = condition_el.get_text(strip=True).lower() if condition_el else ""
-            condition = None
-            if "very good" in condition_text or "sehr gut" in condition_text:
-                condition = "very_good"
-            elif "good" in condition_text or "gut" in condition_text:
-                condition = "good"
-            elif "acceptable" in condition_text or "akzeptabel" in condition_text:
-                condition = "acceptable"
+            ext_id = item["itemId"][0]
+            title = item["title"][0]
+            url = item["viewItemURL"][0]
+            price, currency = _parse_price(item)
+
+            condition_id = item.get("condition", [{}])[0].get("conditionId", [None])[0]
+            condition = _CONDITION_MAP.get(condition_id or "")
+
+            location = item.get("location", [None])[0]
+            country = item.get("country", [None])[0]
+            if location and country and country not in location:
+                location = f"{location}, {country}"
+
             results.append(listing(
                 external_id=ext_id,
-                url=href,
+                url=url,
                 title=title,
                 price=price,
                 currency=currency,
-                location=location,
+                location=location[:60] if location else None,
                 condition=condition,
-                attributes={"source_query": query},
+                attributes={"source_query": query, "country": country},
             ))
         except Exception as e:
-            logger.debug("Failed to parse eBay item: %s", e)
+            logger.debug("eBay API: failed to parse item: %s", e)
 
-    logger.info("eBay: %d listings for %r", len(results), query)
+    logger.info("eBay API: %d listings for %r", len(results), query)
     return results
