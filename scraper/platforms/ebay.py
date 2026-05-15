@@ -27,45 +27,60 @@ def _parse_price(item: dict) -> tuple[float | None, str | None]:
         return None, None
 
 
+def _build_query_string(query: str, filters: dict) -> str:
+    from urllib.parse import quote
+
+    parts = [
+        f"OPERATION-NAME=findItemsByKeywords",
+        f"SERVICE-VERSION=1.0.0",
+        f"SECURITY-APPNAME={quote(_APP_ID)}",
+        f"RESPONSE-DATA-FORMAT=JSON",
+        f"keywords={quote(query)}",
+        f"sortOrder=StartTimeNewest",
+        f"paginationInput.entriesPerPage=100",
+        f"itemFilter(0).name=Condition",
+        f"itemFilter(0).value=Used",
+        f"itemFilter(1).name=ListingType",
+        f"itemFilter(1).value(0)=FixedPrice",
+        f"itemFilter(1).value(1)=Auction",
+    ]
+
+    idx = 2
+    price_min = filters.get("price_min")
+    price_max = filters.get("price_max")
+
+    if price_min:
+        parts += [
+            f"itemFilter({idx}).name=MinPrice",
+            f"itemFilter({idx}).value={price_min}",
+            f"itemFilter({idx}).paramName=Currency",
+            f"itemFilter({idx}).paramValue=EUR",
+        ]
+        idx += 1
+
+    if price_max:
+        parts += [
+            f"itemFilter({idx}).name=MaxPrice",
+            f"itemFilter({idx}).value={price_max}",
+            f"itemFilter({idx}).paramName=Currency",
+            f"itemFilter({idx}).paramValue=EUR",
+        ]
+
+    return "&".join(parts)
+
+
 async def scrape(query: str, category: str, filters: dict) -> list[dict]:
     if not _APP_ID:
         logger.warning("eBay: EBAY_APP_ID not set, skipping")
         return []
 
-    params: dict[str, str] = {
-        "OPERATION-NAME": "findItemsByKeywords",
-        "SERVICE-VERSION": "1.0.0",
-        "SECURITY-APPNAME": _APP_ID,
-        "RESPONSE-DATA-FORMAT": "JSON",
-        "keywords": query,
-        "sortOrder": "StartTimeNewest",
-        "paginationInput.entriesPerPage": "100",
-        "itemFilter(0).name": "Condition",
-        "itemFilter(0).value": "Used",
-        "itemFilter(1).name": "ListingType",
-        "itemFilter(1).value(0)": "FixedPrice",
-        "itemFilter(1).value(1)": "Auction",
-    }
-
-    price_min = filters.get("price_min")
-    price_max = filters.get("price_max")
-    if price_min:
-        params["itemFilter(2).name"] = "MinPrice"
-        params["itemFilter(2).value"] = str(price_min)
-        params["itemFilter(2).paramName"] = "Currency"
-        params["itemFilter(2).paramValue"] = "EUR"
-    if price_max:
-        idx = "3" if price_min else "2"
-        params[f"itemFilter({idx}).name"] = "MaxPrice"
-        params[f"itemFilter({idx}).value"] = str(price_max)
-        params[f"itemFilter({idx}).paramName"] = "Currency"
-        params[f"itemFilter({idx}).paramValue"] = "EUR"
-
-    logger.info("eBay API: query=%r", query)
+    qs = _build_query_string(query, filters)
+    url = f"{_FINDING_URL}?{qs}"
+    logger.info("eBay API: %s", url)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(_FINDING_URL, params=params)
+            resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:
