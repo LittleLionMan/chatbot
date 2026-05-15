@@ -1498,6 +1498,7 @@ async def execute_agent(
             await memory.update_agent_run(pool, agent_id, next_run)
             logger.info("agent %d done. next run: %s", agent_id, next_run.isoformat())
         else:
+            await pool.execute("UPDATE agents SET last_run_at = NOW() WHERE id = $1", agent_id)
             logger.info("agent %d done. trigger-only, no next run.", agent_id)
 
     except ProviderRateLimitError as e:
