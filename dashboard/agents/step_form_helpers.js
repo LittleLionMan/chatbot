@@ -129,6 +129,7 @@ function categoryOptions(selected) {
 }
 function transformOpOptions(selected) {
   return [
+    "array_push",
     "map_field",
     "filter",
     "first",
