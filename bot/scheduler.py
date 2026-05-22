@@ -245,13 +245,13 @@ async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
         except Exception as e:
             logger.error("Scheduler observer cycle failed: %s", e)
 
-                try:
-                    if not ratelimit.is_any_limited():
-                        await agent_skills.update_stability(pool)
-                        extracted = await agent_skills.extract_and_store_patterns(pool)
-                        if extracted:
-                            logger.info("Scheduler: skill patterns updated.")
-                    else:
-                        logger.info("Scheduler skill extraction skipped: rate limited.")
-                except Exception as e:
-                    logger.error("Scheduler skill extraction failed: %s", e)
+        try:
+            if not ratelimit.is_any_limited():
+                await agent_skills.update_stability(pool)
+                extracted = await agent_skills.extract_and_store_patterns(pool)
+                if extracted:
+                    logger.info("Scheduler: skill patterns updated.")
+            else:
+                logger.info("Scheduler skill extraction skipped: rate limited.")
+        except Exception as e:
+            logger.error("Scheduler skill extraction failed: %s", e)
