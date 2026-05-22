@@ -14,21 +14,26 @@ from bot.models import (
 )
 from bot.soul import SOUL, BEHAVIOR_RULES as _BEHAVIOR_RULES
 from bot.utils import parse_agent_config
+
 logger = logging.getLogger(__name__)
+
 class ProviderRateLimitError(Exception):
     def __init__(self, provider: str, retry_after: int = 3600) -> None:
         self.provider = provider
         self.retry_after = retry_after
         super().__init__(f"Rate limit hit for provider {provider}")
+
 class ProviderAuthError(Exception):
     def __init__(self, provider: str) -> None:
         self.provider = provider
         super().__init__(f"Auth error for provider {provider}")
 _anthropic_client: anthropic.AsyncAnthropic | None = None
+
 _WEB_SEARCH_TOOL_BASE: dict = {
     "type": "web_search_20250305",
     "name": "web_search",
 }
+
 _PROVIDER_BASE_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -39,6 +44,7 @@ _PROVIDER_BASE_URLS: dict[str, str] = {
     "minimax": "https://api.minimax.io/v1",
     "kimi": "https://api.moonshot.ai/v1",
 }
+
 _PROVIDER_ENV_KEYS: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "google": "GOOGLE_API_KEY",
@@ -49,15 +55,18 @@ _PROVIDER_ENV_KEYS: dict[str, str] = {
     "minimax": "MINIMAX_API_KEY",
     "kimi": "MOONSHOT_API_KEY",
 }
+
 def _web_search_tool(max_uses: int | None = None) -> dict:
     if max_uses is not None:
         return {**_WEB_SEARCH_TOOL_BASE, "max_uses": max_uses}
     return _WEB_SEARCH_TOOL_BASE
+
 def _get_anthropic_client() -> anthropic.AsyncAnthropic:
     global _anthropic_client
     if _anthropic_client is None:
         _anthropic_client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
     return _anthropic_client
+
 def _infer_provider(model: str) -> str:
     if "claude" in model:
         return "anthropic"
@@ -78,6 +87,7 @@ def _infer_provider(model: str) -> str:
     if "kimi" in model or "moonshot" in model:
         return "kimi"
     return "ollama"
+
 async def _call_anthropic(
     system: str,
     messages: list[dict],
@@ -126,6 +136,7 @@ async def _call_anthropic(
         raise ProviderRateLimitError("anthropic", retry_after) from e
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
         raise ProviderAuthError("anthropic") from e
+
 async def _call_openai_compatible(
     system: str,
     messages: list[dict],
@@ -180,6 +191,7 @@ async def _call_openai_compatible(
     except Exception as e:
         logger.error("OpenAI-compatible call failed for provider %s model %s: %s", provider, model, e)
         raise
+
 async def chat(
     system: str,
     messages: list[dict],
@@ -252,6 +264,7 @@ async def _searxng_available_cached() -> bool:
         from bot import search as _search
         _searxng_available = await _search.is_available()
     return _searxng_available
+
 _QUERY_EXTRACTION_SYSTEM = """Extrahiere aus dieser Nutzernachricht 1-3 optimierte Suchanfragen für eine Suchmaschine.
 Antworte NUR mit einem JSON-Array von Strings, kein anderer Text, keine Markdown-Backticks.
 Kurz und präzise — wie ein Mensch der etwas googelt.
@@ -260,6 +273,7 @@ Beispiele:
 "Was kostet eine RTX 4090 gerade?" → ["RTX 4090 Preis 2026"]
 "Neueste Nachrichten zu OpenAI" → ["OpenAI News 2026"]
 "Vergleich Python vs JavaScript für Backend" → ["Python JavaScript Backend Vergleich"]"""
+
 async def _extract_search_queries(text: str) -> list[str]:
     from bot import brain as _brain
     from bot.models import CAPABILITY_SIMPLE_TASKS
@@ -278,6 +292,7 @@ async def _extract_search_queries(text: str) -> list[str]:
         return [text[:100]]
     except Exception:
         return [text[:100]]
+
 async def _inject_search_results(
     messages: list[dict],
     search_queries: list[str] | None,
@@ -319,6 +334,7 @@ async def _inject_search_results(
         last["content"] = list(last["content"]) + [{"type": "text", "text": injection}]
     augmented.append(last)
     return augmented
+
 def build_system_prompt(
     memories_user: list[str],
     memories_group: list[str],
@@ -328,6 +344,7 @@ def build_system_prompt(
     group_title: str | None,
     active_agents: list[dict] | None = None,
     observation_context: str | None = None,
+    agent_context: str | None = None,
 ) -> str:
     parts = [SOUL]
     if observation_context:
@@ -354,8 +371,15 @@ def build_system_prompt(
             f"Wenn ein Gesprächsthema zu einem Agenten passt, kannst du das beiläufig erwähnen — "
             f"aber nur wenn es natürlich wirkt, nicht als Pflichthinweis.\n{lines}"
         )
+    if agent_context:
+        parts.append(f"\n{agent_context}")
+        parts.append(
+            "\nWICHTIG: Sprich nur über Daten die explizit im obigen Kontext stehen. "
+            "Wenn etwas nicht geladen wurde, sag das direkt — keine Spekulationen."
+        )
     parts.append(_BEHAVIOR_RULES)
     return "\n".join(parts)
+
 def history_to_llm_messages(history: list[dict]) -> list[dict]:
     result: list[dict] = []
     for entry in history:

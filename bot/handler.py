@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from datetime import datetime, timezone, timedelta
 import asyncpg
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -9,6 +10,7 @@ from bot import (
     brain, memory, decider, config, ratelimit, extractor,
     greeter, voice, task_parser, agent_parser, agent_runner,
     intent_classifier, agent_system_parser, agent_planner, observer,
+    agent_context, agent_edits,
 )
 from bot.brain import ProviderRateLimitError, ProviderAuthError
 from bot.models import CAPABILITY_CHAT, CAPABILITY_MULTIMODAL
@@ -26,6 +28,7 @@ class _PendingPlan(TypedDict):
     bot_message_id: int | None
 
 _pending_plans: dict[int, _PendingPlan] = {}
+_pending_rollbacks: dict[int, dict] = {}
 
 
 def _display_name(user) -> str:
@@ -149,6 +152,48 @@ async def _handle_file_content(
     await message.reply_text(response)
 
 
+async def _handle_pending_confirmation(
+    update: Update,
+    pool: asyncpg.Pool,
+    user_id: int,
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None,
+) -> bool:
+    pending = await memory.get_pending_confirmation(pool, user_id, chat_id)
+    if not pending:
+        return False
+
+    message = update.effective_message
+    edit_payload = pending["payload"]
+
+    if reply_to_message_id:
+        notification = await memory.get_agent_notification(pool, reply_to_message_id, chat_id)
+        if notification and notification.get("notification_type") == "adjust_request":
+            edit_payload["user_correction"] = text
+            confirmation_msg = agent_edits.format_confirmation_message(edit_payload)
+            conf_id = await memory.replace_pending_confirmation(
+                pool, chat_id, user_id,
+                edit_payload.get("agent_id", 0),
+                edit_payload.get("edit_type", ""),
+                confirmation_msg,
+                edit_payload,
+            )
+            sent = await message.reply_text(
+                confirmation_msg,
+                reply_markup=agent_edits.confirmation_keyboard(conf_id),
+            )
+            await memory.save_agent_notification(
+                pool, sent.message_id, chat_id,
+                edit_payload.get("agent_id", 0),
+                "confirmation",
+                {"confirmation_id": conf_id},
+            )
+            return True
+
+    return False
+
+
 async def _handle_pending_plan(
     update: Update,
     pool: asyncpg.Pool,
@@ -214,7 +259,6 @@ async def _handle_pending_plan(
                 failed.append(agent_cfg["name"])
 
         names = ", ".join(a["name"] for a in prepared if a["name"] not in failed)
-
         created_monitors = await agent_planner.finalize_monitors(current_plan, pool)
         created_scrapers, unavailable_scrapers = await agent_planner.finalize_scrapers(current_plan, pool)
 
@@ -229,11 +273,9 @@ async def _handle_pending_plan(
         if created_monitors:
             monitor_names = ", ".join(m["name"] for m in created_monitors)
             reply_parts.append(f"RSS-Monitor(e) eingerichtet: {monitor_names}.")
-
         if created_scrapers:
             scraper_summary = ", ".join(f"{s['platform']} → {s['target_agent']}" for s in created_scrapers)
             reply_parts.append(f"Scraper eingerichtet: {scraper_summary}.")
-
         if unavailable_scrapers:
             missing = ", ".join(s["platform"] for s in unavailable_scrapers)
             reply_parts.append(f"Hinweis: Scraper für {missing} sind noch nicht verfügbar und wurden nicht angelegt.")
@@ -264,6 +306,107 @@ async def _handle_pending_plan(
     return True
 
 
+async def _handle_agent_feedback(
+    update: Update,
+    pool: asyncpg.Pool,
+    text: str,
+    user_id: int,
+    chat_id: int,
+    target_agent: dict,
+    edit_type: str | None,
+    classified: dict,
+) -> None:
+    message = update.effective_message
+    name = target_agent["name"]
+
+    if not edit_type:
+        ctx = await agent_context.load_deep(pool, target_agent, text)
+        ctx_text = agent_context.format_for_system_prompt(ctx)
+        user_memories = await memory.get_memories(pool, "user", user_id)
+        history = await memory.get_recent_messages(pool, chat_id)
+        system = brain.build_system_prompt(
+            user_memories, [], [], [],
+            "", None,
+            agent_context=ctx_text,
+        )
+        llm_messages = brain.history_to_llm_messages(history)
+        llm_messages.append({"role": "user", "content": text})
+        try:
+            response = await brain.chat(
+                system=system,
+                messages=llm_messages,
+                capability=CAPABILITY_CHAT,
+                caller="handler_agent_feedback",
+                pool=pool,
+            )
+            await message.reply_text(response)
+        except (ProviderRateLimitError, ProviderAuthError) as e:
+            await message.reply_text(ratelimit.rate_limit_message(e.provider))
+        return
+
+    await memory.clear_pending_confirmation(pool, user_id, chat_id)
+
+    edit_payload: dict | None = None
+
+    if edit_type == "data_edit":
+        ctx = await agent_context.load_deep(pool, target_agent, text)
+        loaded_data = ctx.get("loaded_data", {})
+        if loaded_data:
+            first_path = next(iter(loaded_data))
+            parts = first_path.split("/", 1)
+            ns, key = (parts[0], parts[1]) if len(parts) == 2 else (parts[0], "")
+            if key:
+                edit_payload = await agent_edits.prepare_data_edit(pool, target_agent, text, ns, key)
+
+        if not edit_payload:
+            await message.reply_text(
+                f"Ich konnte nicht erkennen welcher Dateneintrag von {name} bearbeitet werden soll. "
+                "Bitte spezifiziere Namespace und Key."
+            )
+            return
+
+    elif edit_type == "step_patch":
+        edit_payload = await agent_edits.prepare_step_patch(pool, target_agent, text)
+        if not edit_payload:
+            await message.reply_text(
+                f"Ich konnte keinen passenden Step in {name}s Pipeline identifizieren. "
+                "Beschreib das Problem genauer."
+            )
+            return
+
+    elif edit_type == "preference":
+        edit_payload = await agent_edits.prepare_preference(pool, target_agent, text)
+        if not edit_payload:
+            await message.reply_text("Ich konnte keine klare Präferenz aus dem Feedback extrahieren.")
+            return
+
+    if not edit_payload:
+        return
+
+    config_data = parse_agent_config(target_agent.get("config", {}))
+    edit_payload["agent_type"] = config_data.get("type", "unknown")
+
+    confirmation_msg = agent_edits.format_confirmation_message(edit_payload)
+    conf_id = await memory.replace_pending_confirmation(
+        pool, chat_id, user_id,
+        target_agent["id"],
+        edit_type,
+        confirmation_msg,
+        edit_payload,
+    )
+
+    sent = await message.reply_text(
+        confirmation_msg,
+        reply_markup=agent_edits.confirmation_keyboard(conf_id),
+    )
+    await memory.save_agent_notification(
+        pool, sent.message_id, chat_id,
+        target_agent["id"],
+        "confirmation",
+        {"confirmation_id": conf_id},
+    )
+
+
 async def _handle_agent_intent(
     update: Update,
     pool: asyncpg.Pool,
@@ -272,6 +415,8 @@ async def _handle_agent_intent(
     user_id: int,
     chat_id: int,
     active_agents: list[dict],
+    notification_context: dict | None = None,
+    classified: dict | None = None,
 ) -> None:
     message = update.effective_message
 
@@ -291,8 +436,8 @@ async def _handle_agent_intent(
     if intent == "scraper_create":
         extracted = await intent_classifier.extract_scraper_create_params(text, pool)
         platforms: list[str] = extracted.get("platforms", [])
-        target_agent: str = extracted.get("target_agent", "")
-        if not platforms or not target_agent:
+        target_agent_name: str = extracted.get("target_agent", "")
+        if not platforms or not target_agent_name:
             await message.reply_text(
                 "Ich konnte die Scraper-Parameter nicht erkennen. Beispiel: "
                 "'Scrape Kleinanzeigen und eBay nach RTX 4090 und triggere Linus'."
@@ -304,19 +449,19 @@ async def _handle_agent_intent(
                 platform=platform,
                 category=extracted.get("category", "general"),
                 query=extracted.get("query", ""),
-                target_agent=target_agent,
+                target_agent=target_agent_name,
                 filters=extracted.get("filters", {}),
                 poll_interval_seconds=extracted.get("poll_interval_seconds", 3600),
             )
         interval_min = extracted.get("poll_interval_seconds", 3600) // 60
         await message.reply_text(
             f"Scraper eingerichtet für {', '.join(platforms)} — "
-            f"sucht nach '{extracted.get('query')}' und triggert {target_agent} "
+            f"sucht nach '{extracted.get('query')}' und triggert {target_agent_name} "
             f"alle {interval_min} Minuten bei neuen Listings."
         )
         return
 
-    if intent == "agent_system" or intent == "agent_create":
+    if intent in ("agent_system", "agent_create"):
         initial_context = f"User: {text}"
         initial_plan = await agent_planner.plan(
             accumulated_context=initial_context,
@@ -343,6 +488,25 @@ async def _handle_agent_intent(
 
     if not active_agents:
         await message.reply_text("Du hast keine aktiven Agenten.")
+        return
+
+    if intent == "agent_feedback":
+        target_agent: dict | None = None
+        if notification_context:
+            agent_id = notification_context.get("agent_id")
+            target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
+        if not target_agent:
+            extracted = await intent_classifier.extract_agent_talk(text, pool)
+            agent_name = extracted.get("agent_name", "")
+            target_agent = await agent_parser.resolve_agent_by_text(agent_name or text, active_agents)
+        if not target_agent:
+            names = ", ".join(a["name"] for a in active_agents)
+            await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
+            return
+        edit_type = (classified or {}).get("edit_type")
+        await _handle_agent_feedback(
+            update, pool, text, user_id, chat_id, target_agent, edit_type, classified or {}
+        )
         return
 
     if intent == "agent_trigger":
@@ -383,6 +547,18 @@ async def _handle_agent_intent(
             steps = len(updated_config.get("steps", []))
             await message.reply_text(f"{target_agent['name']}: Pipeline neu generiert ({steps} Steps).")
         else:
+            use_deep = agent_context.needs_deep_load(text)
+            if use_deep:
+                ctx = await agent_context.load_deep(pool, target_agent, text)
+            else:
+                ctx = await agent_context.load_shallow(pool, target_agent)
+
+            ctx_text = agent_context.format_for_system_prompt(ctx)
+
+            if use_deep and not ctx.get("has_data", True):
+                await message.reply_text(ctx.get("message", f"{target_agent['name']} hat keine abfragbaren Daten dazu."))
+                return
+
             state = await memory.get_agent_state(pool, target_agent["id"])
             agent_memories = await memory.get_agent_memories(pool, target_agent["id"])
             response, new_config, new_name = await agent_parser.handle_agent_talk(
@@ -392,6 +568,10 @@ async def _handle_agent_intent(
                 await memory.update_agent_config(pool, target_agent["id"], new_config)
             if new_name is not None:
                 await memory.rename_agent(pool, target_agent["id"], new_name)
+
+            if ctx_text and not use_deep:
+                response = f"{ctx_text}\n\n{response}"
+
             await message.reply_text(response)
 
 
@@ -520,14 +700,9 @@ async def _handle_monitor_intent(
             await message.reply_text("Keine Feed-URLs erkannt. Bitte gib mindestens eine RSS-URL an.")
             return
         monitor_id = await memory.create_monitor_config(
-            pool,
-            monitor_type=monitor_type,
-            name=name,
-            source="static",
-            target_agent=target_agent,
-            feed_templates=feed_urls,
-            poll_interval_seconds=poll_interval,
-            keywords=keywords,
+            pool, monitor_type=monitor_type, name=name, source="static",
+            target_agent=target_agent, feed_templates=feed_urls,
+            poll_interval_seconds=poll_interval, keywords=keywords,
         )
         feeds_display = ", ".join(feed_urls)
         kw_display = f" · Keywords: {', '.join(keywords)}" if keywords else ""
@@ -535,7 +710,6 @@ async def _handle_monitor_intent(
             f"RSS-Monitor eingerichtet (ID: {monitor_id}): überwacht {feeds_display}{kw_display} "
             f"und triggert {target_agent} bei neuen Artikeln."
         )
-
     else:
         source_agent: str = extracted.get("source_agent", "")
         source_state_key: str = extracted.get("source_state_key", "")
@@ -550,17 +724,10 @@ async def _handle_monitor_intent(
             )
             return
         monitor_id = await memory.create_monitor_config(
-            pool,
-            monitor_type=monitor_type,
-            name=name,
-            source="agent",
-            target_agent=target_agent,
-            feed_templates=feed_templates,
-            poll_interval_seconds=poll_interval,
-            source_agent=source_agent,
-            source_state_key=source_state_key,
-            source_format=source_format,
-            keywords=keywords,
+            pool, monitor_type=monitor_type, name=name, source="agent",
+            target_agent=target_agent, feed_templates=feed_templates,
+            poll_interval_seconds=poll_interval, source_agent=source_agent,
+            source_state_key=source_state_key, source_format=source_format, keywords=keywords,
         )
         await message.reply_text(
             f"RSS-Monitor eingerichtet (ID: {monitor_id}): überwacht {source_agent}/{source_state_key} "
@@ -582,6 +749,7 @@ async def _handle_chat(
     active_agents: list[dict],
     display: str,
     group_title: str | None,
+    agent_ctx_text: str = "",
 ) -> None:
     message = update.effective_message
     user_memories = await memory.get_memories(pool, "user", user_id)
@@ -595,6 +763,7 @@ async def _handle_chat(
         user_memories, group_memories, bot_memories, reflection_memories,
         display, group_title, active_agents=active_agents,
         observation_context=observation_context or None,
+        agent_context=agent_ctx_text or None,
     )
     llm_messages = brain.history_to_llm_messages(history)
     quoted = _quoted_text(message)
@@ -675,8 +844,15 @@ async def _reply(
     if message.reply_to_message is not None:
         reply_to_id = message.reply_to_message.message_id
 
+    if await _handle_pending_confirmation(update, pool, user.id, chat.id, text, reply_to_id):
+        return
+
     if await _handle_pending_plan(update, pool, user.id, chat.id, text, reply_to_id):
         return
+
+    notification_context: dict | None = None
+    if reply_to_id:
+        notification_context = await memory.get_agent_notification(pool, reply_to_id, chat.id)
 
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
     active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
@@ -685,6 +861,7 @@ async def _reply(
         text, pool,
         has_active_agents=bool(active_agents),
         has_active_tasks=bool(active_tasks),
+        notification_context=notification_context,
     )
     intent = classified["intent"]
     needs_search = classified["needs_search"]
@@ -692,8 +869,13 @@ async def _reply(
 
     logger.debug("_reply intent=%s search=%s voice=%s", intent, needs_search, wants_voice)
 
-    if intent in ("agent_system", "agent_create", "agent_trigger", "agent_talk", "agent_list"):
-        await _handle_agent_intent(update, pool, text, intent, user.id, chat.id, active_agents)
+    if intent in ("agent_system", "agent_create", "agent_trigger", "agent_talk",
+                  "agent_list", "agent_feedback"):
+        await _handle_agent_intent(
+            update, pool, text, intent, user.id, chat.id, active_agents,
+            notification_context=notification_context,
+            classified=classified,
+        )
         return
 
     if intent in ("task_create", "task_stop", "task_list"):
@@ -708,9 +890,18 @@ async def _reply(
         await _handle_monitor_intent(update, pool, text, user.id)
         return
 
+    agent_ctx_text = ""
+    if notification_context and active_agents:
+        agent_id = notification_context.get("agent_id")
+        target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
+        if target_agent:
+            ctx = await agent_context.load_shallow(pool, target_agent)
+            agent_ctx_text = agent_context.format_for_system_prompt(ctx)
+
     await _handle_chat(
         update, pool, text, user.id, chat.id, is_group, triggered_by_mention,
         needs_search, wants_voice, detected_language, active_agents, display, group_title,
+        agent_ctx_text=agent_ctx_text,
     )
 
 
@@ -918,46 +1109,93 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     user = update.effective_user
     if not query or not user:
         return
+    await query.answer()
     data = query.data or ""
     parts = data.split(":")
-    if len(parts) != 3 or parts[0] != "agent":
-        await query.answer()
-        return
-    action = parts[1]
-    try:
-        agent_id = int(parts[2])
-    except ValueError:
-        await query.answer()
+
+    if parts[0] == "confirm" and len(parts) == 3:
+        action = parts[1]
+        try:
+            confirmation_id = int(parts[2])
+        except ValueError:
+            return
+
+        pending = await memory.get_pending_confirmation(pool, user.id, query.message.chat.id)
+        if not pending or pending["id"] != confirmation_id:
+            await query.edit_message_text("Diese Bestätigung ist abgelaufen.")
+            return
+
+        edit_payload = pending["payload"]
+
+        if action == "yes":
+            await memory.clear_pending_confirmation(pool, user.id, query.message.chat.id)
+            result = await agent_edits.execute_edit(pool, edit_payload)
+            rollback_id = confirmation_id
+            _pending_rollbacks[rollback_id] = edit_payload
+            asyncio.get_event_loop().call_later(
+                300, lambda: _pending_rollbacks.pop(rollback_id, None)
+            )
+            await query.edit_message_text(
+                result,
+                reply_markup=agent_edits.rollback_keyboard(rollback_id),
+            )
+
+        elif action == "no":
+            await memory.clear_pending_confirmation(pool, user.id, query.message.chat.id)
+            await query.edit_message_text("Abgebrochen.")
+
+        elif action == "adjust":
+            sent = await query.message.reply_text("Was soll ich ändern?")
+            await memory.save_agent_notification(
+                pool, sent.message_id, query.message.chat.id,
+                edit_payload.get("agent_id", 0),
+                "adjust_request",
+                {"confirmation_id": confirmation_id},
+            )
+
+        elif action == "rollback":
+            rollback_payload = _pending_rollbacks.pop(confirmation_id, None)
+            if not rollback_payload:
+                await query.edit_message_text("Rückgängig nicht mehr möglich — Zeit abgelaufen.")
+                return
+            result = await agent_edits.rollback_edit(pool, rollback_payload)
+            await query.edit_message_text(result)
+
         return
 
-    active_agents = await memory.get_active_agents_for_user(pool, user.id)
-    agent = next((a for a in active_agents if a["id"] == agent_id), None)
-    if not agent:
-        await query.answer("Dieser Agent existiert nicht mehr.")
-        return
+    if parts[0] == "agent" and len(parts) == 3:
+        action = parts[1]
+        try:
+            agent_id = int(parts[2])
+        except ValueError:
+            return
 
-    if action == "stop":
-        await memory.deactivate_agent(pool, agent_id)
-        await query.answer("Gestoppt.")
-        await query.edit_message_text(f"{agent['name']} wurde gestoppt.")
-    elif action == "status":
-        await query.answer("Einen Moment…")
-        state = await memory.get_agent_state(pool, agent_id)
-        agent_memories = await memory.get_agent_memories(pool, agent_id)
-        status_text, _, _ = await agent_parser.handle_agent_talk(
-            "Was ist dein aktueller Status und was hast du bisher beobachtet?",
-            agent, state, agent_memories, pool=pool,
-        )
-        await query.message.reply_text(
-            f"{agent['name']} — Status:\n\n{status_text}",
-            reply_markup=_agent_keyboard(agent_id),
-        )
-    elif action == "rename":
-        await query.answer()
-        context.user_data["awaiting_rename_agent_id"] = agent_id
-        await query.message.reply_text(
-            f"Wie soll {agent['name']} heißen? Schreib einfach den neuen Namen."
-        )
+        active_agents = await memory.get_active_agents_for_user(pool, user.id)
+        agent = next((a for a in active_agents if a["id"] == agent_id), None)
+        if not agent:
+            await query.edit_message_text("Dieser Agent existiert nicht mehr.")
+            return
+
+        if action == "stop":
+            await memory.deactivate_agent(pool, agent_id)
+            await query.edit_message_text(f"{agent['name']} wurde gestoppt.")
+        elif action == "status":
+            state = await memory.get_agent_state(pool, agent_id)
+            agent_memories = await memory.get_agent_memories(pool, agent_id)
+            status_text, _, _ = await agent_parser.handle_agent_talk(
+                "Was ist dein aktueller Status und was hast du bisher beobachtet?",
+                agent, state, agent_memories, pool=pool,
+            )
+            await query.message.reply_text(
+                f"{agent['name']} — Status:\n\n{status_text}",
+                reply_markup=_agent_keyboard(agent_id),
+            )
+        elif action == "rename":
+            context.user_data["awaiting_rename_agent_id"] = agent_id
+            await query.message.reply_text(
+                f"Wie soll {agent['name']} heißen? Schreib einfach den neuen Namen."
+            )
+        return
 
 
 async def handle_command_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

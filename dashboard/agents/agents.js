@@ -73,10 +73,11 @@ async function selectAgent(id) {
   detail.innerHTML = '<div class="empty-state">Lade...</div>';
   showDetail(detail, document.getElementById("agents-sidebar"), a.name);
   try {
-    const [state, data, memories] = await Promise.all([
+    const [state, data, memories, notifications] = await Promise.all([
       api("/api/agents/" + id + "/state"),
       api("/api/agents/" + id + "/data"),
       api("/api/agents/" + id + "/memories"),
+      api("/api/agents/" + id + "/notifications").catch(() => []),
     ]);
     _agentMemCache[id] = memories;
     _agentDataCache[id] = data;
@@ -116,7 +117,7 @@ async function selectAgent(id) {
       <div class="agent-tabs">
         <button class="agent-tab active" data-tab="state">State <span class="agent-tab-count">${state.length}</span></button>
         <button class="agent-tab" data-tab="data">Data <span class="agent-tab-count">${data.length}</span></button>
-        <button class="agent-tab" data-tab="memory">Memory <span class="agent-tab-count">${memories.length}</span></button>
+        <button class="agent-tab" data-tab="notifications">Notifications <span class="agent-tab-count">${notifications.length}</span></button>
       </div>
       <div class="tab-panel active" id="tab-state-${id}">
         <div class="state-grid">
@@ -137,11 +138,24 @@ async function selectAgent(id) {
             : '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Keine Data-Eintraege.</div>'
         }
       </div>
-      <div class="tab-panel" id="tab-memory-${id}">
-        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;"><button class="btn btn-sm btn-accent" onclick="addAgentMemory(${id})">+ Neu</button></div>
+      <div class="tab-panel" id="tab-notifications-${id}">
         <div class="mem-list">
-          ${memories.map((m, i) => `<div class="mem-row"><div class="mem-text">${m.content}</div><div class="mem-date">${fmt(m.created_at)}</div><div class="mem-actions"><button class="btn btn-sm" data-agent="${id}" data-idx="${i}" data-action="edit-agent-mem">Edit</button><button class="btn btn-sm btn-danger" data-agent="${id}" data-idx="${i}" data-action="delete-agent-mem">Del</button></div></div>`).join("")}
-          ${!memories.length ? '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Keine Memories.</div>' : ""}
+          ${
+            notifications.length
+              ? notifications
+                  .map(
+                    (n) => `
+            <div class="mem-row">
+              <div class="mem-text">
+                <span class="badge badge-pipeline" style="margin-right:6px;">${n.notification_type}</span>
+                <span style="font-size:12px;">${n.payload_summary?.summary || "—"}</span>
+              </div>
+              <div class="mem-date">${fmt(n.created_at)}</div>
+            </div>`,
+                  )
+                  .join("")
+              : '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Noch keine Notifications.</div>'
+          }
         </div>
       </div>`;
     detail.querySelectorAll(".agent-tab").forEach((tab) =>

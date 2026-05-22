@@ -122,6 +122,33 @@ CREATE TABLE IF NOT EXISTS agent_trigger_queue (
 
 CREATE INDEX IF NOT EXISTS agent_trigger_queue_pending_idx ON agent_trigger_queue (scheduled_for) WHERE processed_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS agent_notifications (
+    id SERIAL PRIMARY KEY,
+    message_id BIGINT NOT NULL,
+    chat_id BIGINT NOT NULL,
+    agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    notification_type TEXT NOT NULL DEFAULT 'report',
+    payload_summary JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS agent_notifications_message_idx ON agent_notifications (chat_id, message_id);
+CREATE INDEX IF NOT EXISTS agent_notifications_agent_idx ON agent_notifications (agent_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_pending_confirmations (
+    id SERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    edit_type TEXT NOT NULL,
+    description TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS agent_pending_confirmations_chat_idx ON agent_pending_confirmations (chat_id, user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS pipeline_edits (
     id SERIAL PRIMARY KEY,
     agent_id INT REFERENCES agents(id) ON DELETE CASCADE,

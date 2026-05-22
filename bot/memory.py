@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 import asyncpg
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from bot import config
 
 
@@ -760,3 +760,209 @@ async def get_listing_by_id(pool: asyncpg.Pool, listing_id: int) -> dict | None:
 
 async def delete_listing(pool: asyncpg.Pool, listing_id: int) -> None:
     await pool.execute("DELETE FROM listings WHERE id = $1", listing_id)
+
+async def save_agent_notification(
+    pool: asyncpg.Pool,
+    message_id: int,
+    chat_id: int,
+    agent_id: int,
+    notification_type: str = "report",
+    payload_summary: dict | None = None,
+) -> None:
+    await pool.execute(
+        """
+        INSERT INTO agent_notifications
+            (message_id, chat_id, agent_id, notification_type, payload_summary)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        message_id, chat_id, agent_id, notification_type,
+        json.dumps(payload_summary or {}),
+    )
+
+
+async def get_agent_notification(
+    pool: asyncpg.Pool,
+    message_id: int,
+    chat_id: int,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT id, agent_id, notification_type, payload_summary, created_at
+        FROM agent_notifications
+        WHERE message_id = $1 AND chat_id = $2
+        """,
+        message_id, chat_id,
+    )
+    if not row:
+        return None
+    payload = row["payload_summary"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    return {
+        "id": row["id"],
+        "agent_id": row["agent_id"],
+        "notification_type": row["notification_type"],
+        "payload_summary": payload,
+        "created_at": row["created_at"],
+    }
+
+
+async def save_pending_confirmation(
+    pool: asyncpg.Pool,
+    chat_id: int,
+    user_id: int,
+    agent_id: int,
+    edit_type: str,
+    description: str,
+    payload: dict,
+) -> int:
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    row = await pool.fetchrow(
+        """
+        INSERT INTO agent_pending_confirmations
+            (chat_id, user_id, agent_id, edit_type, description, payload, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        """,
+        chat_id, user_id, agent_id, edit_type, description,
+        json.dumps(payload), expires_at,
+    )
+    if row:
+        return row["id"]
+    existing = await pool.fetchrow(
+        "SELECT id FROM agent_pending_confirmations WHERE chat_id = $1 AND user_id = $2",
+        chat_id, user_id,
+    )
+    return existing["id"] if existing else 0
+
+
+async def get_pending_confirmation(
+    pool: asyncpg.Pool,
+    user_id: int,
+    chat_id: int,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT id, agent_id, edit_type, description, payload, created_at, expires_at
+        FROM agent_pending_confirmations
+        WHERE user_id = $1 AND chat_id = $2
+          AND expires_at > NOW()
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        user_id, chat_id,
+    )
+    if not row:
+        return None
+    payload = row["payload"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    return {
+        "id": row["id"],
+        "agent_id": row["agent_id"],
+        "edit_type": row["edit_type"],
+        "description": row["description"],
+        "payload": payload,
+        "created_at": row["created_at"],
+        "expires_at": row["expires_at"],
+    }
+
+
+async def clear_pending_confirmation(
+    pool: asyncpg.Pool,
+    user_id: int,
+    chat_id: int,
+) -> None:
+    await pool.execute(
+        "DELETE FROM agent_pending_confirmations WHERE user_id = $1 AND chat_id = $2",
+        user_id, chat_id,
+    )
+
+
+async def replace_pending_confirmation(
+    pool: asyncpg.Pool,
+    chat_id: int,
+    user_id: int,
+    agent_id: int,
+    edit_type: str,
+    description: str,
+    payload: dict,
+) -> int:
+    await clear_pending_confirmation(pool, user_id, chat_id)
+    return await save_pending_confirmation(
+        pool, chat_id, user_id, agent_id, edit_type, description, payload
+    )
+
+
+async def get_agent_state_keys(
+    pool: asyncpg.Pool,
+    agent_id: int,
+) -> list[str]:
+    rows = await pool.fetch(
+        "SELECT key FROM agent_state WHERE agent_id = $1 ORDER BY key",
+        agent_id,
+    )
+    return [r["key"] for r in rows]
+
+
+async def get_agent_data_namespaces(
+    pool: asyncpg.Pool,
+    agent_id: int,
+) -> list[str]:
+    rows = await pool.fetch(
+        "SELECT DISTINCT namespace FROM agent_data WHERE agent_id = $1 ORDER BY namespace",
+        agent_id,
+    )
+    return [r["namespace"] for r in rows]
+
+
+async def get_agent_state_keys_with_preview(
+    pool: asyncpg.Pool,
+    agent_id: int,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT key, value, updated_at
+        FROM agent_state
+        WHERE agent_id = $1
+        ORDER BY key
+        """,
+        agent_id,
+    )
+    result: list[dict] = []
+    for r in rows:
+        val = r["value"]
+        preview = val[:80] + "…" if len(val) > 80 else val
+        result.append({
+            "key": r["key"],
+            "preview": preview,
+            "length": len(val),
+            "updated_at": r["updated_at"],
+        })
+    return result
+
+
+async def get_agent_data_by_namespace_and_key(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    namespace: str,
+    key: str,
+) -> str | None:
+    row = await pool.fetchrow(
+        "SELECT value FROM agent_data WHERE agent_id = $1 AND namespace = $2 AND key = $3",
+        agent_id, namespace, key,
+    )
+    return row["value"] if row else None
+
+
+async def get_agent_data_keys_in_namespace(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    namespace: str,
+) -> list[str]:
+    rows = await pool.fetch(
+        "SELECT key FROM agent_data WHERE agent_id = $1 AND namespace = $2 ORDER BY key",
+        agent_id, namespace,
+    )
+    return [r["key"] for r in rows]

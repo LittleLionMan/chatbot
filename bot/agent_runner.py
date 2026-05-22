@@ -1241,7 +1241,18 @@ async def _execute_tool_calls(
             if tool == "notify_user":
                 msg = call.get("message", "")
                 if msg:
-                    await bot.send_message(chat_id=target_chat_id, text=msg)
+                    sent = await bot.send_message(chat_id=target_chat_id, text=msg)
+                    try:
+                        await memory.save_agent_notification(
+                            pool,
+                            message_id=sent.message_id,
+                            chat_id=target_chat_id,
+                            agent_id=agent_id,
+                            notification_type="tool_notify",
+                            payload_summary={"summary": msg[:200]},
+                        )
+                    except Exception as notif_err:
+                        logger.warning("tool notify_user: failed to save notification: %s", notif_err)
                     logger.info("tool notify_user: sent")
             elif tool == "trigger_agent":
                 target_name: str = call.get("target_agent_name", "")
@@ -1476,19 +1487,30 @@ async def execute_agent(
         if tool_calls:
             await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls)
 
-        has_notify_tool = any(c.get("tool") == "notify_user" for c in tool_calls)
-        if notify_user and not has_notify_tool and report and report.strip() != "KEINE_AENDERUNG":
-            relay_system = _build_relay_system(name)
-            message_text = await brain.chat(
-                system=relay_system,
-                messages=[{"role": "user", "content": report}],
-                capability=CAPABILITY_SIMPLE_TASKS,
-                caller=f"agent_relay:{name}",
-                pool=pool,
-            )
-            await bot.send_message(chat_id=target_chat_id, text=message_text)
-            await memory.add_memory(pool, "agent", agent_id, report[:200])
-            logger.info("agent %s notified user", name)
+            has_notify_tool = any(c.get("tool") == "notify_user" for c in tool_calls)
+            if notify_user and not has_notify_tool and report and report.strip() != "KEINE_AENDERUNG":
+                relay_system = _build_relay_system(name)
+                message_text = await brain.chat(
+                    system=relay_system,
+                    messages=[{"role": "user", "content": report}],
+                    capability=CAPABILITY_SIMPLE_TASKS,
+                    caller=f"agent_relay:{name}",
+                    pool=pool,
+                )
+                sent = await bot.send_message(chat_id=target_chat_id, text=message_text)
+                try:
+                    await memory.save_agent_notification(
+                        pool,
+                        message_id=sent.message_id,
+                        chat_id=target_chat_id,
+                        agent_id=agent_id,
+                        notification_type="report",
+                        payload_summary={"summary": report[:200], "run_type": "scheduled"},
+                    )
+                except Exception as notif_err:
+                    logger.warning("agent %s: failed to save notification: %s", name, notif_err)
+                await memory.add_memory(pool, "agent", agent_id, report[:200])
+                logger.info("agent %s notified user", name)
         else:
             logger.info("agent %s: no change or notify suppressed", name)
 

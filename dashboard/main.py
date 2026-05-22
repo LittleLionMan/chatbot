@@ -414,53 +414,29 @@ async def delete_agent_state(agent_id: int, key: str) -> dict:
     return {"ok": True}
 
 
-@app.get("/api/agents/{agent_id}/memories")
-async def get_agent_memories(agent_id: int) -> list[dict]:
+@app.get("/api/agents/{agent_id}/notifications")
+async def get_agent_notifications(agent_id: int, limit: int = 20) -> list[dict]:
     rows = await pool().fetch(
         """
-        SELECT id, content, created_at FROM memories
-        WHERE subject_type = 'agent' AND subject_id = $1 AND memory_type = 'fact'
-        ORDER BY created_at DESC LIMIT 50
+        SELECT id, message_id, chat_id, notification_type, payload_summary, created_at
+        FROM agent_notifications
+        WHERE agent_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
         """,
-        agent_id,
+        agent_id, limit,
     )
-    return [{"id": r["id"], "content": r["content"], "created_at": r["created_at"].isoformat()} for r in rows]
-
-
-@app.post("/api/agents/{agent_id}/memories")
-async def add_agent_memory(agent_id: int, body: MemoryBody) -> dict:
-    await pool().execute(
-        """
-        INSERT INTO memories (subject_type, subject_id, content, memory_type)
-        VALUES ('agent', $1, $2, 'fact')
-        """,
-        agent_id, body.content,
-    )
-    return {"ok": True}
-
-
-@app.patch("/api/agents/{agent_id}/memories")
-async def patch_agent_memory(agent_id: int, body: MemoryPatch) -> dict:
-    await pool().execute(
-        """
-        UPDATE memories SET content = $1
-        WHERE subject_type = 'agent' AND subject_id = $2 AND content = $3 AND memory_type = 'fact'
-        """,
-        body.new_content, agent_id, body.old_content,
-    )
-    return {"ok": True}
-
-
-@app.delete("/api/agents/{agent_id}/memories")
-async def delete_agent_memory(agent_id: int, body: MemoryBody) -> dict:
-    await pool().execute(
-        """
-        DELETE FROM memories
-        WHERE subject_type = 'agent' AND subject_id = $1 AND content = $2 AND memory_type = 'fact'
-        """,
-        agent_id, body.content,
-    )
-    return {"ok": True}
+    return [
+        {
+            "id": r["id"],
+            "message_id": r["message_id"],
+            "chat_id": r["chat_id"],
+            "notification_type": r["notification_type"],
+            "payload_summary": r["payload_summary"] if isinstance(r["payload_summary"], dict) else {},
+            "created_at": r["created_at"].isoformat(),
+        }
+        for r in rows
+    ]
 
 
 @app.get("/api/agents/{agent_id}/data")
