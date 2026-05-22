@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 import asyncpg
 
-from bot import brain, config, memory
+from bot import brain, config, memory, agent_skills
 from bot.models import CAPABILITY_CHAT, CAPABILITY_REASONING, CAPABILITY_DEEP_REASONING
 from bot.utils import clean_llm_json, parse_agent_config
 
@@ -124,10 +124,14 @@ Was braucht ein LLM:
 - Komplexe Analyse aus heterogenen Quellen → llm_analyze"""
 
 
-async def _decompose_task(instruction: str) -> dict | None:
+async def _decompose_task(instruction: str, pool=None) -> dict | None:
+    skill_context = ""
+    if pool is not None:
+        skill_context = await agent_skills.load_skill_context(pool)
+    system = _DECOMPOSE_SYSTEM + ("\n\n" + skill_context if skill_context else "")
     try:
         raw = await brain.chat(
-            system=_DECOMPOSE_SYSTEM,
+            system=system,
             messages=[{"role": "user", "content": instruction}],
             capability=CAPABILITY_REASONING,
             caller="task_decomposition",
@@ -304,11 +308,16 @@ STRUKTURREGELN:
 async def _generate_pipeline(
     instruction: str,
     decomposition: dict,
+    pool=None,
 ) -> dict | None:
+    skill_context = ""
+    if pool is not None:
+        skill_context = await agent_skills.load_skill_context(pool)
+    system = _PIPELINE_GENERATOR_SYSTEM + ("\n\n" + skill_context if skill_context else "")
     try:
         content = f"Instruction: {instruction}\n\nKlassifikation:\n{json.dumps(decomposition, ensure_ascii=False, indent=2)}"
         raw = await brain.chat(
-            system=_PIPELINE_GENERATOR_SYSTEM,
+            system=system,
             messages=[{"role": "user", "content": content}],
             capability=CAPABILITY_REASONING,
             caller="pipeline_generator",
@@ -410,12 +419,12 @@ async def parse_agent_creation(
         if not instruction:
             return None
 
-        decomposition = await _decompose_task(instruction)
+        decomposition = await _decompose_task(instruction, pool=pool)
         if decomposition is None:
             logger.warning("task decomposition failed for agent creation")
             return None
 
-        pipeline_result = await _generate_pipeline(instruction, decomposition)
+        pipeline_result = await _generate_pipeline(instruction, decomposition, pool=pool)
         agent_type: str = decomposition.get("type", "default")
 
         next_run_utc: datetime | None = None
@@ -542,9 +551,9 @@ async def handle_agent_talk(
             if isinstance(raw_config, dict):
                 new_config = raw_config
                 if new_config.get("instruction") and new_config["instruction"] != config_data.get("instruction"):
-                    decomposition = await _decompose_task(new_config["instruction"])
+                    decomposition = await _decompose_task(new_config["instruction"], pool=pool)
                     if decomposition:
-                        new_pipeline = await _generate_pipeline(new_config["instruction"], decomposition)
+                        new_pipeline = await _generate_pipeline(new_config["instruction"], decomposition, pool=pool)
                         if new_pipeline:
                             new_config["steps"] = new_pipeline.get("steps", [])
                             new_config.pop("pipeline", None)
@@ -566,16 +575,16 @@ async def handle_agent_talk(
     return response, new_config, new_name
 
 
-async def regenerate_pipeline_for_agent(agent_config: dict) -> dict:
+async def regenerate_pipeline_for_agent(agent_config: dict, pool=None) -> dict:
     instruction = agent_config.get("instruction", "")
     if not instruction:
         return agent_config
 
-    decomposition = await _decompose_task(instruction)
+    decomposition = await _decompose_task(instruction, pool=pool)
     if decomposition is None:
         return agent_config
 
-    pipeline_result = await _generate_pipeline(instruction, decomposition)
+    pipeline_result = await _generate_pipeline(instruction, decomposition, pool=pool)
     if pipeline_result is None:
         return agent_config
 

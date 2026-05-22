@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS agents (
     is_active BOOLEAN DEFAULT TRUE,
     last_run_at TIMESTAMPTZ,
     next_run_at TIMESTAMPTZ,
+    current_rating TEXT,
+    current_rating_note TEXT,
+    last_rated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -118,6 +121,43 @@ CREATE TABLE IF NOT EXISTS agent_trigger_queue (
 );
 
 CREATE INDEX IF NOT EXISTS agent_trigger_queue_pending_idx ON agent_trigger_queue (scheduled_for) WHERE processed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS pipeline_edits (
+    id SERIAL PRIMARY KEY,
+    agent_id INT REFERENCES agents(id) ON DELETE CASCADE,
+    agent_type TEXT NOT NULL DEFAULT '',
+    instruction TEXT NOT NULL DEFAULT '',
+    original_steps JSONB NOT NULL DEFAULT '[]',
+    edited_steps JSONB NOT NULL DEFAULT '[]',
+    session_id TEXT NOT NULL DEFAULT '',
+    stable_since TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS pipeline_edits_agent_idx ON pipeline_edits (agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS pipeline_edits_session_idx ON pipeline_edits (session_id);
+CREATE INDEX IF NOT EXISTS pipeline_edits_stable_idx ON pipeline_edits (stable_since) WHERE stable_since IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS agent_ratings (
+    id SERIAL PRIMARY KEY,
+    agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    rating TEXT NOT NULL,
+    note TEXT,
+    rated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS agent_ratings_agent_idx ON agent_ratings (agent_id, rated_at DESC);
+
+CREATE TABLE IF NOT EXISTS skill_store (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO skill_store (key, value) VALUES
+    ('pipeline_patterns_dirty', 'true')
+ON CONFLICT (key) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS llm_usage (
     id SERIAL PRIMARY KEY,

@@ -4,7 +4,7 @@ import json
 import logging
 import asyncpg
 import telegram
-from bot import config, memory, brain, extractor, ratelimit, task_runner, agent_runner, observer
+from bot import config, memory, brain, extractor, ratelimit, task_runner, agent_runner, observer, agent_skills
 from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT
 from bot.utils import clean_llm_json
 
@@ -244,3 +244,14 @@ async def run(pool: asyncpg.Pool, bot: telegram.Bot) -> None:
                 logger.info("Scheduler observer cycle skipped: rate limited.")
         except Exception as e:
             logger.error("Scheduler observer cycle failed: %s", e)
+
+                try:
+                    if not ratelimit.is_any_limited():
+                        await agent_skills.update_stability(pool)
+                        extracted = await agent_skills.extract_and_store_patterns(pool)
+                        if extracted:
+                            logger.info("Scheduler: skill patterns updated.")
+                    else:
+                        logger.info("Scheduler skill extraction skipped: rate limited.")
+                except Exception as e:
+                    logger.error("Scheduler skill extraction failed: %s", e)

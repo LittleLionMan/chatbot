@@ -1,3 +1,27 @@
+const RATING_LABELS = {
+  perfekt: "Perfekt",
+  sehr_gut: "Sehr gut",
+  gut: "Gut",
+  ausreichend: "Ausreichend",
+  ungenuegend: "Ungenuegend",
+};
+
+const RATING_COLORS = {
+  perfekt: "var(--accent)",
+  sehr_gut: "var(--accent)",
+  gut: "var(--amber)",
+  ausreichend: "var(--text3)",
+  ungenuegend: "var(--red)",
+};
+
+function ratingBadge(rating) {
+  if (!rating)
+    return '<span style="font-size:11px;color:var(--text3);">nicht bewertet</span>';
+  const color = RATING_COLORS[rating] || "var(--text3)";
+  const label = RATING_LABELS[rating] || rating;
+  return `<span class="badge" style="background:transparent;border:1px solid ${color};color:${color};">${label}</span>`;
+}
+
 async function loadAgents() {
   try {
     agentsData = await api("/api/agents");
@@ -23,9 +47,16 @@ function renderAgentsList(filter) {
   document.getElementById("agents-list").innerHTML = filtered
     .map((a) => {
       const totalSteps = (a.steps || []).length;
+      const ratingColor = a.current_rating
+        ? RATING_COLORS[a.current_rating]
+        : null;
+      const ratingDot = ratingColor
+        ? `<span style="width:6px;height:6px;border-radius:50%;background:${ratingColor};display:inline-block;flex-shrink:0;"></span>`
+        : "";
       return `<div class="sidebar-item" data-id="${a.id}" onclick="selectAgent(${a.id})">
-      <div class="si-name">${a.name}<span class="badge ${a.is_active ? "badge-active" : "badge-inactive"}">${a.is_active ? "aktiv" : "inaktiv"}</span>${totalSteps > 0 ? `<span class="badge badge-pipeline">${totalSteps} steps</span>` : ""}</div>
-      <div class="si-meta">${a.type || "--"} . ${a.schedule || "trigger-only"}</div></div>`;
+        <div class="si-name">${a.name}<span class="badge ${a.is_active ? "badge-active" : "badge-inactive"}">${a.is_active ? "aktiv" : "inaktiv"}</span>${totalSteps > 0 ? `<span class="badge badge-pipeline">${totalSteps} steps</span>` : ""}${ratingDot}</div>
+        <div class="si-meta">${a.type || "--"} . ${a.schedule || "trigger-only"}</div>
+      </div>`;
     })
     .join("");
 }
@@ -59,6 +90,7 @@ async function selectAgent(id) {
       <div class="action-bar">
         <button class="btn btn-accent" onclick="triggerAgent(${id})">Jetzt ausfuehren</button>
         <button class="btn" onclick="editAgent(${id})">Bearbeiten</button>
+        <button class="btn" onclick="openRatingModal(${id})">Bewerten</button>
         ${a.is_active ? `<button class="btn btn-danger" onclick="stopAgent(${id})">Stoppen</button>` : ""}
       </div>
       <div class="detail-block"><div class="detail-block-title">Anweisung</div><div class="detail-text">${a.instruction || "--"}</div></div>
@@ -66,7 +98,18 @@ async function selectAgent(id) {
         <div class="detail-mono">Zeitplan: ${a.schedule || "nur auf Trigger"}</div>
         <div class="detail-mono">Letzter Lauf: ${fmt(a.last_run_at)}</div>
         <div class="detail-mono">Naechster Lauf: ${a.next_run_at ? fmt(a.next_run_at) : "--"}</div>
-        <div class="detail-mono">Typ: ${a.type || "--"}</div></div>
+        <div class="detail-mono">Typ: ${a.type || "--"}</div>
+      </div>
+      <div class="detail-block">
+        <div class="detail-block-title">Bewertung</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          ${ratingBadge(a.current_rating)}
+          ${a.last_rated_at ? `<span style="font-size:11px;color:var(--text3);">${fmt(a.last_rated_at)}</span>` : ""}
+        </div>
+        ${a.current_rating_note ? `<div class="detail-text" style="font-size:12px;color:var(--text2);margin-bottom:6px;">${a.current_rating_note}</div>` : ""}
+        <button class="btn btn-sm" onclick="loadRatingHistory(${id})">Verlauf anzeigen</button>
+        <div id="rating-history-${id}"></div>
+      </div>
       <div class="detail-block"><div class="detail-block-title">Pipeline (${allSteps.length} Steps)<button class="btn btn-sm btn-accent" onclick="addStep(${id})">+ Step</button></div>
         ${allSteps.length ? allSteps.map((s, i) => renderStep(s, i, id)).join("") : '<div style="font-size:13px;color:var(--text3);">Keine Pipeline.</div>'}</div>
       <hr class="divider">
@@ -121,6 +164,115 @@ async function selectAgent(id) {
     console.error("selectAgent error:", e);
     detail.innerHTML =
       '<div style="font-size:13px;color:var(--red);padding:1rem;">Fehler beim Laden.</div>';
+  }
+}
+
+async function loadRatingHistory(agentId) {
+  const el = document.getElementById(`rating-history-${agentId}`);
+  if (!el) return;
+  try {
+    const history = await api(`/api/agents/${agentId}/ratings`);
+    if (!history.length) {
+      el.innerHTML =
+        '<div style="font-size:12px;color:var(--text3);margin-top:6px;">Kein Verlauf.</div>';
+      return;
+    }
+    el.innerHTML = `<div class="mem-list" style="margin-top:8px;">${history
+      .map(
+        (h) => `<div class="mem-row">
+          ${ratingBadge(h.rating)}
+          <div class="mem-text" style="font-size:12px;">${h.note || "—"}</div>
+          <div class="mem-date">${fmt(h.rated_at)}</div>
+        </div>`,
+      )
+      .join("")}</div>`;
+  } catch {
+    el.innerHTML =
+      '<div style="font-size:12px;color:var(--red);margin-top:6px;">Fehler.</div>';
+  }
+}
+
+function openRatingModal(agentId) {
+  const a = agentsData.find((x) => x.id === agentId);
+  const currentRating = a?.current_rating || "";
+  const currentNote = a?.current_rating_note || "";
+
+  const options = [
+    { value: "perfekt", label: "Perfekt — macht genau was es soll" },
+    {
+      value: "sehr_gut",
+      label: "Sehr gut — funktioniert fast immer, minimale LLM-Varianz",
+    },
+    { value: "gut", label: "Gut — funktioniert, kann aber noch Bugs haben" },
+    {
+      value: "ausreichend",
+      label:
+        "Ausreichend — laeuft, produziert ueberwiegend unbefriedigende Ergebnisse",
+    },
+    { value: "ungenuegend", label: "Ungenuegend — laeuft nicht" },
+  ];
+
+  const optionsHtml = options
+    .map(
+      (
+        o,
+      ) => `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px;border-radius:6px;cursor:pointer;border:0.5px solid ${currentRating === o.value ? "var(--accent)" : "transparent"};margin-bottom:4px;" class="rating-option" data-value="${o.value}">
+        <input type="radio" name="rating" value="${o.value}" ${currentRating === o.value ? "checked" : ""} style="margin-top:2px;flex-shrink:0;" />
+        <span style="font-size:13px;color:${RATING_COLORS[o.value]};">${o.label}</span>
+      </label>`,
+    )
+    .join("");
+
+  openModal(
+    "Agent bewerten",
+    `<div class="modal-field">
+       <div class="modal-label">Qualitaet</div>
+       <div id="rating-options">${optionsHtml}</div>
+     </div>
+     <div class="modal-field">
+       <div class="modal-label">Notiz (optional) — was genau ist problematisch oder besonders gut?</div>
+       <textarea class="modal-input" id="rating-note" style="min-height:80px;" placeholder="z.B. llm_decide variiert zu stark bei mehrdeutigen Titeln...">${currentNote}</textarea>
+     </div>`,
+    `<button class="btn" onclick="closeModal()">Abbrechen</button>
+     <button class="btn btn-accent" onclick="saveRating(${agentId})">Speichern</button>`,
+  );
+
+  document.querySelectorAll(".rating-option").forEach((label) => {
+    label.addEventListener("click", () => {
+      document.querySelectorAll(".rating-option").forEach((l) => {
+        l.style.borderColor = "transparent";
+      });
+      label.style.borderColor = "var(--accent)";
+    });
+  });
+}
+
+async function saveRating(agentId) {
+  const selected = document.querySelector('input[name="rating"]:checked');
+  if (!selected) {
+    toast("Bitte eine Bewertung auswaehlen.", true);
+    return;
+  }
+  const rating = selected.value;
+  const note = document.getElementById("rating-note").value.trim() || null;
+  try {
+    await api(`/api/agents/${agentId}/rating`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating, note }),
+    });
+    closeModal();
+    toast("Bewertung gespeichert.");
+    const a = agentsData.find((x) => x.id === agentId);
+    if (a) {
+      a.current_rating = rating;
+      a.current_rating_note = note;
+      a.last_rated_at = new Date().toISOString();
+    }
+    renderAgentsList();
+    selectAgent(agentId);
+  } catch {
+    toast("Fehler.", true);
   }
 }
 
@@ -214,6 +366,7 @@ async function saveStateEntry(agentId, key) {
     toast("Fehler.", true);
   }
 }
+
 async function saveAgentData(agentId, idx) {
   const d = _agentDataCache[agentId][idx];
   const value = document.getElementById("edit-data-val").value;
@@ -233,6 +386,7 @@ async function saveAgentData(agentId, idx) {
     toast("Fehler.", true);
   }
 }
+
 function addAgentData(agentId) {
   const existing = _agentDataCache[agentId] || [];
   const namespaces = [...new Set(existing.map((d) => d.namespace))];
@@ -242,6 +396,7 @@ function addAgentData(agentId) {
     `<button class="btn" onclick="closeModal()">Abbrechen</button><button class="btn btn-accent" onclick="saveNewAgentData(${agentId})">Speichern</button>`,
   );
 }
+
 async function saveNewAgentData(agentId) {
   const namespace = document.getElementById("new-data-ns").value.trim();
   const key = document.getElementById("new-data-key").value.trim();
@@ -263,6 +418,7 @@ async function saveNewAgentData(agentId) {
     toast("Fehler.", true);
   }
 }
+
 async function saveAgentMemory(agentId, idx) {
   const mem = _agentMemCache[agentId][idx];
   const newContent = document.getElementById("edit-mem-content").value.trim();
@@ -283,6 +439,7 @@ async function saveAgentMemory(agentId, idx) {
     toast("Fehler.", true);
   }
 }
+
 function addAgentMemory(agentId) {
   openModal(
     "Memory hinzufuegen",
@@ -290,6 +447,7 @@ function addAgentMemory(agentId) {
     `<button class="btn" onclick="closeModal()">Abbrechen</button><button class="btn btn-accent" onclick="saveNewAgentMemory(${agentId})">Speichern</button>`,
   );
 }
+
 async function saveNewAgentMemory(agentId) {
   const content = document.getElementById("new-mem-content").value.trim();
   if (!content) return;
@@ -306,6 +464,7 @@ async function saveNewAgentMemory(agentId) {
     toast("Fehler.", true);
   }
 }
+
 async function triggerAgent(id) {
   try {
     await api("/api/agents/" + id + "/trigger", { method: "POST" });
@@ -314,6 +473,7 @@ async function triggerAgent(id) {
     toast("Fehler.", true);
   }
 }
+
 async function stopAgent(id) {
   confirmModal("Agent wirklich stoppen?", async () => {
     try {
@@ -326,6 +486,7 @@ async function stopAgent(id) {
     }
   });
 }
+
 function editAgent(id) {
   const a = agentsData.find((x) => x.id === id);
   openModal(
@@ -334,6 +495,7 @@ function editAgent(id) {
     `<button class="btn" onclick="closeModal()">Abbrechen</button><button class="btn btn-accent" onclick="saveAgent(${id})">Speichern</button>`,
   );
 }
+
 async function saveAgent(id) {
   const name = document.getElementById("edit-name").value.trim();
   const schedule =

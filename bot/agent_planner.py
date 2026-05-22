@@ -274,12 +274,12 @@ async def finalize(
             next_run_local = croniter(schedule, now).get_next(datetime)
             next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
 
-        decomposition = await _decompose_task(instruction)
+        decomposition = await _decompose_task(instruction, pool=pool)
         if decomposition is None:
             logger.warning("finalize: decomposition failed for %s", agent_name)
             continue
 
-        pipeline_result = await _generate_pipeline(instruction, decomposition)
+        pipeline_result = await _generate_pipeline(instruction, decomposition, pool=pool)
         agent_type: str = decomposition.get("type", "default")
 
         agent_config: dict = {

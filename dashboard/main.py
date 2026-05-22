@@ -3,6 +3,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
+import uuid
 
 import asyncpg
 from dotenv import load_dotenv
@@ -16,6 +17,47 @@ load_dotenv()
 
 _pool: asyncpg.Pool | None = None
 
+class AgentRatingBody(BaseModel):
+    rating: str
+    note: str | None = None
+
+class AgentPatch(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+    name: str | None = None
+    schedule: str | None = None
+    instruction: str | None = None
+    pipeline: list | None = None
+    steps: list | None = None
+
+class MemoryBody(BaseModel):
+    content: str
+    subject_type: str
+
+class MemoryPatch(BaseModel):
+    old_content: str
+    new_content: str
+    subject_type: str
+
+class StatePatch(BaseModel):
+    value: str
+
+class AgentDataBody(BaseModel):
+    namespace: str
+    key: str
+    value: str
+
+class AgentDataPatch(BaseModel):
+    value: str
+
+class MonitorPatch(BaseModel):
+    name: str | None = None
+    keywords: list[str] | None = None
+    poll_interval_seconds: int | None = None
+    feed_templates: list[str] | None = None
+    source_agent: str | None = None
+    source_state_key: str | None = None
+    source_format: str | None = None
+    target_agent: str | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -70,51 +112,6 @@ async def serve_dashboard() -> HTMLResponse:
     return HTMLResponse(html)
 
 
-class AgentPatch(BaseModel):
-    model_config = {"arbitrary_types_allowed": True}
-    name: str | None = None
-    schedule: str | None = None
-    instruction: str | None = None
-    pipeline: list | None = None
-    steps: list | None = None
-
-
-class MemoryBody(BaseModel):
-    content: str
-    subject_type: str
-
-
-class MemoryPatch(BaseModel):
-    old_content: str
-    new_content: str
-    subject_type: str
-
-
-class StatePatch(BaseModel):
-    value: str
-
-
-class AgentDataBody(BaseModel):
-    namespace: str
-    key: str
-    value: str
-
-
-class AgentDataPatch(BaseModel):
-    value: str
-
-
-class MonitorPatch(BaseModel):
-    name: str | None = None
-    keywords: list[str] | None = None
-    poll_interval_seconds: int | None = None
-    feed_templates: list[str] | None = None
-    source_agent: str | None = None
-    source_state_key: str | None = None
-    source_format: str | None = None
-    target_agent: str | None = None
-
-
 @app.get("/api/capabilities")
 async def get_capabilities() -> list[str]:
     rows = await pool().fetch(
@@ -142,7 +139,8 @@ async def get_agents() -> list[dict]:
     rows = await pool().fetch(
         """
         SELECT id, user_id, name, config, schedule, is_active,
-               last_run_at, next_run_at, created_at, target_chat_id
+               last_run_at, next_run_at, created_at, target_chat_id,
+               current_rating, current_rating_note, last_rated_at
         FROM agents
         ORDER BY is_active DESC, created_at DESC
         """
@@ -164,6 +162,9 @@ async def get_agents() -> list[dict]:
             "next_run_at": r["next_run_at"].isoformat() if r["next_run_at"] else None,
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "target_chat_id": r["target_chat_id"],
+            "current_rating": r["current_rating"],
+            "current_rating_note": r["current_rating_note"],
+            "last_rated_at": r["last_rated_at"].isoformat() if r["last_rated_at"] else None,
         })
     return result
 
@@ -171,27 +172,99 @@ async def get_agents() -> list[dict]:
 @app.patch("/api/agents/{agent_id}")
 async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
     row = await pool().fetchrow(
-        "SELECT name, config, schedule FROM agents WHERE id = $1", agent_id
+        """
+        SELECT name, config, schedule
+        FROM agents WHERE id = $1
+        """,
+        agent_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
+
     config = _parse_config(row["config"])
     new_name = body.name if body.name is not None else row["name"]
-    if "schedule" in body.model_fields_set:
-        new_schedule = body.schedule
-    else:
-        new_schedule = row["schedule"]
+    new_schedule = body.schedule if "schedule" in body.model_fields_set else row["schedule"]
+
+    dirty = False
+
     if body.instruction is not None:
         config["instruction"] = body.instruction
+        dirty = True
+
     if body.steps is not None:
-        config["steps"] = body.steps
+        original_steps = (
+            config.get("steps")
+            or config.get("pipeline", []) + config.get("pipeline_after_template", [])
+        )
+        edited_steps = body.steps
+
+        if original_steps and original_steps != edited_steps:
+            session_id = (
+                await pool().fetchval(
+                    """
+                    SELECT session_id FROM pipeline_edits
+                    WHERE agent_id = $1
+                    ORDER BY updated_at DESC LIMIT 1
+                    """,
+                    agent_id,
+                )
+                or str(uuid.uuid4())
+            )
+            try:
+                existing = await pool().fetchrow(
+                    "SELECT id FROM pipeline_edits WHERE agent_id = $1 AND session_id = $2",
+                    agent_id, session_id,
+                )
+                if existing:
+                    await pool().execute(
+                        """
+                        UPDATE pipeline_edits
+                        SET edited_steps = $1, updated_at = NOW(), stable_since = NULL
+                        WHERE id = $2
+                        """,
+                        json.dumps(edited_steps),
+                        existing["id"],
+                    )
+                else:
+                    await pool().execute(
+                        """
+                        INSERT INTO pipeline_edits
+                            (agent_id, agent_type, instruction,
+                             original_steps, edited_steps, session_id)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        """,
+                        agent_id,
+                        config.get("type", "unknown"),
+                        config.get("instruction", "")[:500],
+                        json.dumps(original_steps),
+                        json.dumps(edited_steps),
+                        session_id,
+                    )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("pipeline_edits insert failed: %s", e)
+
+        config["steps"] = edited_steps
         config.pop("pipeline", None)
         config.pop("pipeline_after_template", None)
+        dirty = True
+
     await pool().execute(
         "UPDATE agents SET name = $1, schedule = $2, config = $3 WHERE id = $4",
         new_name, new_schedule, json.dumps(config), agent_id,
     )
+
+    if dirty:
+        await pool().execute(
+            """
+            INSERT INTO skill_store (key, value, updated_at)
+            VALUES ('pipeline_patterns_dirty', 'true', NOW())
+            ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()
+            """,
+        )
+
     return {"ok": True}
+
 
 
 @app.delete("/api/agents/{agent_id}")
@@ -201,6 +274,97 @@ async def deactivate_agent(agent_id: int) -> dict:
     )
     return {"ok": True}
 
+@app.post("/api/agents/{agent_id}/rating")
+async def set_agent_rating(agent_id: int, body: AgentRatingBody) -> dict:
+    valid = ["perfekt", "sehr_gut", "gut", "ausreichend", "ungenuegend"]
+    if body.rating not in valid:
+        raise HTTPException(status_code=400, detail=f"rating muss einer von {valid} sein")
+
+    current = await pool().fetchrow(
+        "SELECT current_rating, current_rating_note FROM agents WHERE id = $1", agent_id
+    )
+    if not current:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    rating_changed = current["current_rating"] != body.rating
+    note_changed = current["current_rating_note"] != body.note
+    if rating_changed or note_changed:
+        await pool().execute(
+            "INSERT INTO agent_ratings (agent_id, rating, note) VALUES ($1, $2, $3)",
+            agent_id, body.rating, body.note,
+        )
+
+    await pool().execute(
+        """
+        UPDATE agents
+        SET current_rating = $1, current_rating_note = $2, last_rated_at = NOW()
+        WHERE id = $3
+        """,
+        body.rating, body.note, agent_id,
+    )
+    await pool().execute(
+        """
+        INSERT INTO skill_store (key, value, updated_at)
+        VALUES ('pipeline_patterns_dirty', 'true', NOW())
+        ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()
+        """,
+    )
+    return {"ok": True}
+
+
+@app.get("/api/agents/{agent_id}/ratings")
+async def get_agent_ratings(agent_id: int) -> list[dict]:
+    rows = await pool().fetch(
+        """
+        SELECT rating, note, rated_at
+        FROM agent_ratings
+        WHERE agent_id = $1
+        ORDER BY rated_at DESC
+        LIMIT 20
+        """,
+        agent_id,
+    )
+    return [
+        {
+            "rating": r["rating"],
+            "note": r["note"],
+            "rated_at": r["rated_at"].isoformat(),
+        }
+        for r in rows
+    ]
+
+
+@app.post("/api/skills/extract")
+async def trigger_skill_extraction() -> dict:
+    await pool().execute(
+        """
+        INSERT INTO skill_store (key, value, updated_at)
+        VALUES ('pipeline_patterns_dirty', 'true', NOW())
+        ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()
+        """,
+    )
+    return {"ok": True, "message": "Extraktion wird beim naechsten Scheduler-Tick gestartet."}
+
+
+@app.get("/api/skills/patterns")
+async def get_skill_patterns() -> dict:
+    row = await pool().fetchrow(
+        "SELECT value, updated_at FROM skill_store WHERE key = 'pipeline_patterns'"
+    )
+    dirty_row = await pool().fetchrow(
+        "SELECT value FROM skill_store WHERE key = 'pipeline_patterns_dirty'"
+    )
+    dirty_val = dirty_row["value"] if dirty_row else True
+    is_dirty = dirty_val == "true" or dirty_val is True if isinstance(dirty_val, (str, bool)) else True
+
+    if not row:
+        return {"patterns": None, "updated_at": None, "is_dirty": is_dirty}
+
+    return {
+        "patterns": row["value"],
+        "updated_at": row["updated_at"].isoformat(),
+        "is_dirty": is_dirty,
+    }
 
 @app.post("/api/agents/{agent_id}/trigger")
 async def trigger_agent(agent_id: int) -> dict:
