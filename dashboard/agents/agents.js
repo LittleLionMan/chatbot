@@ -73,13 +73,11 @@ async function selectAgent(id) {
   detail.innerHTML = '<div class="empty-state">Lade...</div>';
   showDetail(detail, document.getElementById("agents-sidebar"), a.name);
   try {
-    const [state, data, memories, notifications] = await Promise.all([
+    const [state, data, notifications] = await Promise.all([
       api("/api/agents/" + id + "/state"),
       api("/api/agents/" + id + "/data"),
-      api("/api/agents/" + id + "/memories"),
       api("/api/agents/" + id + "/notifications").catch(() => []),
     ]);
-    _agentMemCache[id] = memories;
     _agentDataCache[id] = data;
     const nsMap = {};
     data.forEach((d, i) => {
@@ -193,11 +191,12 @@ async function loadRatingHistory(agentId) {
     }
     el.innerHTML = `<div class="mem-list" style="margin-top:8px;">${history
       .map(
-        (h) => `<div class="mem-row">
-          ${ratingBadge(h.rating)}
-          <div class="mem-text" style="font-size:12px;">${h.note || "—"}</div>
-          <div class="mem-date">${fmt(h.rated_at)}</div>
-        </div>`,
+        (h) => `
+      <div class="mem-row">
+        ${ratingBadge(h.rating)}
+        <div class="mem-text" style="font-size:12px;">${h.note || "—"}</div>
+        <div class="mem-date">${fmt(h.rated_at)}</div>
+      </div>`,
       )
       .join("")}</div>`;
   } catch {
@@ -228,12 +227,11 @@ function openRatingModal(agentId) {
 
   const optionsHtml = options
     .map(
-      (
-        o,
-      ) => `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px;border-radius:6px;cursor:pointer;border:0.5px solid ${currentRating === o.value ? "var(--accent)" : "transparent"};margin-bottom:4px;" class="rating-option" data-value="${o.value}">
-        <input type="radio" name="rating" value="${o.value}" ${currentRating === o.value ? "checked" : ""} style="margin-top:2px;flex-shrink:0;" />
-        <span style="font-size:13px;color:${RATING_COLORS[o.value]};">${o.label}</span>
-      </label>`,
+      (o) =>
+        `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px;border-radius:6px;cursor:pointer;border:0.5px solid ${currentRating === o.value ? "var(--accent)" : "transparent"};margin-bottom:4px;" class="rating-option" data-value="${o.value}">
+      <input type="radio" name="rating" value="${o.value}" ${currentRating === o.value ? "checked" : ""} style="margin-top:2px;flex-shrink:0;" />
+      <span style="font-size:13px;color:${RATING_COLORS[o.value]};">${o.label}</span>
+    </label>`,
     )
     .join("");
 
@@ -339,29 +337,6 @@ function handleAgentDetailClick(e) {
         })
         .catch(() => toast("Fehler.", true));
     });
-  } else if (action === "edit-agent-mem") {
-    const idx = Number(btn.dataset.idx);
-    const mem = _agentMemCache[agentId][idx];
-    openModal(
-      "Memory bearbeiten",
-      `<div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="edit-mem-content" style="min-height:100px;">${mem.content}</textarea></div>`,
-      `<button class="btn" onclick="closeModal()">Abbrechen</button><button class="btn btn-accent" onclick="saveAgentMemory(${agentId},${idx})">Speichern</button>`,
-    );
-  } else if (action === "delete-agent-mem") {
-    const idx = Number(btn.dataset.idx);
-    const mem = _agentMemCache[agentId][idx];
-    confirmModal("Memory loeschen?", () => {
-      api("/api/agents/" + agentId + "/memories", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: mem.content, subject_type: "agent" }),
-      })
-        .then(() => {
-          toast("Geloescht.");
-          selectAgent(agentId);
-        })
-        .catch(() => toast("Fehler.", true));
-    });
   }
 }
 
@@ -424,52 +399,6 @@ async function saveNewAgentData(agentId) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, key, value }),
-    });
-    closeModal();
-    toast("Gespeichert.");
-    selectAgent(agentId);
-  } catch {
-    toast("Fehler.", true);
-  }
-}
-
-async function saveAgentMemory(agentId, idx) {
-  const mem = _agentMemCache[agentId][idx];
-  const newContent = document.getElementById("edit-mem-content").value.trim();
-  try {
-    await api("/api/agents/" + agentId + "/memories", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        old_content: mem.content,
-        new_content: newContent,
-        subject_type: "agent",
-      }),
-    });
-    closeModal();
-    toast("Gespeichert.");
-    selectAgent(agentId);
-  } catch {
-    toast("Fehler.", true);
-  }
-}
-
-function addAgentMemory(agentId) {
-  openModal(
-    "Memory hinzufuegen",
-    `<div class="modal-field"><div class="modal-label">Inhalt</div><textarea class="modal-input" id="new-mem-content" placeholder="Neue Beobachtung..."></textarea></div>`,
-    `<button class="btn" onclick="closeModal()">Abbrechen</button><button class="btn btn-accent" onclick="saveNewAgentMemory(${agentId})">Speichern</button>`,
-  );
-}
-
-async function saveNewAgentMemory(agentId) {
-  const content = document.getElementById("new-mem-content").value.trim();
-  if (!content) return;
-  try {
-    await api("/api/agents/" + agentId + "/memories", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, subject_type: "agent" }),
     });
     closeModal();
     toast("Gespeichert.");
