@@ -85,8 +85,6 @@ def _to_str_set(items: list) -> set[str]:
     return {json.dumps(i, ensure_ascii=False) if isinstance(i, (dict, list)) else str(i) for i in items}
 
 
-# ── Router ────────────────────────────────────────────────────────────────────
-
 def _evaluate_condition(condition: str, context: dict[str, str]) -> bool:
     match = re.match(r"^([\w.]+)\s*(==|!=|>|<|>=|<=)\s*(.*)$", condition.strip())
     if not match:
@@ -155,8 +153,6 @@ Wenn keine Bedingung zutrifft: antworte mit 'normal'."""
     return result.strip().lower()
 
 
-# ── LLM Steps ─────────────────────────────────────────────────────────────────
-
 _LLM_CAPABILITY_MAP: dict[str, str] = {
     "llm_extract": CAPABILITY_SIMPLE_TASKS,
     "llm_decide": CAPABILITY_REASONING,
@@ -221,8 +217,6 @@ async def _handle_llm_step(
     return result
 
 
-# ── Web Search ────────────────────────────────────────────────────────────────
-
 async def _handle_web_search(
     step: dict,
     context: dict[str, str],
@@ -270,8 +264,6 @@ async def _handle_web_search(
     return result
 
 
-# ── Finance ───────────────────────────────────────────────────────────────────
-
 async def _handle_finance(
     step: dict,
     context: dict[str, str],
@@ -306,34 +298,11 @@ async def _handle_finance_search(
     result = await _finance.search_ticker(query)
     if result is None:
         logger.info("finance_search: no result for %r", query)
-        return step.get("default", "{}")
-
-    return json.dumps(result, ensure_ascii=False)
-
-
-async def _handle_finance_search(
-    step: dict,
-    context: dict[str, str],
-    **_,
-) -> str:
-    from bot import finance as _finance
-
-    query_key = step.get("query_key", "selected_isin")
-    query = _get(context, query_key).strip()
-    if not query:
-        logger.warning("finance_search step: no query in context key %r", query_key)
-        return "{}"
-
-    result = await _finance.search_ticker(query)
-    if result is None:
-        logger.info("finance_search: no result for %r", query)
         return "{}"
 
     logger.info("finance_search: found %s (%s) for %r", result.get("symbol"), result.get("longname"), query)
     return json.dumps(result, ensure_ascii=False)
 
-
-# ── State / Data ──────────────────────────────────────────────────────────────
 
 async def _handle_state_read(
     step: dict,
@@ -357,6 +326,28 @@ async def _handle_state_write(
     value = _get(context, source_key)
     state[key] = value
     logger.info("state_write: %r = %d chars", key, len(value))
+    return value
+
+
+async def _handle_state_init(
+    step: dict,
+    context: dict[str, str],
+    state: dict[str, str],
+    pool: asyncpg.Pool,
+    agent_id: int,
+    **_,
+) -> str:
+    key: str = step["key"]
+    source_key: str = step["source_key"]
+    if key in state and state[key] not in ("", "[]", "{}", "null"):
+        logger.info("state_init: key %r already exists, skipping", key)
+        return state[key]
+    value = _get(context, source_key)
+    if not value or value in ("[]", "{}", "null", ""):
+        logger.info("state_init: source_key %r is empty, skipping write", source_key)
+        return state.get(key, step.get("default", "[]"))
+    state[key] = value
+    logger.info("state_init: initialized %r (%d chars)", key, len(value))
     return value
 
 
@@ -465,8 +456,6 @@ async def _handle_state_write_external(
     return value
 
 
-# ── Transform ─────────────────────────────────────────────────────────────────
-
 def _matches_item_filter(item: object, f: dict) -> bool:
     field: str = f.get("field", "")
     operator: str = f.get("operator", "equals")
@@ -477,32 +466,20 @@ def _matches_item_filter(item: object, f: dict) -> bool:
     else:
         cell = str(item).strip()
 
-    if operator == "equals":
-        return cell == value
-    if operator == "not_equals":
-        return cell != value
-    if operator == "contains":
-        return value.lower() in cell.lower()
-    if operator == "not_contains":
-        return value.lower() not in cell.lower()
-    if operator == "not_empty":
-        return cell != ""
-    if operator == "empty":
-        return cell == ""
-    if operator == "starts_with":
-        return cell.lower().startswith(value.lower())
-    if operator == "ends_with":
-        return cell.lower().endswith(value.lower())
+    if operator == "equals": return cell == value
+    if operator == "not_equals": return cell != value
+    if operator == "contains": return value.lower() in cell.lower()
+    if operator == "not_contains": return value.lower() not in cell.lower()
+    if operator == "not_empty": return cell != ""
+    if operator == "empty": return cell == ""
+    if operator == "starts_with": return cell.lower().startswith(value.lower())
+    if operator == "ends_with": return cell.lower().endswith(value.lower())
     if operator == "gt":
-        try:
-            return float(cell) > float(value)
-        except (ValueError, TypeError):
-            return False
+        try: return float(cell) > float(value)
+        except (ValueError, TypeError): return False
     if operator == "lt":
-        try:
-            return float(cell) < float(value)
-        except (ValueError, TypeError):
-            return False
+        try: return float(cell) < float(value)
+        except (ValueError, TypeError): return False
     logger.warning("transform filter: unknown operator %r", operator)
     return True
 
@@ -512,14 +489,11 @@ def _transform_array_push(step: dict, context: dict[str, str]) -> str:
     group_key: str = step["group_key"]
     target_key: str = step["target_key"]
     max_items: int = int(step.get("max_items", 500))
-
     value = _get(context, value_key)
     group = _get(context, group_key)
-
     if not value or not group:
         logger.warning("transform array_push: value_key %r or group_key %r is empty", value_key, group_key)
         return context.get(target_key, "{}")
-
     raw = context.get(target_key, "{}")
     try:
         result: dict[str, list] = json.loads(raw)
@@ -527,17 +501,14 @@ def _transform_array_push(step: dict, context: dict[str, str]) -> str:
             result = {}
     except Exception:
         result = {}
-
     result.setdefault(group, [])
     try:
         entry: float | str = float(value)
     except (ValueError, TypeError):
         entry = value
-
     result[group].append(entry)
     if len(result[group]) > max_items:
         result[group] = result[group][-max_items:]
-
     logger.info("transform array_push: %s[%r] now %d entries", target_key, group, len(result[group]))
     return json.dumps(result, ensure_ascii=False)
 
@@ -546,7 +517,6 @@ def _transform_map_field(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     field: str = step["field"]
     output_format: str = step.get("output_format", "json_array")
-
     raw = _get(context, source_key)
     try:
         data = json.loads(raw)
@@ -555,13 +525,11 @@ def _transform_map_field(step: dict, context: dict[str, str]) -> str:
     except Exception:
         logger.warning("transform map_field: source_key %r is not a valid JSON array", source_key)
         return "[]"
-
     values = [
         str(item[field]).strip()
         for item in data
         if isinstance(item, dict) and field in item and item[field] is not None and str(item[field]).strip()
     ]
-
     if output_format == "comma_list":
         return ",".join(values)
     return json.dumps(values, ensure_ascii=False)
@@ -570,7 +538,6 @@ def _transform_map_field(step: dict, context: dict[str, str]) -> str:
 def _transform_filter(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     filters: list[dict] = step.get("filters", [])
-
     raw = _get(context, source_key)
     try:
         data = json.loads(raw)
@@ -579,7 +546,6 @@ def _transform_filter(step: dict, context: dict[str, str]) -> str:
     except Exception:
         logger.warning("transform filter: source_key %r is not a valid JSON array", source_key)
         return "[]"
-
     result = [item for item in data if all(_matches_item_filter(item, f) for f in filters)]
     logger.info("transform filter: %d → %d items", len(data), len(result))
     return json.dumps(result, ensure_ascii=False)
@@ -599,7 +565,6 @@ def _transform_slice(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     start: int = int(step.get("start", 0))
     end: int | None = step.get("end")
-
     raw = _get(context, source_key)
     items = _parse_json_list(raw)
     sliced = items[start:end] if end is not None else items[start:]
@@ -611,11 +576,9 @@ def _transform_diff(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     subtract_key: str = step["subtract_key"]
     output_format: str = step.get("output_format", "json_array")
-
     source_items = _parse_json_list(_get(context, source_key))
     subtract_items = _parse_json_list(_get(context, subtract_key))
     subtract_set = _to_str_set(subtract_items)
-
     result = [
         item for item in source_items
         if (json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)) not in subtract_set
@@ -630,10 +593,8 @@ def _transform_intersect(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     other_key: str = step["other_key"]
     output_format: str = step.get("output_format", "json_array")
-
     source_items = _parse_json_list(_get(context, source_key))
     other_set = _to_str_set(_parse_json_list(_get(context, other_key)))
-
     result = [
         item for item in source_items
         if (json.dumps(item, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)) in other_set
@@ -648,10 +609,8 @@ def _transform_union(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     other_key: str = step["other_key"]
     output_format: str = step.get("output_format", "json_array")
-
     source_items = _parse_json_list(_get(context, source_key))
     other_items = _parse_json_list(_get(context, other_key))
-
     seen: set[str] = set()
     result: list = []
     for item in source_items + other_items:
@@ -659,7 +618,6 @@ def _transform_union(step: dict, context: dict[str, str]) -> str:
         if key not in seen:
             seen.add(key)
             result.append(item)
-
     logger.info("transform union: %d + %d = %d unique items", len(source_items), len(other_items), len(result))
     if output_format == "comma_list":
         return ",".join(str(i) for i in result)
@@ -671,19 +629,15 @@ def _transform_list_append(step: dict, context: dict[str, str]) -> str:
     target_key: str = step["target_key"]
     max_items: int = int(step.get("max_items", 10000))
     output_format: str = step.get("output_format", "json_array")
-
     value = _get(context, value_key)
     if not value:
         logger.warning("transform list_append: value_key %r is empty", value_key)
-        raw = context.get(target_key, "[]")
-        return raw
-
+        return context.get(target_key, "[]")
     items = _parse_json_list(context.get(target_key, "[]"))
     if value not in items:
         items.append(value)
     if len(items) > max_items:
         items = items[-max_items:]
-
     logger.info("transform list_append: %s now %d entries", target_key, len(items))
     if output_format == "comma_list":
         return ",".join(str(i) for i in items)
@@ -701,7 +655,6 @@ def _transform_group_by(step: dict, context: dict[str, str]) -> str:
     group_field: str = step["group_field"]
     value_field: str | None = step.get("value_field")
     max_items: int = int(step.get("max_items", 500))
-
     raw = _get(context, source_key)
     try:
         data = json.loads(raw)
@@ -710,7 +663,6 @@ def _transform_group_by(step: dict, context: dict[str, str]) -> str:
     except Exception:
         logger.warning("transform group_by: source_key %r is not a valid JSON array", source_key)
         return "{}"
-
     existing_raw = context.get(step.get("target_key", ""), "{}")
     try:
         result: dict[str, list] = json.loads(existing_raw)
@@ -718,7 +670,6 @@ def _transform_group_by(step: dict, context: dict[str, str]) -> str:
             result = {}
     except Exception:
         result = {}
-
     for item in data:
         if not isinstance(item, dict):
             continue
@@ -729,16 +680,15 @@ def _transform_group_by(step: dict, context: dict[str, str]) -> str:
         if value is None:
             continue
         result.setdefault(group, [])
-        entry = float(value) if value_field else value
-        try:
-            if value_field:
+        entry = value
+        if value_field:
+            try:
                 entry = float(value)
-        except (ValueError, TypeError):
-            entry = value
+            except (ValueError, TypeError):
+                entry = value
         result[group].append(entry)
         if len(result[group]) > max_items:
             result[group] = result[group][-max_items:]
-
     logger.info("transform group_by: %d groups", len(result))
     return json.dumps(result, ensure_ascii=False)
 
@@ -746,7 +696,6 @@ def _transform_group_by(step: dict, context: dict[str, str]) -> str:
 def _transform_flatten(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     output_format: str = step.get("output_format", "json_array")
-
     raw = _get(context, source_key)
     try:
         data = json.loads(raw)
@@ -755,14 +704,12 @@ def _transform_flatten(step: dict, context: dict[str, str]) -> str:
     except Exception:
         logger.warning("transform flatten: source_key %r is not a valid JSON array", source_key)
         return "[]"
-
     result: list = []
     for item in data:
         if isinstance(item, list):
             result.extend(item)
         else:
             result.append(item)
-
     logger.info("transform flatten: → %d items", len(result))
     if output_format == "comma_list":
         return ",".join(str(i) for i in result)
@@ -773,7 +720,6 @@ def _transform_sort(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     field: str | None = step.get("field")
     reverse: bool = bool(step.get("reverse", False))
-
     raw = _get(context, source_key)
     try:
         data = json.loads(raw)
@@ -782,7 +728,6 @@ def _transform_sort(step: dict, context: dict[str, str]) -> str:
     except Exception:
         logger.warning("transform sort: source_key %r is not a valid JSON array", source_key)
         return "[]"
-
     try:
         if field:
             data.sort(key=lambda x: x.get(field, "") if isinstance(x, dict) else "", reverse=reverse)
@@ -790,7 +735,6 @@ def _transform_sort(step: dict, context: dict[str, str]) -> str:
             data.sort(reverse=reverse)
     except Exception as e:
         logger.warning("transform sort: failed: %s", e)
-
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -799,7 +743,6 @@ def _transform_statistics(step: dict, context: dict[str, str]) -> str:
     model_key: str | None = step.get("model_key")
     functions: list[str] = step.get("functions", ["count", "mean", "median", "q1", "q3", "iqr", "lower_bound", "upper_bound"])
     multiplier: float = float(step.get("multiplier", 1.5))
-
     raw = _get(context, source_key)
     try:
         data = json.loads(raw)
@@ -813,35 +756,24 @@ def _transform_statistics(step: dict, context: dict[str, str]) -> str:
         floats = sorted([float(p) for p in prices if p is not None])
         count = len(floats)
         result: dict = {"count": count}
-        if "mean" in functions:
-            result["mean"] = round(statistics.mean(floats), 2) if count else None
-        if "median" in functions:
-            result["median"] = round(statistics.median(floats), 2) if count else None
-        if "std_dev" in functions:
-            result["std_dev"] = round(statistics.stdev(floats), 2) if count >= 2 else None
-        if "min" in functions:
-            result["min"] = round(min(floats), 2) if count else None
-        if "max" in functions:
-            result["max"] = round(max(floats), 2) if count else None
+        if "mean" in functions: result["mean"] = round(statistics.mean(floats), 2) if count else None
+        if "median" in functions: result["median"] = round(statistics.median(floats), 2) if count else None
+        if "std_dev" in functions: result["std_dev"] = round(statistics.stdev(floats), 2) if count >= 2 else None
+        if "min" in functions: result["min"] = round(min(floats), 2) if count else None
+        if "max" in functions: result["max"] = round(max(floats), 2) if count else None
         if any(f in functions for f in ["q1", "q3", "iqr", "lower_bound", "upper_bound"]):
             if count >= 4:
                 q1 = statistics.quantiles(floats, n=4)[0]
                 q3 = statistics.quantiles(floats, n=4)[2]
                 iqr = q3 - q1
-                if "q1" in functions:
-                    result["q1"] = round(q1, 2)
-                if "q3" in functions:
-                    result["q3"] = round(q3, 2)
-                if "iqr" in functions:
-                    result["iqr"] = round(iqr, 2)
-                if "lower_bound" in functions:
-                    result["lower_bound"] = round(q1 - multiplier * iqr, 2)
-                if "upper_bound" in functions:
-                    result["upper_bound"] = round(q3 + multiplier * iqr, 2)
+                if "q1" in functions: result["q1"] = round(q1, 2)
+                if "q3" in functions: result["q3"] = round(q3, 2)
+                if "iqr" in functions: result["iqr"] = round(iqr, 2)
+                if "lower_bound" in functions: result["lower_bound"] = round(q1 - multiplier * iqr, 2)
+                if "upper_bound" in functions: result["upper_bound"] = round(q3 + multiplier * iqr, 2)
             else:
                 for f in ["q1", "q3", "iqr", "lower_bound", "upper_bound"]:
-                    if f in functions:
-                        result[f] = None
+                    if f in functions: result[f] = None
         return result
 
     if model_key:
@@ -883,7 +815,6 @@ def _transform_xml_extract(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
     xpath: str = step["xpath"]
     attribute: str | None = step.get("attribute")
-
     raw = _get(context, source_key)
     if not raw:
         logger.warning("transform xml_extract: source_key %r is empty", source_key)
@@ -1021,8 +952,6 @@ async def _handle_transform(
     return handler(step, context)
 
 
-# ── HTTP Fetch ────────────────────────────────────────────────────────────────
-
 async def _handle_http_fetch(
     step: dict,
     context: dict[str, str],
@@ -1060,8 +989,6 @@ async def _handle_http_fetch(
         logger.warning("http_fetch: failed for %s: %s", url[:80], e)
         return step.get("default", "")
 
-
-# ── xlsx Fetch ────────────────────────────────────────────────────────────────
 
 async def _handle_xlsx_fetch(
     step: dict,
@@ -1146,8 +1073,6 @@ async def _handle_xlsx_fetch(
         return step.get("default", "[]")
 
 
-# ── Coordination ──────────────────────────────────────────────────────────────
-
 async def _handle_trigger_agent(
     step: dict,
     context: dict[str, str],
@@ -1195,8 +1120,6 @@ async def _handle_notify_user(
     return ""
 
 
-# ── Dispatch ──────────────────────────────────────────────────────────────────
-
 StepHandler = Callable[..., Awaitable[str]]
 
 _STEP_HANDLERS: dict[str, StepHandler] = {
@@ -1209,11 +1132,11 @@ _STEP_HANDLERS: dict[str, StepHandler] = {
     "web_search": _handle_web_search,
     "finance": _handle_finance,
     "finance_search": _handle_finance_search,
-    "finance_search": _handle_finance_search,
     "http_fetch": _handle_http_fetch,
     "xlsx_fetch": _handle_xlsx_fetch,
     "state_read": _handle_state_read,
     "state_write": _handle_state_write,
+    "state_init": _handle_state_init,
     "state_read_external": _handle_state_read_external,
     "state_write_external": _handle_state_write_external,
     "data_read": _handle_data_read,
@@ -1225,8 +1148,6 @@ _STEP_HANDLERS: dict[str, StepHandler] = {
     "notify_user": _handle_notify_user,
 }
 
-
-# ── Tool call execution (from output step) ────────────────────────────────────
 
 async def _execute_tool_calls(
     pool: asyncpg.Pool,
@@ -1266,8 +1187,6 @@ async def _execute_tool_calls(
         except Exception as e:
             logger.error("tool_call %r failed: %s", tool, e)
 
-
-# ── Pipeline execution ────────────────────────────────────────────────────────
 
 def _route_allows(step: dict, active_route: str | None) -> bool:
     only_if_route = step.get("only_if_route")
@@ -1361,8 +1280,6 @@ async def _execute_pipeline(
     return output_step_result, has_output_step
 
 
-# ── Data reads (pre-pipeline) ─────────────────────────────────────────────────
-
 async def _load_data_reads(
     pool: asyncpg.Pool,
     agent_id: int,
@@ -1408,8 +1325,6 @@ async def _load_data_reads(
                     result[label] = value
     return result
 
-
-# ── Main entry point ──────────────────────────────────────────────────────────
 
 _FALLBACK_STRUCTURE_SYSTEM = """Du strukturierst das Ergebnis eines Agenten-Laufs in ein JSON-Objekt.
 Antworte ausschließlich mit rohem JSON. Der erste Charakter muss { sein, der letzte }.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+from datetime import datetime, timezone
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -71,11 +72,127 @@ Du bekommst:
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
 Felder:
-- "type": "hard_constraint" (immer ablehnen) oder "soft_preference" (bevorzugen/benachteiligen)
 - "rule": Kurzer snake_case Bezeichner
 - "description": Menschenlesbare Beschreibung der Präferenz
 - "conflict_with": Liste von rule-Bezeichnern bestehender Präferenzen die widersprechen (leer wenn kein Konflikt)
 - "conflict_description": Beschreibung des Konflikts wenn vorhanden"""
+
+
+_KEY_RELEVANCE_SYSTEM = """Du bekommst Feedback zu einem Agenten und eine Liste seiner State-Keys mit Beschreibungen.
+Entscheide welche Keys für dieses Feedback relevant sind.
+
+Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
+
+Felder:
+- "relevant_keys": Liste der relevanten Key-Namen
+- "most_likely": Der wahrscheinlichste Key (snake_case)
+- "reasoning": Ein Satz warum dieser Key am wahrscheinlichsten ist"""
+
+
+_CLARIFICATION_SYSTEM = """Du bist Bob. Ein Nutzer hat Feedback zu einem Agenten gegeben, aber es ist unklar
+welcher gespeicherte Bereich angepasst werden soll.
+
+Formuliere eine kurze Rückfrage die:
+1. Beide relevanten Bereiche kurz beschreibt (je 1 Satz)
+2. Deine eigene Vermutung nennt welcher gemeint ist
+3. Den Nutzer um Bestätigung bittet
+
+Antworte NUR mit dem Rückfrage-Text, kein JSON, keine Formatierung."""
+
+
+async def _find_relevant_preference_keys(
+    pool: asyncpg.Pool,
+    agent: dict,
+    user_query: str,
+) -> tuple[list[str], str | None]:
+    state = await memory.get_agent_state(pool, agent["id"])
+    config_data = parse_agent_config(agent.get("config", {}))
+    steps = config_data.get("steps", [])
+
+    preference_keys: list[str] = []
+    for step in steps:
+        if step.get("type") == "state_init":
+            key = step.get("key", "")
+            if key and key != "last_run_summary":
+                preference_keys.append(key)
+        elif step.get("type") == "state_read":
+            key = step.get("key", "")
+            if key and key != "last_run_summary" and key in state:
+                if key not in preference_keys:
+                    preference_keys.append(key)
+
+    if not preference_keys:
+        for key in state:
+            if key != "last_run_summary":
+                preference_keys.append(key)
+
+    if len(preference_keys) <= 1:
+        return preference_keys, preference_keys[0] if preference_keys else None
+
+    key_descriptions = []
+    for key in preference_keys:
+        val = state.get(key, "[]")
+        try:
+            parsed = json.loads(val)
+            preview = json.dumps(parsed[:2], ensure_ascii=False) if isinstance(parsed, list) else str(parsed)[:100]
+        except Exception:
+            preview = val[:100]
+        key_descriptions.append(f"{key}: {preview}")
+
+    content = f"Feedback: {user_query}\n\nVorhandene State-Keys:\n" + "\n".join(key_descriptions)
+
+    try:
+        raw = await brain.chat(
+            system=_KEY_RELEVANCE_SYSTEM,
+            messages=[{"role": "user", "content": content}],
+            capability=CAPABILITY_REASONING,
+            caller="agent_edits:key_relevance",
+        )
+        result = json.loads(clean_llm_json(raw))
+        relevant = result.get("relevant_keys", preference_keys)
+        most_likely = result.get("most_likely")
+        return relevant, most_likely
+    except Exception as e:
+        logger.warning("agent_edits: key relevance check failed: %s", e)
+        return preference_keys, preference_keys[0]
+
+
+async def build_clarification_question(
+    pool: asyncpg.Pool,
+    agent: dict,
+    user_query: str,
+    relevant_keys: list[str],
+    most_likely: str,
+) -> str:
+    state = await memory.get_agent_state(pool, agent["id"])
+    key_info = []
+    for key in relevant_keys:
+        val = state.get(key, "[]")
+        try:
+            parsed = json.loads(val)
+            desc = f"'{key}' — speichert {len(parsed) if isinstance(parsed, list) else 1} Einträge"
+        except Exception:
+            desc = f"'{key}'"
+        key_info.append(desc)
+
+    content = (
+        f"Agent: {agent['name']}\n"
+        f"Nutzer-Feedback: {user_query}\n\n"
+        f"Relevante Bereiche:\n" + "\n".join(key_info) + f"\n\n"
+        f"Meine Vermutung: {most_likely}"
+    )
+
+    try:
+        return await brain.chat(
+            system=_CLARIFICATION_SYSTEM,
+            messages=[{"role": "user", "content": content}],
+            capability=CAPABILITY_REASONING,
+            caller="agent_edits:clarification",
+        )
+    except Exception as e:
+        logger.warning("agent_edits: clarification generation failed: %s", e)
+        keys_str = " oder ".join(f"'{k}'" for k in relevant_keys)
+        return f"Meinst du eine Änderung an {keys_str}? Ich würde '{most_likely}' anpassen."
 
 
 async def prepare_data_edit(
@@ -183,9 +300,21 @@ async def prepare_preference(
     pool: asyncpg.Pool,
     agent: dict,
     user_query: str,
-) -> dict | None:
+    state_key: str | None = None,
+) -> dict | tuple[str, str, str] | None:
+    if state_key is None:
+        relevant_keys, most_likely = await _find_relevant_preference_keys(pool, agent, user_query)
+
+        if len(relevant_keys) > 1 and most_likely:
+            clarification = await build_clarification_question(
+                pool, agent, user_query, relevant_keys, most_likely
+            )
+            return ("clarification", clarification, most_likely)
+
+        state_key = most_likely or "user_preferences"
+
     state = await memory.get_agent_state(pool, agent["id"])
-    existing_prefs_raw = state.get("user_preferences", "[]")
+    existing_prefs_raw = state.get(state_key, "[]")
     try:
         existing_prefs: list[dict] = json.loads(existing_prefs_raw)
     except Exception:
@@ -210,7 +339,7 @@ async def prepare_preference(
         "edit_type": "preference",
         "agent_id": agent["id"],
         "agent_name": agent["name"],
-        "preference_type": result.get("type", "hard_constraint"),
+        "state_key": state_key,
         "rule": result.get("rule", ""),
         "description": result.get("description", ""),
         "conflicts": result.get("conflict_with", []),
@@ -255,11 +384,11 @@ def format_confirmation_message(edit_payload: dict) -> str:
         )
 
     if edit_type == "preference":
-        pref_type = edit_payload.get("preference_type", "")
+        state_key = edit_payload.get("state_key", "user_preferences")
         desc = edit_payload.get("description", "")
         conflicts = edit_payload.get("conflicts", [])
         conflict_desc = edit_payload.get("conflict_description", "")
-        msg = f"{name} — Neue Präferenz ({pref_type})\n\n{desc}"
+        msg = f"{name} — Neue Präferenz in '{state_key}'\n\n{desc}"
         if conflicts:
             msg += f"\n\n⚠️ Konflikt mit bestehender Regel: {conflict_desc}\nSoll die bestehende Regel ersetzt werden?"
         return msg
@@ -335,16 +464,14 @@ async def execute_edit(
         return f"Erledigt. {name}: Step {step_id} wurde angepasst."
 
     if edit_type == "preference":
+        state_key = edit_payload.get("state_key", "user_preferences")
         rule = edit_payload["rule"]
         description = edit_payload["description"]
-        pref_type = edit_payload["preference_type"]
         existing = edit_payload.get("existing_preferences", [])
         conflicts = edit_payload.get("conflicts", [])
 
         updated = [p for p in existing if p.get("rule") not in conflicts]
-        from datetime import datetime, timezone
         updated.append({
-            "type": pref_type,
             "rule": rule,
             "description": description,
             "added_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -352,12 +479,12 @@ async def execute_edit(
         })
 
         await memory.set_agent_state(pool, agent_id, {
-            "user_preferences": json.dumps(updated, ensure_ascii=False)
+            state_key: json.dumps(updated, ensure_ascii=False)
         })
-        logger.info("agent_edits: preference added for agent %d: %s", agent_id, rule)
+        logger.info("agent_edits: preference added for agent %d key=%r rule=%r", agent_id, state_key, rule)
 
         replaced = f" ({len(conflicts)} Regel(n) ersetzt)" if conflicts else ""
-        return f"Erledigt. {name}: Präferenz '{description}' wurde gespeichert{replaced}."
+        return f"Erledigt. {name}: Präferenz '{description}' in '{state_key}' gespeichert{replaced}."
 
     return "Unbekannter Edit-Typ."
 
@@ -388,10 +515,11 @@ async def rollback_edit(
         return f"Rückgängig. {name}: Step wurde auf den vorherigen Stand zurückgesetzt."
 
     if edit_type == "preference":
+        state_key = edit_payload.get("state_key", "user_preferences")
         existing = edit_payload.get("existing_preferences", [])
         await memory.set_agent_state(pool, agent_id, {
-            "user_preferences": json.dumps(existing, ensure_ascii=False)
+            state_key: json.dumps(existing, ensure_ascii=False)
         })
-        return f"Rückgängig. {name}: Präferenz wurde entfernt."
+        return f"Rückgängig. {name}: Präferenz in '{state_key}' wurde entfernt."
 
     return "Rollback nicht möglich."

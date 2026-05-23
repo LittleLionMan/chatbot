@@ -25,12 +25,24 @@ Felder:
   - "id": snake_case Bezeichner
   - "description": Was passiert hier in einem Satz
   - "classification": Einer der verfügbaren Baustein-Typen (siehe unten)
-  - "inputs": Liste von Eingaben (z.B. "trigger_payload.url", "state:baselines", "context:search_result")
-  - "outputs": Liste von Ausgaben (z.B. "context:extracted", "state:baselines")
+  - "inputs": Liste von Eingaben (z.B. "trigger_payload.url", "state:preferences", "context:search_result")
+  - "outputs": Liste von Ausgaben (z.B. "context:extracted", "state:results")
   - "operation": Nur für transform-Bausteine. Einer von: array_push, group_by, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
   - "condition": Nur wenn diese Teilaufgabe nur unter bestimmten Bedingungen läuft. Freitext.
   - "route": Nur wenn diese Teilaufgabe nur auf einem bestimmten Route-Pfad läuft.
   - "parameters": Strukturierte Parameter die direkt aus der Instruction ableitbar sind. MUSS bei xlsx_fetch gesetzt werden — ohne parameters ist ein xlsx_fetch-Subtask unvollständig und ungültig. Bei xlsx_fetch enthält parameters zwingend: "columns" (alle in der Instruction genannten Spaltennamen als Liste) und "filters" (alle in der Instruction beschriebenen Filterbedingungen als Liste). Jede Filterbedingung hat "column", "operator" und optional "value". Verfügbare Operatoren: not_empty, empty, equals, not_equals, contains, not_contains, starts_with, ends_with. Ein xlsx_fetch-Subtask ohne parameters.filters ist ein Fehler.
+
+PFLICHTREGELN FÜR URTEILENDE SUBTASKS:
+Wenn ein Subtask ein inhaltliches Urteil trifft (Relevanz, Qualität, Akzeptanz, Eignung —
+erkennbar an Klassifikation llm_decide oder llm_analyze):
+- Sein inputs MUSS "state:preferences" enthalten
+- Sein outputs MUSS "state:results" enthalten
+- Vor diesem Subtask MUSS ein Subtask stehen der Präferenzen aus der Instruction extrahiert
+  (classification: llm_extract, outputs: ["context:extracted_preferences"])
+- Vor diesem Subtask MUSS ein Subtask stehen der diese Präferenzen in den State initialisiert
+  (classification: state_init, inputs: ["context:extracted_preferences"], outputs: ["state:preferences"])
+- Nach diesem Subtask MUSS ein Subtask stehen der Ergebnisse akkumuliert
+  (classification: state_write, inputs: ["context:results"])
 
 Verfügbare Baustein-Typen:
 
@@ -51,6 +63,7 @@ DATENZUGRIFF — deterministisch:
 - http_fetch: HTTP-Request an eine bekannte URL. Gibt den Response-Body als String zurück. Für strukturierte APIs, XML-Feeds, REST-Endpunkte. Nie für Excel-Dateien verwenden.
 - xlsx_fetch: Lädt eine Excel-Datei (.xlsx) von einer URL und gibt ein JSON-Array der Zeilen zurück. Verwende dies immer wenn die Quelle eine .xlsx-Datei ist — nie http_fetch + transform für Excel.
 - state_read / state_write: Einzelnen Key im eigenen Agent-State lesen oder schreiben.
+- state_init: Key im eigenen Agent-State schreiben — aber NUR wenn der Key noch nicht existiert. Für einmalige Initialisierung aus der Instruction.
 - state_read_external / state_write_external: Key im State eines anderen Agenten lesen oder schreiben.
 - data_read / data_write: Längere Dokumente im eigenen agent_data Namespace lesen oder schreiben.
 - data_read_external / data_write_external: Längere Dokumente im agent_data eines anderen Agenten.
@@ -165,6 +178,41 @@ Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 Felder:
 - "steps": Alle Steps der Pipeline in Ausführungsreihenfolge
 
+PFLICHTREGELN FÜR URTEILENDE STEPS:
+Wenn ein Step vom Typ llm_decide oder llm_analyze ein inhaltliches Urteil trifft
+(Relevanz, Qualität, Akzeptanz, Eignung — erkennbar am Prompt):
+
+1. Ganz am Anfang der Pipeline (vor allen anderen Steps) MUSS stehen:
+   a) llm_extract — extrahiert alle Präferenzen, Kriterien und Regeln aus der Instruction.
+      Prompt: "Extrahiere alle expliziten Kriterien, Präferenzen, Schwellenwerte und Filterregeln
+      aus dieser Instruction. Strukturiere als JSON-Array von Objekten. Wähle sinnvolle Feldnamen
+      die zum Kontext passen — keine vorgeschriebene Struktur außer dass jedes Objekt mindestens
+      'rule' (snake_case) und 'description' (menschenlesbar) enthält.
+      Instruction: [vollständige Instruction einfügen]
+      Antworte NUR mit rohem JSON: [...]"
+      output_key: "extracted_preferences"
+
+   b) state_init — schreibt extracted_preferences in den State, aber NUR wenn der Key noch nicht
+      existiert (damit gelernte Präferenzen aus dem Feedback-Loop nicht überschrieben werden).
+      key: wähle einen kontextpassenden Namen (z.B. "user_preferences", "filter_rules",
+           "quality_criteria" — nicht immer "user_preferences")
+      source_key: "extracted_preferences"
+
+2. Direkt vor dem llm_decide/llm_analyze Step MUSS stehen:
+   state_read — liest den Präferenz-Key aus dem State
+   key: derselbe Key wie beim state_init
+   default: "[]"
+   output_key: wähle einen kontextpassenden Namen (z.B. "preferences", "criteria", "rules")
+
+3. Der llm_decide/llm_analyze Prompt MUSS die gelesenen Präferenzen einbinden:
+   z.B. "Bewerte {{item}} anhand dieser Kriterien: {{preferences}}"
+
+4. Nach dem llm_decide/llm_analyze Step MUSS state_write folgen der Ergebnisse akkumuliert.
+   Wähle einen kontextpassenden Key (z.B. "matches", "results", "approved_items").
+
+Diese Regeln gelten für ALLE urteilenden Steps — unabhängig vom Kontext (Wohnungen, Aktien,
+Jobs, News, Produkte oder anderes). Die Feldnamen sollen zum jeweiligen Kontext passen.
+
 Step-Schemas nach Typ:
 
 router_match:
@@ -205,10 +253,15 @@ xlsx_fetch:
 Wenn der Subtask ein "parameters"-Feld hat: columns aus parameters.columns, filters aus parameters.filters direkt übernehmen.
 
 state_read:
-{"id": "read_data", "type": "state_read", "key": "my_key", "output_key": "data", "default": "{}"}
+{"id": "read_data", "type": "state_read", "key": "my_key", "output_key": "data", "default": "[]"}
 
 state_write:
 {"id": "write_data", "type": "state_write", "key": "my_key", "source_key": "context_key_to_save"}
+
+state_init:
+{"id": "init_preferences", "type": "state_init", "key": "my_key", "source_key": "extracted_preferences", "default": "[]"}
+Schreibt den Key NUR wenn er noch nicht im State existiert oder leer ist.
+Verhindert dass gelernte Präferenzen aus dem Feedback-Loop beim nächsten Lauf überschrieben werden.
 
 state_read_external / state_write_external:
 {"id": "read_other", "type": "state_read_external", "agent_name": "OtherAgent", "key": "their_key", "output_key": "data", "default": ""}
@@ -490,7 +543,8 @@ async def handle_agent_talk(
     state: dict[str, str],
     agent_memories: list[str],
     pool: asyncpg.Pool | None = None,
-) -> tuple[str, dict | None, str | None]:
+    pending_clarification_key: str | None = None,
+) -> tuple[str, dict | None, str | None, str | None]:
     config_data = parse_agent_config(agent["config"])
     state_summary = "\n".join(f"{k}: {v}" for k, v in state.items()) if state else "noch kein State"
     memories_summary = "\n- ".join(agent_memories) if agent_memories else "noch keine Beobachtungen"
@@ -529,6 +583,14 @@ async def handle_agent_talk(
         + (f"\n\n{chr(10).join(full_content_blocks)}" if full_content_blocks else "")
     )
 
+    if pending_clarification_key and pool is not None:
+        from bot.agent_edits import prepare_preference
+        result = await prepare_preference(pool, agent, text, state_key=pending_clarification_key)
+        if result and isinstance(result, dict):
+            from bot.agent_edits import format_confirmation_message
+            return format_confirmation_message(result), None, None, None
+        return "Konnte die Präferenz nicht verarbeiten.", None, None, None
+
     try:
         response = await brain.chat(
             system=_AGENT_TALK_SYSTEM,
@@ -538,10 +600,11 @@ async def handle_agent_talk(
         )
     except Exception as e:
         logger.warning("agent talk failed: %s", e)
-        return "Konnte den Agenten nicht befragen.", None, None
+        return "Konnte den Agenten nicht befragen.", None, None, None
 
     new_config: dict | None = None
     new_name: str | None = None
+    clarification_key: str | None = None
 
     if "```config" in response:
         try:
@@ -572,7 +635,19 @@ async def handle_agent_talk(
         except Exception as e:
             logger.warning("name extraction from agent talk failed: %s", e)
 
-    return response, new_config, new_name
+    if new_config is None and new_name is None and pool is not None:
+        _FEEDBACK_SIGNALS = ("zu optimistisch", "zu pessimistisch", "zu teuer", "zu weit", "falsch bewertet",
+                             "präferenz", "kriterium", "regel", "filter", "bedingung", "anpassen", "ändern",
+                             "nicht mehr", "lieber", "stattdessen", "zu oft", "zu selten")
+        text_lower = text.lower()
+        if any(sig in text_lower for sig in _FEEDBACK_SIGNALS):
+            from bot.agent_edits import prepare_preference
+            pref_result = await prepare_preference(pool, agent, text)
+            if isinstance(pref_result, tuple) and pref_result[0] == "clarification":
+                _, clarification_text, most_likely_key = pref_result
+                return clarification_text, None, None, most_likely_key
+
+    return response, new_config, new_name, clarification_key
 
 
 async def regenerate_pipeline_for_agent(agent_config: dict, pool=None) -> dict:
