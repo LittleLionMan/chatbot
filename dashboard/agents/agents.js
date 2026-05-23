@@ -118,6 +118,7 @@ async function selectAgent(id) {
         <button class="agent-tab" data-tab="notifications">Notifications <span class="agent-tab-count">${notifications.length}</span></button>
       </div>
       <div class="tab-panel active" id="tab-state-${id}">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;"><button class="btn btn-sm btn-accent" onclick="addAgentState(${id})">+ Neu</button></div>
         <div class="state-grid">
           ${state.map((s) => `<div class="state-card"><div class="state-card-header"><div class="state-key">${s.key}</div><div class="state-actions"><button class="btn btn-sm" data-agent="${id}" data-key="${s.key}" data-action="edit-state">Bearbeiten</button><button class="btn btn-sm btn-danger" data-agent="${id}" data-key="${s.key}" data-action="delete-state">Loeschen</button></div></div><div class="state-val">${s.value}</div></div>`).join("")}
           ${!state.length ? '<div style="font-size:13px;color:var(--text3);padding:8px 0;">Kein State.</div>' : ""}
@@ -454,6 +455,37 @@ async function saveAgent(id) {
     toast("Gespeichert.");
     await loadAgents();
     selectAgent(id);
+  } catch {
+    toast("Fehler.", true);
+  }
+}
+
+function addAgentState(agentId) {
+  openModal(
+    "State-Eintrag anlegen",
+    `<div class="modal-field"><div class="modal-label">Key</div><input class="modal-input" id="new-state-key" placeholder="z.B. user_preferences" /></div>
+     <div class="modal-field"><div class="modal-label">Value</div><textarea class="modal-input" id="new-state-val" style="min-height:120px;font-family:var(--mono);font-size:12px;" placeholder='z.B. [] oder "text"'></textarea></div>`,
+    `<button class="btn" onclick="closeModal()">Abbrechen</button>
+     <button class="btn btn-accent" onclick="saveNewStateEntry(${agentId})">Speichern</button>`,
+  );
+}
+
+async function saveNewStateEntry(agentId) {
+  const key = document.getElementById("new-state-key").value.trim();
+  const value = document.getElementById("new-state-val").value.trim();
+  if (!key) {
+    toast("Key ist Pflicht.", true);
+    return;
+  }
+  try {
+    await api("/api/agents/" + agentId + "/state/" + encodeURIComponent(key), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    });
+    closeModal();
+    toast("Gespeichert.");
+    selectAgent(agentId);
   } catch {
     toast("Fehler.", true);
   }

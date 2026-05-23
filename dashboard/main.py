@@ -59,6 +59,14 @@ class MonitorPatch(BaseModel):
     source_format: str | None = None
     target_agent: str | None = None
 
+class ScraperPatch(BaseModel):
+    query: str | None = None
+    category: str | None = None
+    target_agent: str | None = None
+    poll_interval_seconds: int | None = None
+    filters: dict | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _pool
@@ -996,3 +1004,31 @@ async def clear_monitor_seen(monitor_id: int) -> dict:
     )
     count = int(result.split()[-1])
     return {"ok": True, "deleted": count}
+
+@app.patch("/api/scrapers/{config_id}")
+async def patch_scraper(config_id: int, body: ScraperPatch) -> dict:
+    row = await pool().fetchrow(
+        "SELECT query, category, target_agent, poll_interval_seconds, filters FROM scraper_configs WHERE id = $1",
+        config_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Scraper not found")
+    new_query = body.query if body.query is not None else row["query"]
+    new_category = body.category if body.category is not None else row["category"]
+    new_target = body.target_agent if body.target_agent is not None else row["target_agent"]
+    new_interval = body.poll_interval_seconds if body.poll_interval_seconds is not None else row["poll_interval_seconds"]
+    existing_filters = row["filters"]
+    if isinstance(existing_filters, str):
+        existing_filters = json.loads(existing_filters or "{}")
+    new_filters = body.filters if body.filters is not None else existing_filters
+    await pool().execute(
+        """
+        UPDATE scraper_configs
+        SET query = $1, category = $2, target_agent = $3,
+            poll_interval_seconds = $4, filters = $5
+        WHERE id = $6
+        """,
+        new_query, new_category, new_target,
+        new_interval, json.dumps(new_filters), config_id,
+    )
+    return {"ok": True}
