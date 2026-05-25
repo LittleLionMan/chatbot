@@ -1095,6 +1095,8 @@ async def _handle_notify_user(
     context: dict[str, str],
     bot: telegram.Bot,
     target_chat_id: int,
+    pool: asyncpg.Pool,
+    agent_id: int,
     **_,
 ) -> str:
     condition_key: str | None = step.get("condition_key")
@@ -1115,7 +1117,18 @@ async def _handle_notify_user(
     message = _get(context, source_key) if source_key else _resolve_template(message_template, context)
 
     if message:
-        await bot.send_message(chat_id=target_chat_id, text=message)
+        sent = await bot.send_message(chat_id=target_chat_id, text=message)
+        try:
+            await memory.save_agent_notification(
+                pool,
+                message_id=sent.message_id,
+                chat_id=target_chat_id,
+                agent_id=agent_id,
+                notification_type="pipeline_notify",
+                payload_summary={"summary": message[:200]},
+            )
+        except Exception as notif_err:
+            logger.warning("notify_user: failed to save notification: %s", notif_err)
         logger.info("notify_user: sent %d chars", len(message))
     return ""
 
