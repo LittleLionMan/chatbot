@@ -47,7 +47,7 @@ def main() -> None:
     app.add_handler(CommandHandler("agents", handler.handle_command_agents))
     app.add_handler(CommandHandler("tasks", handler.handle_command_tasks))
 
-    app.add_handler(CallbackQueryHandler(handler.handle_callback_query, pattern=r"^agent:"))
+    app.add_handler(CallbackQueryHandler(handler.handle_callback_query))
 
     app.add_handler(MessageHandler(filters.VOICE, handler.handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handler.handle_photo))
