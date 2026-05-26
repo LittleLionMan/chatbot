@@ -30,6 +30,7 @@ class _PendingPlan(TypedDict):
 _pending_plans: dict[int, _PendingPlan] = {}
 _pending_rollbacks: dict[int, dict] = {}
 _pending_clarification_keys: dict[int, tuple[int, str]] = {}
+_pending_agent_context: dict[int, tuple[int, int]] = {}
 
 
 def _display_name(user) -> str:
@@ -424,22 +425,14 @@ async def _handle_agent_feedback(
                 edit_payload = await agent_edits.prepare_data_edit(pool, target_agent, text, ns, key)
 
         if not edit_payload:
-            await message.reply_text(
-                f"Ich konnte nicht erkennen welcher Dateneintrag von {name} bearbeitet werden soll. "
-                "Bitte spezifiziere Namespace und Key."
-            )
-            return
+            edit_type = "preference"
 
     elif edit_type == "step_patch":
         edit_payload = await agent_edits.prepare_step_patch(pool, target_agent, text)
         if not edit_payload:
-            await message.reply_text(
-                f"Ich konnte keinen passenden Step in {name}s Pipeline identifizieren. "
-                "Beschreib das Problem genauer."
-            )
-            return
+            edit_type = "preference"
 
-    elif edit_type == "preference":
+    if edit_type == "preference":
         pref_result = await agent_edits.prepare_preference(pool, target_agent, text)
 
         if pref_result is None:
@@ -939,30 +932,57 @@ async def _reply(
     notification_context: dict | None = None
     if reply_to_id:
         notification_context = await memory.get_agent_notification(pool, reply_to_id, chat.id)
-        if notification_context:
-            agent_id = notification_context.get("agent_id")
-            target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
-            if target_agent:
-                logger.info(
-                    "_reply: reply to agent notification → classifying with notification context for %s",
-                    target_agent["name"],
-                )
-                active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
-                classified = await intent_classifier.classify(
-                    text, pool,
-                    has_active_agents=bool(active_agents),
-                    has_active_tasks=bool(active_tasks),
-                    notification_context=notification_context,
-                )
-                intent = classified["intent"]
-                if intent not in ("agent_feedback", "agent_talk", "agent_trigger", "none"):
+
+    if notification_context and notification_context.get("notification_type") not in ("confirmation", "adjust_request"):
+        agent_id = notification_context.get("agent_id")
+        target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
+        if target_agent:
+            _pending_agent_context[user.id] = (agent_id, reply_to_id or 0)
+            logger.info(
+                "_reply: reply to agent notification → classifying with notification context for %s",
+                target_agent["name"],
+            )
+            active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+            classified = await intent_classifier.classify(
+                text, pool,
+                has_active_agents=bool(active_agents),
+                has_active_tasks=bool(active_tasks),
+                notification_context=notification_context,
+            )
+            intent = classified["intent"]
+            if intent not in ("agent_feedback", "agent_talk", "agent_trigger", "none"):
+                classified["intent"] = "agent_feedback"
+            await _handle_agent_intent(
+                update, pool, text, classified["intent"], user.id, chat.id, active_agents,
+                notification_context=notification_context,
+                classified=classified,
+            )
+            return
+
+    pending_agent = _pending_agent_context.get(user.id)
+    if pending_agent and not notification_context:
+        agent_id, _ = pending_agent
+        target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
+        if target_agent:
+            logger.info("_reply: continuing agent feedback context for %s", target_agent["name"])
+            active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+            classified = await intent_classifier.classify(
+                text, pool,
+                has_active_agents=bool(active_agents),
+                has_active_tasks=bool(active_tasks),
+            )
+            intent = classified["intent"]
+            if intent in ("agent_feedback", "agent_talk", "agent_trigger"):
+                if intent not in ("agent_talk", "agent_trigger"):
                     classified["intent"] = "agent_feedback"
                 await _handle_agent_intent(
                     update, pool, text, classified["intent"], user.id, chat.id, active_agents,
-                    notification_context=notification_context,
+                    notification_context={"agent_id": agent_id},
                     classified=classified,
                 )
                 return
+            else:
+                _pending_agent_context.pop(user.id, None)
 
     active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
 
@@ -1238,6 +1258,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         if action == "yes":
             await memory.clear_pending_confirmation(pool, user.id, query.message.chat.id)
+            _pending_agent_context.pop(user.id, None)
             result = await agent_edits.execute_edit(pool, edit_payload)
             rollback_id = confirmation_id
             _pending_rollbacks[rollback_id] = edit_payload
