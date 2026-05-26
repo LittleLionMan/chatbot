@@ -582,7 +582,8 @@ async def _handle_agent_intent(
             return
         edit_type = (classified or {}).get("edit_type")
         await _handle_agent_feedback(
-            update, pool, text, user_id, chat_id, target_agent, edit_type, classified or {}
+            update, pool, text, user_id, chat_id, target_agent, edit_type, classified or {},
+            notification_context=notification_context,
         )
         return
 
@@ -944,7 +945,7 @@ async def _reply(
             target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
             if target_agent:
                 logger.info(
-                    "_reply: reply to agent notification → forcing agent_feedback for %s",
+                    "_reply: reply to agent notification → classifying with notification context for %s",
                     target_agent["name"],
                 )
                 active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
@@ -954,9 +955,11 @@ async def _reply(
                     has_active_tasks=bool(active_tasks),
                     notification_context=notification_context,
                 )
-                classified["intent"] = "agent_feedback"
+                intent = classified["intent"]
+                if intent not in ("agent_feedback", "agent_talk", "agent_trigger", "none"):
+                    classified["intent"] = "agent_feedback"
                 await _handle_agent_intent(
-                    update, pool, text, "agent_feedback", user.id, chat.id, active_agents,
+                    update, pool, text, classified["intent"], user.id, chat.id, active_agents,
                     notification_context=notification_context,
                     classified=classified,
                 )
