@@ -582,8 +582,7 @@ async def _handle_agent_intent(
             return
         edit_type = (classified or {}).get("edit_type")
         await _handle_agent_feedback(
-            update, pool, text, user_id, chat_id, target_agent, edit_type, classified or {},
-            notification_context=notification_context,
+            update, pool, text, user_id, chat_id, target_agent, edit_type, classified or {}
         )
         return
 
