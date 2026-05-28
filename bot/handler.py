@@ -869,12 +869,12 @@ async def _handle_chat(
             await message.reply_text(ratelimit.rate_limit_message(e.provider))
         return
 
-    await memory.save_message(pool, chat.id, user_id, "user", user_turn)
-    await memory.save_message(pool, chat.id, None, "assistant", response)
+    await memory.save_message(pool, chat_id, user_id, "user", user_turn)
+    await memory.save_message(pool, chat_id, None, "assistant", response)
     if is_group:
-        await memory.touch_session_message(pool, chat.id)
+        await memory.touch_session_message(pool, chat_id)
     if not triggered_by_mention and is_group:
-        await memory.update_spontaneous_timestamp(pool, chat.id)
+        await memory.update_spontaneous_timestamp(pool, chat_id)
 
     await _send_response(update, response, wants_voice, detected_language)
 
