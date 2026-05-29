@@ -1,31 +1,49 @@
 from __future__ import annotations
+
 import asyncio
 import base64
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
 import asyncpg
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
+
 from bot import (
-    brain, memory, decider, config, ratelimit, extractor,
-    greeter, voice, task_parser, agent_parser, agent_runner,
-    intent_classifier, agent_system_parser, agent_planner, observer,
-    agent_context, agent_edits,
+    agent_context,
+    agent_edits,
+    agent_parser,
+    agent_planner,
+    agent_runner,
+    agent_system_parser,
+    brain,
+    config,
+    decider,
+    extractor,
+    greeter,
+    intent_classifier,
+    memory,
+    observer,
+    ratelimit,
+    task_parser,
+    voice,
 )
-from bot.brain import ProviderRateLimitError, ProviderAuthError
-from bot.models import CAPABILITY_CHAT, CAPABILITY_MULTIMODAL
 from bot.agent_parser import regenerate_pipeline_for_agent
+from bot.brain import ProviderAuthError, ProviderRateLimitError
+from bot.models import CAPABILITY_CHAT, CAPABILITY_MULTIMODAL
 from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
 
 from typing import TypedDict
 
+
 class _PendingPlan(TypedDict):
     plan: dict
     accumulated_context: str
     clarification_rounds: int
     bot_message_id: int | None
+
 
 _pending_plans: dict[int, _PendingPlan] = {}
 _pending_rollbacks: dict[int, dict] = {}
@@ -60,15 +78,21 @@ def _quoted_text(message) -> str | None:
 
 
 def _agent_keyboard(agent_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+    return InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("Status", callback_data=f"agent:status:{agent_id}"),
-            InlineKeyboardButton("Stoppen", callback_data=f"agent:stop:{agent_id}"),
-        ],
-        [
-            InlineKeyboardButton("Umbenennen", callback_data=f"agent:rename:{agent_id}"),
-        ],
-    ])
+            [
+                InlineKeyboardButton(
+                    "Status", callback_data=f"agent:status:{agent_id}"
+                ),
+                InlineKeyboardButton("Stoppen", callback_data=f"agent:stop:{agent_id}"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "Umbenennen", callback_data=f"agent:rename:{agent_id}"
+                ),
+            ],
+        ]
+    )
 
 
 async def _send_response(
@@ -107,26 +131,38 @@ async def _handle_file_content(
     display = _display_name(user)
     group_title = chat.title if is_group else None
 
-    await memory.upsert_user(pool, user.id, user.username, user.first_name, user.last_name)
+    await memory.upsert_user(
+        pool, user.id, user.username, user.first_name, user.last_name
+    )
     if is_group:
         await memory.upsert_group(pool, chat.id, group_title)
 
     user_memories = await memory.get_memories(pool, "user", user.id)
-    group_memories = await memory.get_memories(pool, "group", chat.id) if is_group else []
+    group_memories = (
+        await memory.get_memories(pool, "group", chat.id) if is_group else []
+    )
     bot_memories = await memory.get_memories(pool, "bot", chat.id) if is_group else []
     reflection_memories = await memory.get_reflection_memories(pool, chat.id, user.id)
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
     history = await memory.get_recent_messages(pool, chat.id)
 
     system = brain.build_system_prompt(
-        user_memories, group_memories, bot_memories, reflection_memories,
-        display, group_title, active_agents=active_agents,
+        user_memories,
+        group_memories,
+        bot_memories,
+        reflection_memories,
+        display,
+        group_title,
+        active_agents=active_agents,
     )
     llm_messages = brain.history_to_llm_messages(history)
     user_text = caption if caption else "Was siehst du hier?"
     b64 = base64.standard_b64encode(file_bytes).decode("utf-8")
     content: list[dict] = [
-        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": b64},
+        },
         {"type": "text", "text": user_text},
     ]
     llm_messages.append({"role": "user", "content": content})
@@ -170,12 +206,16 @@ async def _handle_pending_confirmation(
     edit_payload = pending["payload"]
 
     if reply_to_message_id:
-        notification = await memory.get_agent_notification(pool, reply_to_message_id, chat_id)
+        notification = await memory.get_agent_notification(
+            pool, reply_to_message_id, chat_id
+        )
         if notification and notification.get("notification_type") == "adjust_request":
             edit_payload["user_correction"] = text
             confirmation_msg = agent_edits.format_confirmation_message(edit_payload)
             conf_id = await memory.replace_pending_confirmation(
-                pool, chat_id, user_id,
+                pool,
+                chat_id,
+                user_id,
                 edit_payload.get("agent_id", 0),
                 edit_payload.get("edit_type", ""),
                 confirmation_msg,
@@ -186,7 +226,9 @@ async def _handle_pending_confirmation(
                 reply_markup=agent_edits.confirmation_keyboard(conf_id),
             )
             await memory.save_agent_notification(
-                pool, sent.message_id, chat_id,
+                pool,
+                sent.message_id,
+                chat_id,
                 edit_payload.get("agent_id", 0),
                 "confirmation",
                 {"confirmation_id": conf_id},
@@ -223,7 +265,9 @@ async def _handle_pending_plan(
 
     if new_plan["status"] == "confirmed":
         if current_plan.get("status") != "ready":
-            await message.reply_text("Ich habe noch keinen fertigen Plan — beschreib mir erst was ich bauen soll.")
+            await message.reply_text(
+                "Ich habe noch keinen fertigen Plan — beschreib mir erst was ich bauen soll."
+            )
             return True
 
         prepared = await agent_planner.finalize(
@@ -236,7 +280,9 @@ async def _handle_pending_plan(
         _pending_plans.pop(user_id, None)
 
         if not prepared:
-            await message.reply_text("Beim Anlegen ist etwas schiefgelaufen. Versuch's nochmal.")
+            await message.reply_text(
+                "Beim Anlegen ist etwas schiefgelaufen. Versuch's nochmal."
+            )
             return True
 
         expected = len(current_plan.get("agents", []))
@@ -262,13 +308,19 @@ async def _handle_pending_plan(
 
         names = ", ".join(a["name"] for a in prepared if a["name"] not in failed)
         created_monitors = await agent_planner.finalize_monitors(current_plan, pool)
-        created_scrapers, unavailable_scrapers = await agent_planner.finalize_scrapers(current_plan, pool)
+        created_scrapers, unavailable_scrapers = await agent_planner.finalize_scrapers(
+            current_plan, pool
+        )
 
         reply_parts: list[str] = []
         if failed:
-            reply_parts.append(f"Angelegt: {names}.\nFehlgeschlagen: {', '.join(failed)} — schau in die Logs.")
+            reply_parts.append(
+                f"Angelegt: {names}.\nFehlgeschlagen: {', '.join(failed)} — schau in die Logs."
+            )
         elif created < expected:
-            reply_parts.append(f"Angelegt: {names}. Hinweis: {expected - created} Agent(en) konnten nicht erstellt werden.")
+            reply_parts.append(
+                f"Angelegt: {names}. Hinweis: {expected - created} Agent(en) konnten nicht erstellt werden."
+            )
         else:
             reply_parts.append(f"Angelegt: {names}.")
 
@@ -276,11 +328,15 @@ async def _handle_pending_plan(
             monitor_names = ", ".join(m["name"] for m in created_monitors)
             reply_parts.append(f"RSS-Monitor(e) eingerichtet: {monitor_names}.")
         if created_scrapers:
-            scraper_summary = ", ".join(f"{s['platform']} → {s['target_agent']}" for s in created_scrapers)
+            scraper_summary = ", ".join(
+                f"{s['platform']} → {s['target_agent']}" for s in created_scrapers
+            )
             reply_parts.append(f"Scraper eingerichtet: {scraper_summary}.")
         if unavailable_scrapers:
             missing = ", ".join(s["platform"] for s in unavailable_scrapers)
-            reply_parts.append(f"Hinweis: Scraper für {missing} sind noch nicht verfügbar und wurden nicht angelegt.")
+            reply_parts.append(
+                f"Hinweis: Scraper für {missing} sind noch nicht verfügbar und wurden nicht angelegt."
+            )
 
         await message.reply_text("\n".join(reply_parts))
         return True
@@ -299,7 +355,10 @@ async def _handle_pending_plan(
         pending["plan"] = new_plan
         pending["clarification_rounds"] = rounds
         plan_text = agent_planner.format_plan_message(new_plan)
-        full_message = plan_text + "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
+        full_message = (
+            plan_text
+            + "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
+        )
         pending["accumulated_context"] = accumulated + f"\n\nBob: {plan_text}"
         reply = await message.reply_text(full_message)
         pending["bot_message_id"] = reply.message_id
@@ -345,7 +404,9 @@ async def _handle_pending_clarification(
         pool, target_agent, original_text, state_key=final_key
     )
     if not edit_payload or isinstance(edit_payload, tuple):
-        await message.reply_text("Ich konnte keine klare Präferenz aus dem Feedback extrahieren.")
+        await message.reply_text(
+            "Ich konnte keine klare Präferenz aus dem Feedback extrahieren."
+        )
         return True
 
     config_data = parse_agent_config(target_agent.get("config", {}))
@@ -353,7 +414,9 @@ async def _handle_pending_clarification(
 
     confirmation_msg = agent_edits.format_confirmation_message(edit_payload)
     conf_id = await memory.replace_pending_confirmation(
-        pool, chat_id, user_id,
+        pool,
+        chat_id,
+        user_id,
         target_agent["id"],
         "preference",
         confirmation_msg,
@@ -364,7 +427,9 @@ async def _handle_pending_clarification(
         reply_markup=agent_edits.confirmation_keyboard(conf_id),
     )
     await memory.save_agent_notification(
-        pool, sent.message_id, chat_id,
+        pool,
+        sent.message_id,
+        chat_id,
         target_agent["id"],
         "confirmation",
         {"confirmation_id": conf_id},
@@ -391,8 +456,12 @@ async def _handle_agent_feedback(
         user_memories = await memory.get_memories(pool, "user", user_id)
         history = await memory.get_recent_messages(pool, chat_id)
         system = brain.build_system_prompt(
-            user_memories, [], [], [],
-            "", None,
+            user_memories,
+            [],
+            [],
+            [],
+            "",
+            None,
             agent_context=ctx_text,
         )
         llm_messages = brain.history_to_llm_messages(history)
@@ -422,7 +491,9 @@ async def _handle_agent_feedback(
             parts = first_path.split("/", 1)
             ns, key = (parts[0], parts[1]) if len(parts) == 2 else (parts[0], "")
             if key:
-                edit_payload = await agent_edits.prepare_data_edit(pool, target_agent, text, ns, key)
+                edit_payload = await agent_edits.prepare_data_edit(
+                    pool, target_agent, text, ns, key
+                )
 
         if not edit_payload:
             edit_type = "preference"
@@ -436,7 +507,9 @@ async def _handle_agent_feedback(
         pref_result = await agent_edits.prepare_preference(pool, target_agent, text)
 
         if pref_result is None:
-            await message.reply_text("Ich konnte keine klare Präferenz aus dem Feedback extrahieren.")
+            await message.reply_text(
+                "Ich konnte keine klare Präferenz aus dem Feedback extrahieren."
+            )
             return
 
         if isinstance(pref_result, tuple) and pref_result[0] == "clarification":
@@ -455,7 +528,9 @@ async def _handle_agent_feedback(
 
     confirmation_msg = agent_edits.format_confirmation_message(edit_payload)
     conf_id = await memory.replace_pending_confirmation(
-        pool, chat_id, user_id,
+        pool,
+        chat_id,
+        user_id,
         target_agent["id"],
         edit_type,
         confirmation_msg,
@@ -467,7 +542,9 @@ async def _handle_agent_feedback(
         reply_markup=agent_edits.confirmation_keyboard(conf_id),
     )
     await memory.save_agent_notification(
-        pool, sent.message_id, chat_id,
+        pool,
+        sent.message_id,
+        chat_id,
         target_agent["id"],
         "confirmation",
         {"confirmation_id": conf_id},
@@ -492,7 +569,9 @@ async def _handle_agent_intent(
             await message.reply_text("Du hast keine aktiven Agenten.")
         else:
             for agent in active_agents:
-                instruction = parse_agent_config(agent["config"]).get("instruction", "")[:80]
+                instruction = parse_agent_config(agent["config"]).get(
+                    "instruction", ""
+                )[:80]
                 schedule_display = agent["schedule"] or "nur auf Trigger"
                 await message.reply_text(
                     f"{agent['name']} — {instruction}… ({schedule_display})",
@@ -538,7 +617,10 @@ async def _handle_agent_intent(
         plan_text = agent_planner.format_plan_message(initial_plan)
         if initial_plan["status"] == "ready":
             accumulated_with_bob = initial_context + f"\n\nBob: {plan_text}"
-            full_message = plan_text + "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
+            full_message = (
+                plan_text
+                + "\n\nAntworte auf diese Nachricht um den Plan anzupassen oder zu bestätigen."
+            )
         else:
             accumulated_with_bob = initial_context + f"\n\nBob: {plan_text}"
             full_message = plan_text
@@ -546,7 +628,9 @@ async def _handle_agent_intent(
         _pending_plans[user_id] = {
             "plan": initial_plan,
             "accumulated_context": accumulated_with_bob,
-            "clarification_rounds": 1 if initial_plan["status"] == "needs_clarification" else 0,
+            "clarification_rounds": 1
+            if initial_plan["status"] == "needs_clarification"
+            else 0,
             "bot_message_id": None,
         }
         reply = await message.reply_text(full_message)
@@ -562,20 +646,36 @@ async def _handle_agent_intent(
         if notification_context:
             agent_id = notification_context.get("agent_id")
             if agent_id:
-                target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
+                target_agent = next(
+                    (a for a in active_agents if a["id"] == agent_id), None
+                )
                 if target_agent:
-                    logger.info("agent_feedback: resolved via notification_context → %s", target_agent["name"])
+                    logger.info(
+                        "agent_feedback: resolved via notification_context → %s",
+                        target_agent["name"],
+                    )
         if not target_agent:
             extracted = await intent_classifier.extract_agent_talk(text, pool)
             agent_name = extracted.get("agent_name", "")
-            target_agent = await agent_parser.resolve_agent_by_text(agent_name or text, active_agents)
+            target_agent = await agent_parser.resolve_agent_by_text(
+                agent_name or text, active_agents
+            )
         if not target_agent:
             names = ", ".join(a["name"] for a in active_agents)
-            await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
+            await message.reply_text(
+                f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}"
+            )
             return
         edit_type = (classified or {}).get("edit_type")
         await _handle_agent_feedback(
-            update, pool, text, user_id, chat_id, target_agent, edit_type, classified or {}
+            update,
+            pool,
+            text,
+            user_id,
+            chat_id,
+            target_agent,
+            edit_type,
+            classified or {},
         )
         return
 
@@ -584,16 +684,22 @@ async def _handle_agent_intent(
         agent_name: str = extracted.get("agent_name", "")
         action: str = extracted.get("action", "run")
         payload: dict = extracted.get("payload", {})
-        target_agent = await agent_parser.resolve_agent_by_text(agent_name or text, active_agents)
+        target_agent = await agent_parser.resolve_agent_by_text(
+            agent_name or text, active_agents
+        )
         if not target_agent:
             names = ", ".join(a["name"] for a in active_agents)
-            await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
+            await message.reply_text(
+                f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}"
+            )
             return
         if action == "stop":
             await memory.deactivate_agent(pool, target_agent["id"])
             await message.reply_text(f"{target_agent['name']} wurde gestoppt.")
         else:
-            await memory.enqueue_agent_trigger(pool, None, target_agent["name"], payload)
+            await memory.enqueue_agent_trigger(
+                pool, None, target_agent["name"], payload
+            )
             payload_desc = f" mit Payload: {payload}" if payload else ""
             await message.reply_text(
                 f"{target_agent['name']} wird beim nächsten Scheduler-Lauf ausgeführt{payload_desc}."
@@ -604,18 +710,26 @@ async def _handle_agent_intent(
         extracted = await intent_classifier.extract_agent_talk(text, pool)
         agent_name = extracted.get("agent_name", "")
         talk_type: str = extracted.get("talk_type", "query")
-        target_agent = await agent_parser.resolve_agent_by_text(agent_name or text, active_agents)
+        target_agent = await agent_parser.resolve_agent_by_text(
+            agent_name or text, active_agents
+        )
         if not target_agent:
             names = ", ".join(a["name"] for a in active_agents)
-            await message.reply_text(f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}")
+            await message.reply_text(
+                f"Ich bin nicht sicher welchen Agenten du meinst. Aktive Agenten: {names}"
+            )
             return
 
         if talk_type == "regenerate_pipeline":
             current_config = parse_agent_config(target_agent["config"])
-            updated_config = await regenerate_pipeline_for_agent(current_config, pool=pool)
+            updated_config = await regenerate_pipeline_for_agent(
+                current_config, pool=pool
+            )
             await memory.update_agent_config(pool, target_agent["id"], updated_config)
             steps = len(updated_config.get("steps", []))
-            await message.reply_text(f"{target_agent['name']}: Pipeline neu generiert ({steps} Steps).")
+            await message.reply_text(
+                f"{target_agent['name']}: Pipeline neu generiert ({steps} Steps)."
+            )
         else:
             use_deep = agent_context.needs_deep_load(text)
             if use_deep:
@@ -626,13 +740,27 @@ async def _handle_agent_intent(
             ctx_text = agent_context.format_for_system_prompt(ctx)
 
             if use_deep and not ctx.get("has_data", True):
-                await message.reply_text(ctx.get("message", f"{target_agent['name']} hat keine abfragbaren Daten dazu."))
+                await message.reply_text(
+                    ctx.get(
+                        "message",
+                        f"{target_agent['name']} hat keine abfragbaren Daten dazu.",
+                    )
+                )
                 return
 
             state = await memory.get_agent_state(pool, target_agent["id"])
             agent_memories = await memory.get_agent_memories(pool, target_agent["id"])
-            response, new_config, new_name, clarification_key = await agent_parser.handle_agent_talk(
-                text, target_agent, state, agent_memories, pool=pool,
+            (
+                response,
+                new_config,
+                new_name,
+                clarification_key,
+            ) = await agent_parser.handle_agent_talk(
+                text,
+                target_agent,
+                state,
+                agent_memories,
+                pool=pool,
             )
             if new_config is not None:
                 await memory.update_agent_config(pool, target_agent["id"], new_config)
@@ -640,7 +768,10 @@ async def _handle_agent_intent(
                 await memory.rename_agent(pool, target_agent["id"], new_name)
             if clarification_key is not None:
                 sent = await message.reply_text(response)
-                _pending_clarification_keys[user_id] = (target_agent["id"], clarification_key)
+                _pending_clarification_keys[user_id] = (
+                    target_agent["id"],
+                    clarification_key,
+                )
                 return
 
             if ctx_text and not use_deep:
@@ -663,7 +794,9 @@ async def _handle_task_intent(
         if not active_tasks:
             await message.reply_text("Du hast keine aktiven Aufgaben.")
         else:
-            lines = [f"{t['id']}. {t['description']} — {t['schedule']}" for t in active_tasks]
+            lines = [
+                f"{t['id']}. {t['description']} — {t['schedule']}" for t in active_tasks
+            ]
             await message.reply_text("Deine aktiven Aufgaben:\n" + "\n".join(lines))
         return
 
@@ -676,7 +809,9 @@ async def _handle_task_intent(
         stop_context = f"{text}\n\nZitierte Nachricht: {quoted}" if quoted else text
         stop_ids = await task_parser.parse_stop_request(stop_context, active_tasks)
         if stop_ids:
-            count = await memory.deactivate_tasks_by_description(pool, user_id, stop_ids)
+            count = await memory.deactivate_tasks_by_description(
+                pool, user_id, stop_ids
+            )
             await message.reply_text(f"{count} Aufgabe(n) gestoppt.")
         else:
             if active_tasks:
@@ -708,7 +843,9 @@ async def _handle_task_intent(
                 f"Nächste Ausführung: {parsed['next_run_display'].strftime('%d.%m.%Y %H:%M')}"
             )
         else:
-            await message.reply_text("Ich konnte keinen gültigen Zeitplan erkennen. Versuch's nochmal konkreter.")
+            await message.reply_text(
+                "Ich konnte keinen gültigen Zeitplan erkennen. Versuch's nochmal konkreter."
+            )
 
 
 async def _handle_scraper_intent(
@@ -719,7 +856,11 @@ async def _handle_scraper_intent(
 ) -> None:
     message = update.effective_message
     extracted = await intent_classifier.extract_scraper_create_params(text, pool)
-    if not extracted or not extracted.get("target_agent") or not extracted.get("platforms"):
+    if (
+        not extracted
+        or not extracted.get("target_agent")
+        or not extracted.get("platforms")
+    ):
         await message.reply_text(
             "Ich konnte die Scraper-Parameter nicht erkennen. Beispiel: "
             "'Richte einen Scraper auf Kleinanzeigen und eBay ein der RTX 4090 sucht und Linus triggert'."
@@ -738,7 +879,9 @@ async def _handle_scraper_intent(
         )
         logger.info("scraper config created: id=%d platform=%s", config_id, platform)
     poll = extracted.get("poll_interval_seconds", 3600)
-    interval_display = f"{poll // 60} Minuten" if poll < 3600 else f"{poll // 3600} Stunde(n)"
+    interval_display = (
+        f"{poll // 60} Minuten" if poll < 3600 else f"{poll // 3600} Stunde(n)"
+    )
     await message.reply_text(
         f"Scraper eingerichtet ({len(platforms)} Konfig(s)): '{extracted.get('query')}' auf "
         f"{', '.join(platforms)} alle {interval_display} → {extracted['target_agent']}."
@@ -771,12 +914,19 @@ async def _handle_monitor_intent(
     if source == "static":
         feed_urls: list[str] = extracted.get("feed_urls", [])
         if not feed_urls:
-            await message.reply_text("Keine Feed-URLs erkannt. Bitte gib mindestens eine RSS-URL an.")
+            await message.reply_text(
+                "Keine Feed-URLs erkannt. Bitte gib mindestens eine RSS-URL an."
+            )
             return
         monitor_id = await memory.create_monitor_config(
-            pool, monitor_type=monitor_type, name=name, source="static",
-            target_agent=target_agent, feed_templates=feed_urls,
-            poll_interval_seconds=poll_interval, keywords=keywords,
+            pool,
+            monitor_type=monitor_type,
+            name=name,
+            source="static",
+            target_agent=target_agent,
+            feed_templates=feed_urls,
+            poll_interval_seconds=poll_interval,
+            keywords=keywords,
         )
         feeds_display = ", ".join(feed_urls)
         kw_display = f" · Keywords: {', '.join(keywords)}" if keywords else ""
@@ -788,9 +938,12 @@ async def _handle_monitor_intent(
         source_agent: str = extracted.get("source_agent", "")
         source_state_key: str = extracted.get("source_state_key", "")
         source_format: str = extracted.get("source_format", "comma_list")
-        feed_templates: list[str] = extracted.get("feed_templates", [
-            "https://news.google.com/rss/search?q={query}&hl=de&gl=DE&ceid=DE:de",
-        ])
+        feed_templates: list[str] = extracted.get(
+            "feed_templates",
+            [
+                "https://news.google.com/rss/search?q={query}&hl=de&gl=DE&ceid=DE:de",
+            ],
+        )
         if not source_agent or not source_state_key:
             await message.reply_text(
                 "Für einen Agent-basierten Monitor brauche ich den Namen des Quell-Agents "
@@ -798,10 +951,17 @@ async def _handle_monitor_intent(
             )
             return
         monitor_id = await memory.create_monitor_config(
-            pool, monitor_type=monitor_type, name=name, source="agent",
-            target_agent=target_agent, feed_templates=feed_templates,
-            poll_interval_seconds=poll_interval, source_agent=source_agent,
-            source_state_key=source_state_key, source_format=source_format, keywords=keywords,
+            pool,
+            monitor_type=monitor_type,
+            name=name,
+            source="agent",
+            target_agent=target_agent,
+            feed_templates=feed_templates,
+            poll_interval_seconds=poll_interval,
+            source_agent=source_agent,
+            source_state_key=source_state_key,
+            source_format=source_format,
+            keywords=keywords,
         )
         await message.reply_text(
             f"RSS-Monitor eingerichtet (ID: {monitor_id}): überwacht {source_agent}/{source_state_key} "
@@ -827,15 +987,22 @@ async def _handle_chat(
 ) -> None:
     message = update.effective_message
     user_memories = await memory.get_memories(pool, "user", user_id)
-    group_memories = await memory.get_memories(pool, "group", chat_id) if is_group else []
+    group_memories = (
+        await memory.get_memories(pool, "group", chat_id) if is_group else []
+    )
     bot_memories = await memory.get_memories(pool, "bot", chat_id) if is_group else []
     reflection_memories = await memory.get_reflection_memories(pool, chat_id, user_id)
     observation_context = await observer.get_observation_context(pool, chat_id)
     history = await memory.get_recent_messages(pool, chat_id)
 
     system = brain.build_system_prompt(
-        user_memories, group_memories, bot_memories, reflection_memories,
-        display, group_title, active_agents=active_agents,
+        user_memories,
+        group_memories,
+        bot_memories,
+        reflection_memories,
+        display,
+        group_title,
+        active_agents=active_agents,
         observation_context=observation_context or None,
         agent_context=agent_ctx_text or None,
     )
@@ -852,6 +1019,7 @@ async def _handle_chat(
 
     if needs_search:
         from bot import search as _search
+
         if await _search.is_available():
             await message.reply_text("Moment, ich schaue kurz nach…")
 
@@ -879,8 +1047,12 @@ async def _handle_chat(
     await _send_response(update, response, wants_voice, detected_language)
 
     snippet = _build_snippet(history, text, display)
-    asyncio.create_task(extractor.extract_and_store_automatic(pool, user_id, display, snippet))
-    asyncio.create_task(extractor.extract_and_store_reflection(pool, chat_id, user_id, snippet))
+    asyncio.create_task(
+        extractor.extract_and_store_automatic(pool, user_id, display, snippet)
+    )
+    asyncio.create_task(
+        extractor.extract_and_store_reflection(pool, chat_id, user_id, snippet)
+    )
 
 
 async def _reply(
@@ -900,16 +1072,24 @@ async def _reply(
     group_title = chat.title if is_group else None
     group_id = chat.id if is_group else None
 
-    await memory.upsert_user(pool, user.id, user.username, user.first_name, user.last_name)
+    await memory.upsert_user(
+        pool, user.id, user.username, user.first_name, user.last_name
+    )
     if is_group:
         await memory.upsert_group(pool, chat.id, group_title)
 
-    text = transcribed_text if transcribed_text is not None else (message.text or "").strip()
+    text = (
+        transcribed_text
+        if transcribed_text is not None
+        else (message.text or "").strip()
+    )
     if not text:
         return
     display = _display_name(user)
 
-    explicit_reply = await extractor.handle_explicit_memory(pool, user.id, group_id, text)
+    explicit_reply = await extractor.handle_explicit_memory(
+        pool, user.id, group_id, text
+    )
     if explicit_reply is not None:
         await message.reply_text(explicit_reply)
         return
@@ -918,7 +1098,9 @@ async def _reply(
     if message.reply_to_message is not None:
         reply_to_id = message.reply_to_message.message_id
 
-    if await _handle_pending_confirmation(update, pool, user.id, chat.id, text, reply_to_id):
+    if await _handle_pending_confirmation(
+        update, pool, user.id, chat.id, text, reply_to_id
+    ):
         return
 
     if await _handle_pending_plan(update, pool, user.id, chat.id, text, reply_to_id):
@@ -926,14 +1108,21 @@ async def _reply(
 
     active_agents = await memory.get_active_agents_for_user(pool, user.id)
 
-    if await _handle_pending_clarification(update, pool, user.id, chat.id, text, reply_to_id, active_agents):
+    if await _handle_pending_clarification(
+        update, pool, user.id, chat.id, text, reply_to_id, active_agents
+    ):
         return
 
     notification_context: dict | None = None
     if reply_to_id:
-        notification_context = await memory.get_agent_notification(pool, reply_to_id, chat.id)
+        notification_context = await memory.get_agent_notification(
+            pool, reply_to_id, chat.id
+        )
 
-    if notification_context and notification_context.get("notification_type") not in ("confirmation", "adjust_request"):
+    if notification_context and notification_context.get("notification_type") not in (
+        "confirmation",
+        "adjust_request",
+    ):
         agent_id = notification_context.get("agent_id")
         target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
         if target_agent:
@@ -944,7 +1133,8 @@ async def _reply(
             )
             active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
             classified = await intent_classifier.classify(
-                text, pool,
+                text,
+                pool,
                 has_active_agents=bool(active_agents),
                 has_active_tasks=bool(active_tasks),
                 notification_context=notification_context,
@@ -953,7 +1143,13 @@ async def _reply(
             if intent not in ("agent_feedback", "agent_talk", "agent_trigger", "none"):
                 classified["intent"] = "agent_feedback"
             await _handle_agent_intent(
-                update, pool, text, classified["intent"], user.id, chat.id, active_agents,
+                update,
+                pool,
+                text,
+                classified["intent"],
+                user.id,
+                chat.id,
+                active_agents,
                 notification_context=notification_context,
                 classified=classified,
             )
@@ -964,10 +1160,13 @@ async def _reply(
         agent_id, _ = pending_agent
         target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
         if target_agent:
-            logger.info("_reply: continuing agent feedback context for %s", target_agent["name"])
+            logger.info(
+                "_reply: continuing agent feedback context for %s", target_agent["name"]
+            )
             active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
             classified = await intent_classifier.classify(
-                text, pool,
+                text,
+                pool,
                 has_active_agents=bool(active_agents),
                 has_active_tasks=bool(active_tasks),
             )
@@ -976,7 +1175,13 @@ async def _reply(
                 if intent not in ("agent_talk", "agent_trigger"):
                     classified["intent"] = "agent_feedback"
                 await _handle_agent_intent(
-                    update, pool, text, classified["intent"], user.id, chat.id, active_agents,
+                    update,
+                    pool,
+                    text,
+                    classified["intent"],
+                    user.id,
+                    chat.id,
+                    active_agents,
                     notification_context={"agent_id": agent_id},
                     classified=classified,
                 )
@@ -987,7 +1192,8 @@ async def _reply(
     active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
 
     classified = await intent_classifier.classify(
-        text, pool,
+        text,
+        pool,
         has_active_agents=bool(active_agents),
         has_active_tasks=bool(active_tasks),
         notification_context=notification_context,
@@ -996,19 +1202,35 @@ async def _reply(
     needs_search = classified["needs_search"]
     wants_voice = force_voice or classified["wants_voice"]
 
-    logger.debug("_reply intent=%s search=%s voice=%s", intent, needs_search, wants_voice)
+    logger.debug(
+        "_reply intent=%s search=%s voice=%s", intent, needs_search, wants_voice
+    )
 
-    if intent in ("agent_system", "agent_create", "agent_trigger", "agent_talk",
-                  "agent_list", "agent_feedback"):
+    if intent in (
+        "agent_system",
+        "agent_create",
+        "agent_trigger",
+        "agent_talk",
+        "agent_list",
+        "agent_feedback",
+    ):
         await _handle_agent_intent(
-            update, pool, text, intent, user.id, chat.id, active_agents,
+            update,
+            pool,
+            text,
+            intent,
+            user.id,
+            chat.id,
+            active_agents,
             notification_context=notification_context,
             classified=classified,
         )
         return
 
     if intent in ("task_create", "task_stop", "task_list"):
-        await _handle_task_intent(update, pool, text, intent, user.id, chat.id, active_tasks, message)
+        await _handle_task_intent(
+            update, pool, text, intent, user.id, chat.id, active_tasks, message
+        )
         return
 
     if intent == "scraper_create":
@@ -1028,8 +1250,19 @@ async def _reply(
             agent_ctx_text = agent_context.format_for_system_prompt(ctx)
 
     await _handle_chat(
-        update, pool, text, user.id, chat.id, is_group, triggered_by_mention,
-        needs_search, wants_voice, detected_language, active_agents, display, group_title,
+        update,
+        pool,
+        text,
+        user.id,
+        chat.id,
+        is_group,
+        triggered_by_mention,
+        needs_search,
+        wants_voice,
+        detected_language,
+        active_agents,
+        display,
+        group_title,
         agent_ctx_text=agent_ctx_text,
     )
 
@@ -1056,9 +1289,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not transcribed.strip():
         return
     is_mention = (
-        (bot_username and f"@{bot_username}".lower() in transcribed.lower())
-        or config.BOT_NAME.lower() in transcribed.lower()
-    )
+        bot_username and f"@{bot_username}".lower() in transcribed.lower()
+    ) or config.BOT_NAME.lower() in transcribed.lower()
     is_reply_to_bot = (
         message.reply_to_message is not None
         and message.reply_to_message.from_user is not None
@@ -1066,18 +1298,36 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     if is_group:
         if is_mention or is_reply_to_bot:
-            await _reply(update, pool, triggered_by_mention=True,
-                         transcribed_text=transcribed, detected_language=lang)
+            await _reply(
+                update,
+                pool,
+                triggered_by_mention=True,
+                transcribed_text=transcribed,
+                detected_language=lang,
+            )
         else:
             should = await decider.should_respond_spontaneously(
-                pool=pool, group_id=chat.id, message_text=transcribed,
+                pool=pool,
+                group_id=chat.id,
+                message_text=transcribed,
             )
             if should:
-                await _reply(update, pool, triggered_by_mention=False,
-                             transcribed_text=transcribed, detected_language=lang)
+                await _reply(
+                    update,
+                    pool,
+                    triggered_by_mention=False,
+                    transcribed_text=transcribed,
+                    detected_language=lang,
+                )
     else:
-        await _reply(update, pool, triggered_by_mention=True,
-                     transcribed_text=transcribed, detected_language=lang, force_voice=True)
+        await _reply(
+            update,
+            pool,
+            triggered_by_mention=True,
+            transcribed_text=transcribed,
+            detected_language=lang,
+            force_voice=True,
+        )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1090,6 +1340,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
     text = message.text.strip()
+    logger.info(
+        "handle_message: text=%r has_voice=%r has_audio=%r has_doc=%r",
+        bool(message.text),
+        bool(message.voice),
+        bool(message.audio),
+        bool(message.document),
+    )
 
     pending_rename: int | None = context.user_data.get("awaiting_rename_agent_id")
     if pending_rename is not None:
@@ -1130,7 +1387,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if ratelimit.is_any_limited():
                 return
             should = await decider.should_respond_spontaneously(
-                pool=pool, group_id=chat.id, message_text=text,
+                pool=pool,
+                group_id=chat.id,
+                message_text=text,
             )
             if should:
                 await _reply(update, pool, triggered_by_mention=False)
@@ -1152,7 +1411,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     is_group = chat.type in ("group", "supergroup")
     caption = (message.caption or "").strip() or None
     is_mention = bool(
-        caption and (
+        caption
+        and (
             (bot_username and f"@{bot_username}".lower() in caption.lower())
             or config.BOT_NAME.lower() in caption.lower()
         )
@@ -1173,7 +1433,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     photo_file = await photo.get_file()
     file_bytes = await photo_file.download_as_bytearray()
     await _handle_file_content(
-        update, pool,
+        update,
+        pool,
         file_bytes=bytes(file_bytes),
         media_type="image/jpeg",
         caption=caption,
@@ -1199,12 +1460,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "application/pdf": "application/pdf",
     }
     if mime not in SUPPORTED_MIME:
-        await message.reply_text(f"Dieses Dateiformat ({mime or 'unbekannt'}) kann ich noch nicht lesen.")
+        await message.reply_text(
+            f"Dieses Dateiformat ({mime or 'unbekannt'}) kann ich noch nicht lesen."
+        )
         return
     bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
     is_mention = bool(
-        caption and (
+        caption
+        and (
             (bot_username and f"@{bot_username}".lower() in caption.lower())
             or config.BOT_NAME.lower() in caption.lower()
         )
@@ -1224,7 +1488,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     doc_file = await doc.get_file()
     file_bytes = await doc_file.download_as_bytearray()
     await _handle_file_content(
-        update, pool,
+        update,
+        pool,
         file_bytes=bytes(file_bytes),
         media_type=SUPPORTED_MIME[mime],
         caption=caption,
@@ -1232,7 +1497,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
-async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_callback_query(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     pool: asyncpg.Pool = context.bot_data["pool"]
     query = update.callback_query
     user = update.effective_user
@@ -1249,7 +1516,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         except ValueError:
             return
 
-        pending = await memory.get_pending_confirmation(pool, user.id, query.message.chat.id)
+        pending = await memory.get_pending_confirmation(
+            pool, user.id, query.message.chat.id
+        )
         if not pending or pending["id"] != confirmation_id:
             await query.edit_message_text("Diese Bestätigung ist abgelaufen.")
             return
@@ -1257,7 +1526,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         edit_payload = pending["payload"]
 
         if action == "yes":
-            await memory.clear_pending_confirmation(pool, user.id, query.message.chat.id)
+            await memory.clear_pending_confirmation(
+                pool, user.id, query.message.chat.id
+            )
             _pending_agent_context.pop(user.id, None)
             result = await agent_edits.execute_edit(pool, edit_payload)
             rollback_id = confirmation_id
@@ -1271,13 +1542,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
         elif action == "no":
-            await memory.clear_pending_confirmation(pool, user.id, query.message.chat.id)
+            await memory.clear_pending_confirmation(
+                pool, user.id, query.message.chat.id
+            )
             await query.edit_message_text("Abgebrochen.")
 
         elif action == "adjust":
             sent = await query.message.reply_text("Was soll ich ändern?")
             await memory.save_agent_notification(
-                pool, sent.message_id, query.message.chat.id,
+                pool,
+                sent.message_id,
+                query.message.chat.id,
                 edit_payload.get("agent_id", 0),
                 "adjust_request",
                 {"confirmation_id": confirmation_id},
@@ -1286,7 +1561,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif action == "rollback":
             rollback_payload = _pending_rollbacks.pop(confirmation_id, None)
             if not rollback_payload:
-                await query.edit_message_text("Rückgängig nicht mehr möglich — Zeit abgelaufen.")
+                await query.edit_message_text(
+                    "Rückgängig nicht mehr möglich — Zeit abgelaufen."
+                )
                 return
             result = await agent_edits.rollback_edit(pool, rollback_payload)
             await query.edit_message_text(result)
@@ -1314,7 +1591,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             agent_memories = await memory.get_agent_memories(pool, agent_id)
             status_text, _, _, _ = await agent_parser.handle_agent_talk(
                 "Was ist dein aktueller Status und was hast du bisher beobachtet?",
-                agent, state, agent_memories, pool=pool,
+                agent,
+                state,
+                agent_memories,
+                pool=pool,
             )
             await query.message.reply_text(
                 f"{agent['name']} — Status:\n\n{status_text}",
@@ -1328,11 +1608,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
 
-async def handle_command_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_command_help(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     await update.effective_message.reply_text(greeter.introduction_text())
 
 
-async def handle_command_agents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_command_agents(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     pool: asyncpg.Pool = context.bot_data["pool"]
     user = update.effective_user
     if not user:
@@ -1350,7 +1634,9 @@ async def handle_command_agents(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 
-async def handle_command_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_command_tasks(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     pool: asyncpg.Pool = context.bot_data["pool"]
     user = update.effective_user
     if not user:
@@ -1360,4 +1646,6 @@ async def handle_command_tasks(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text("Du hast keine aktiven Aufgaben.")
         return
     lines = [f"{t['id']}. {t['description']} — {t['schedule']}" for t in active_tasks]
-    await update.effective_message.reply_text("Deine aktiven Aufgaben:\n" + "\n".join(lines))
+    await update.effective_message.reply_text(
+        "Deine aktiven Aufgaben:\n" + "\n".join(lines)
+    )
