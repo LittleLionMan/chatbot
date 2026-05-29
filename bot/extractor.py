@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import json
 import logging
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 import asyncpg
+
 from bot import brain, memory
-from bot.models import CAPABILITY_SIMPLE_TASKS, CAPABILITY_CHAT
+from bot.models import CAPABILITY_CHAT, CAPABILITY_SIMPLE_TASKS
 from bot.utils import clean_llm_json
 
 logger = logging.getLogger(__name__)
@@ -71,7 +74,22 @@ def _sanitize_fact(raw: str) -> str | None:
     return fact
 
 
-async def _store_if_new(pool: asyncpg.Pool, subject_type: str, subject_id: int, facts: list[str]) -> None:
+def _parse_json_list(raw: str) -> list:
+    cleaned = clean_llm_json(raw)
+    if not cleaned:
+        return []
+    if cleaned.startswith("{"):
+        cleaned = f"[{cleaned}]"
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
+async def _store_if_new(
+    pool: asyncpg.Pool, subject_type: str, subject_id: int, facts: list[str]
+) -> None:
     existing = await memory.get_memories(pool, subject_type, subject_id, limit=50)
     existing_lower = {e.lower() for e in existing}
     for fact in facts:
@@ -80,7 +98,9 @@ async def _store_if_new(pool: asyncpg.Pool, subject_type: str, subject_id: int, 
             continue
         if sanitized.lower() in existing_lower:
             continue
-        await memory.add_memory(pool, subject_type, subject_id, sanitized, memory_type="fact")
+        await memory.add_memory(
+            pool, subject_type, subject_id, sanitized, memory_type="fact"
+        )
         logger.info("Memory stored [%s/%d]: %s", subject_type, subject_id, sanitized)
 
 
@@ -91,9 +111,7 @@ async def _extract_via_llm(system: str, content: str) -> list[str]:
         max_tokens=256,
         capability=CAPABILITY_SIMPLE_TASKS,
     )
-    parsed = json.loads(clean_llm_json(raw))
-    if not isinstance(parsed, list):
-        return []
+    parsed = _parse_json_list(raw)
     return [item for item in parsed if isinstance(item, str)]
 
 
@@ -138,13 +156,13 @@ async def extract_and_store_reflection(
             return
         raw = await brain.chat(
             system=_REFLECTION_SYSTEM,
-            messages=[{"role": "user", "content": f"Interaktion:\n{conversation_snippet}"}],
+            messages=[
+                {"role": "user", "content": f"Interaktion:\n{conversation_snippet}"}
+            ],
             max_tokens=256,
             capability=CAPABILITY_CHAT,
         )
-        parsed = json.loads(clean_llm_json(raw))
-        if not isinstance(parsed, list):
-            return
+        parsed = _parse_json_list(raw)
         for item in parsed[:2]:
             if not isinstance(item, dict):
                 continue
@@ -154,16 +172,22 @@ async def extract_and_store_reflection(
             if sanitized is None:
                 continue
             subject_id = user_id if target == "user" else group_id
-            existing = await memory.get_memories(pool, "reflection", subject_id, limit=50)
+            existing = await memory.get_memories(
+                pool, "reflection", subject_id, limit=50
+            )
             if sanitized.lower() in {e.lower() for e in existing}:
                 continue
-            await memory.add_memory(pool, "reflection", subject_id, sanitized, memory_type="fact")
+            await memory.add_memory(
+                pool, "reflection", subject_id, sanitized, memory_type="fact"
+            )
             logger.info("Reflection stored [%s/%d]: %s", target, subject_id, sanitized)
     except Exception as e:
         logger.warning("Reflection extraction failed: %s", e)
 
 
-def _parse_explicit_trigger(text: str, pattern: re.Pattern, group_index: int) -> str | None:
+def _parse_explicit_trigger(
+    text: str, pattern: re.Pattern, group_index: int
+) -> str | None:
     match = pattern.match(text.strip())
     if not match:
         return None
