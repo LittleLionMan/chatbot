@@ -1335,11 +1335,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
-    if not message or not message.text or not user:
-        return
-    bot_username = context.bot.username
-    is_group = chat.type in ("group", "supergroup")
-    text = message.text.strip()
     logger.info(
         "handle_message: text=%r has_voice=%r has_audio=%r has_doc=%r",
         bool(message.text),
@@ -1347,6 +1342,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         bool(message.audio),
         bool(message.document),
     )
+    if not message or not message.text or not user:
+        return
+    bot_username = context.bot.username
+    is_group = chat.type in ("group", "supergroup")
+    text = message.text.strip()
 
     pending_rename: int | None = context.user_data.get("awaiting_rename_agent_id")
     if pending_rename is not None:
