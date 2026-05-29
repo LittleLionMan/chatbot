@@ -48,7 +48,9 @@ class _PendingPlan(TypedDict):
 _pending_plans: dict[int, _PendingPlan] = {}
 _pending_rollbacks: dict[int, dict] = {}
 _pending_clarification_keys: dict[int, tuple[int, str]] = {}
-_pending_agent_context: dict[int, tuple[int, int]] = {}
+_pending_agent_context: dict[int, tuple[int, datetime]] = {}
+
+_AGENT_CONTEXT_TTL_MINUTES = 30
 
 
 def _display_name(user) -> str:
@@ -75,6 +77,30 @@ def _quoted_text(message) -> str | None:
     if quoted.caption:
         return quoted.caption
     return None
+
+
+def _extract_forward_context(message) -> str | None:
+    origin = getattr(message, "forward_origin", None)
+    if origin is None:
+        return None
+    origin_type = getattr(origin, "type", None)
+    if origin_type == "user":
+        sender = getattr(origin, "sender_user", None)
+        if sender:
+            name = (
+                f"{sender.first_name or ''} {sender.last_name or ''}".strip()
+                or sender.username
+            )
+            return f"[Weitergeleitet von: {name}]"
+    if origin_type == "hidden_user":
+        name = getattr(origin, "sender_user_name", None)
+        if name:
+            return f"[Weitergeleitet von: {name}]"
+    if origin_type == "chat":
+        chat = getattr(origin, "sender_chat", None)
+        if chat:
+            return f"[Weitergeleitet aus: {chat.title or 'Kanal'}]"
+    return "[Weitergeleitet]"
 
 
 def _agent_keyboard(agent_id: int) -> InlineKeyboardMarkup:
@@ -121,6 +147,7 @@ async def _handle_file_content(
     caption: str | None,
     triggered_by_mention: bool,
     detected_language: str = "de",
+    forward_context: str | None = None,
 ) -> None:
     message = update.effective_message
     user = update.effective_user
@@ -156,7 +183,10 @@ async def _handle_file_content(
         active_agents=active_agents,
     )
     llm_messages = brain.history_to_llm_messages(history)
+    forward_prefix = f"{forward_context}\n" if forward_context else ""
     user_text = caption if caption else "Was siehst du hier?"
+    if forward_context and not caption:
+        user_text = f"{forward_context} — Bitte verarbeite den Inhalt dieser weitergeleiteten Nachricht."
     b64 = base64.standard_b64encode(file_bytes).decode("utf-8")
     content: list[dict] = [
         {
@@ -258,9 +288,7 @@ async def _handle_pending_plan(
     accumulated = pending["accumulated_context"]
     rounds = pending.get("clarification_rounds", 0)
     current_plan = pending.get("plan", {})
-
     accumulated += f"\n\nUser: {text}"
-
     new_plan = await agent_planner.plan(accumulated, pool, rounds)
 
     if new_plan["status"] == "confirmed":
@@ -423,8 +451,7 @@ async def _handle_pending_clarification(
         edit_payload,
     )
     sent = await message.reply_text(
-        confirmation_msg,
-        reply_markup=agent_edits.confirmation_keyboard(conf_id),
+        confirmation_msg, reply_markup=agent_edits.confirmation_keyboard(conf_id)
     )
     await memory.save_agent_notification(
         pool,
@@ -456,13 +483,7 @@ async def _handle_agent_feedback(
         user_memories = await memory.get_memories(pool, "user", user_id)
         history = await memory.get_recent_messages(pool, chat_id)
         system = brain.build_system_prompt(
-            user_memories,
-            [],
-            [],
-            [],
-            "",
-            None,
-            agent_context=ctx_text,
+            user_memories, [], [], [], "", None, agent_context=ctx_text
         )
         llm_messages = brain.history_to_llm_messages(history)
         llm_messages.append({"role": "user", "content": text})
@@ -494,7 +515,6 @@ async def _handle_agent_feedback(
                 edit_payload = await agent_edits.prepare_data_edit(
                     pool, target_agent, text, ns, key
                 )
-
         if not edit_payload:
             edit_type = "preference"
 
@@ -505,19 +525,16 @@ async def _handle_agent_feedback(
 
     if edit_type == "preference":
         pref_result = await agent_edits.prepare_preference(pool, target_agent, text)
-
         if pref_result is None:
             await message.reply_text(
                 "Ich konnte keine klare Präferenz aus dem Feedback extrahieren."
             )
             return
-
         if isinstance(pref_result, tuple) and pref_result[0] == "clarification":
             _, clarification_text, most_likely_key = pref_result
             sent = await message.reply_text(clarification_text)
             _pending_clarification_keys[user_id] = (target_agent["id"], most_likely_key)
             return
-
         edit_payload = pref_result
 
     if not edit_payload:
@@ -536,10 +553,8 @@ async def _handle_agent_feedback(
         confirmation_msg,
         edit_payload,
     )
-
     sent = await message.reply_text(
-        confirmation_msg,
-        reply_markup=agent_edits.confirmation_keyboard(conf_id),
+        confirmation_msg, reply_markup=agent_edits.confirmation_keyboard(conf_id)
     )
     await memory.save_agent_notification(
         pool,
@@ -610,9 +625,7 @@ async def _handle_agent_intent(
     if intent in ("agent_system", "agent_create"):
         initial_context = f"User: {text}"
         initial_plan = await agent_planner.plan(
-            accumulated_context=initial_context,
-            pool=pool,
-            clarification_rounds=0,
+            accumulated_context=initial_context, pool=pool, clarification_rounds=0
         )
         plan_text = agent_planner.format_plan_message(initial_plan)
         if initial_plan["status"] == "ready":
@@ -849,10 +862,7 @@ async def _handle_task_intent(
 
 
 async def _handle_scraper_intent(
-    update: Update,
-    pool: asyncpg.Pool,
-    text: str,
-    user_id: int,
+    update: Update, pool: asyncpg.Pool, text: str, user_id: int
 ) -> None:
     message = update.effective_message
     extracted = await intent_classifier.extract_scraper_create_params(text, pool)
@@ -889,10 +899,7 @@ async def _handle_scraper_intent(
 
 
 async def _handle_monitor_intent(
-    update: Update,
-    pool: asyncpg.Pool,
-    text: str,
-    user_id: int,
+    update: Update, pool: asyncpg.Pool, text: str, user_id: int
 ) -> None:
     message = update.effective_message
     extracted = await intent_classifier.extract_monitor_create_params(text, pool)
@@ -1126,7 +1133,7 @@ async def _reply(
         agent_id = notification_context.get("agent_id")
         target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
         if target_agent:
-            _pending_agent_context[user.id] = (agent_id, reply_to_id or 0)
+            _pending_agent_context[user.id] = (agent_id, datetime.now(timezone.utc))
             logger.info(
                 "_reply: reply to agent notification → classifying with notification context for %s",
                 target_agent["name"],
@@ -1142,38 +1149,7 @@ async def _reply(
             intent = classified["intent"]
             if intent not in ("agent_feedback", "agent_talk", "agent_trigger", "none"):
                 classified["intent"] = "agent_feedback"
-            await _handle_agent_intent(
-                update,
-                pool,
-                text,
-                classified["intent"],
-                user.id,
-                chat.id,
-                active_agents,
-                notification_context=notification_context,
-                classified=classified,
-            )
-            return
-
-    pending_agent = _pending_agent_context.get(user.id)
-    if pending_agent and not notification_context:
-        agent_id, _ = pending_agent
-        target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
-        if target_agent:
-            logger.info(
-                "_reply: continuing agent feedback context for %s", target_agent["name"]
-            )
-            active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
-            classified = await intent_classifier.classify(
-                text,
-                pool,
-                has_active_agents=bool(active_agents),
-                has_active_tasks=bool(active_tasks),
-            )
-            intent = classified["intent"]
-            if intent in ("agent_feedback", "agent_talk", "agent_trigger"):
-                if intent not in ("agent_talk", "agent_trigger"):
-                    classified["intent"] = "agent_feedback"
+            if classified["intent"] != "none":
                 await _handle_agent_intent(
                     update,
                     pool,
@@ -1182,12 +1158,61 @@ async def _reply(
                     user.id,
                     chat.id,
                     active_agents,
-                    notification_context={"agent_id": agent_id},
+                    notification_context=notification_context,
                     classified=classified,
                 )
                 return
-            else:
-                _pending_agent_context.pop(user.id, None)
+
+    pending_agent = _pending_agent_context.get(user.id)
+    if pending_agent and reply_to_id is not None:
+        agent_id, set_at = pending_agent
+        age_minutes = (datetime.now(timezone.utc) - set_at).total_seconds() / 60
+        if age_minutes > _AGENT_CONTEXT_TTL_MINUTES:
+            _pending_agent_context.pop(user.id, None)
+            logger.info("_reply: agent context expired for user %d", user.id)
+        else:
+            target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
+            if target_agent:
+                replied_to_notification = await memory.get_agent_notification(
+                    pool, reply_to_id, chat.id
+                )
+                if (
+                    replied_to_notification
+                    and replied_to_notification.get("agent_id") == agent_id
+                ):
+                    logger.info(
+                        "_reply: continuing agent feedback context for %s",
+                        target_agent["name"],
+                    )
+                    active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
+                    classified = await intent_classifier.classify(
+                        text,
+                        pool,
+                        has_active_agents=bool(active_agents),
+                        has_active_tasks=bool(active_tasks),
+                        notification_context=replied_to_notification,
+                    )
+                    intent = classified["intent"]
+                    if intent not in (
+                        "agent_feedback",
+                        "agent_talk",
+                        "agent_trigger",
+                        "none",
+                    ):
+                        classified["intent"] = "agent_feedback"
+                    if classified["intent"] != "none":
+                        await _handle_agent_intent(
+                            update,
+                            pool,
+                            text,
+                            classified["intent"],
+                            user.id,
+                            chat.id,
+                            active_agents,
+                            notification_context=replied_to_notification,
+                            classified=classified,
+                        )
+                        return
 
     active_tasks = await memory.get_active_tasks_for_user(pool, user.id)
 
@@ -1267,6 +1292,25 @@ async def _reply(
     )
 
 
+async def _transcribe_audio_message(message) -> tuple[bytes, str] | None:
+    if message.voice:
+        f = await message.voice.get_file()
+        return bytes(await f.download_as_bytearray()), "voice"
+    if message.audio:
+        f = await message.audio.get_file()
+        return bytes(await f.download_as_bytearray()), "audio"
+    if message.document and message.document.mime_type in (
+        "audio/ogg",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/aac",
+        "audio/x-m4a",
+    ):
+        f = await message.document.get_file()
+        return bytes(await f.download_as_bytearray()), "document_audio"
+    return None
+
+
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pool: asyncpg.Pool = context.bot_data["pool"]
     message = update.effective_message
@@ -1278,16 +1322,25 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if ratelimit.is_any_limited():
         await message.reply_text(ratelimit.rate_limit_message())
         return
+
+    forward_context = _extract_forward_context(message)
+
     try:
-        voice_file = await message.voice.get_file()
-        audio_bytes = await voice_file.download_as_bytearray()
-        transcribed, lang = await voice.transcribe(bytes(audio_bytes))
+        result = await _transcribe_audio_message(message)
+        if not result:
+            return
+        audio_bytes, _ = result
+        transcribed, lang = await voice.transcribe(audio_bytes)
     except Exception as e:
         logger.error("STT failed: %s", e)
         await message.reply_text("Sprachnachricht konnte nicht transkribiert werden.")
         return
     if not transcribed.strip():
         return
+
+    if forward_context:
+        transcribed = f"{forward_context}\n{transcribed}"
+
     is_mention = (
         bot_username and f"@{bot_username}".lower() in transcribed.lower()
     ) or config.BOT_NAME.lower() in transcribed.lower()
@@ -1307,9 +1360,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
         else:
             should = await decider.should_respond_spontaneously(
-                pool=pool,
-                group_id=chat.id,
-                message_text=transcribed,
+                pool=pool, group_id=chat.id, message_text=transcribed
             )
             if should:
                 await _reply(
@@ -1335,13 +1386,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
-    logger.info(
-        "handle_message: text=%r has_voice=%r has_audio=%r has_doc=%r",
-        bool(message.text),
-        bool(message.voice),
-        bool(message.audio),
-        bool(message.document),
-    )
     if not message or not message.text or not user:
         return
     bot_username = context.bot.username
@@ -1377,19 +1421,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         and message.reply_to_message.from_user.id == context.bot.id
     )
 
+    forward_context = _extract_forward_context(message)
+    if forward_context and text:
+        text = f"{forward_context}\n{text}"
+
     if is_group:
         if is_mention or is_reply_to_bot:
             if ratelimit.is_any_limited():
                 await message.reply_text(ratelimit.rate_limit_message())
                 return
-            await _reply(update, pool, triggered_by_mention=True)
+            await _reply(
+                update,
+                pool,
+                triggered_by_mention=True,
+                transcribed_text=text if forward_context else None,
+            )
         else:
             if ratelimit.is_any_limited():
                 return
             should = await decider.should_respond_spontaneously(
-                pool=pool,
-                group_id=chat.id,
-                message_text=text,
+                pool=pool, group_id=chat.id, message_text=text
             )
             if should:
                 await _reply(update, pool, triggered_by_mention=False)
@@ -1397,7 +1448,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if ratelimit.is_any_limited():
             await message.reply_text(ratelimit.rate_limit_message())
             return
-        await _reply(update, pool, triggered_by_mention=True)
+        await _reply(
+            update,
+            pool,
+            triggered_by_mention=True,
+            transcribed_text=text if forward_context else None,
+        )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1432,6 +1488,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     photo = message.photo[-1]
     photo_file = await photo.get_file()
     file_bytes = await photo_file.download_as_bytearray()
+    forward_context = _extract_forward_context(message)
     await _handle_file_content(
         update,
         pool,
@@ -1439,6 +1496,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         media_type="image/jpeg",
         caption=caption,
         triggered_by_mention=triggered,
+        forward_context=forward_context,
     )
 
 
@@ -1459,11 +1517,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "image/webp": "image/webp",
         "application/pdf": "application/pdf",
     }
-    if mime not in SUPPORTED_MIME:
-        await message.reply_text(
-            f"Dieses Dateiformat ({mime or 'unbekannt'}) kann ich noch nicht lesen."
-        )
-        return
+    AUDIO_MIME: set[str] = {
+        "audio/ogg",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/aac",
+        "audio/x-m4a",
+    }
+
     bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
     is_mention = bool(
@@ -1479,12 +1540,51 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         and message.reply_to_message.from_user.id == context.bot.id
     )
     triggered = not is_group or is_mention or is_reply_to_bot
+
+    if mime in AUDIO_MIME:
+        if is_group and not triggered:
+            return
+        if ratelimit.is_any_limited():
+            if triggered:
+                await message.reply_text(ratelimit.rate_limit_message())
+            return
+        forward_context = _extract_forward_context(message)
+        try:
+            result = await _transcribe_audio_message(message)
+            if not result:
+                return
+            audio_bytes, _ = result
+            transcribed, lang = await voice.transcribe(audio_bytes)
+        except Exception as e:
+            logger.error("STT (document audio) failed: %s", e)
+            await message.reply_text("Audiodatei konnte nicht transkribiert werden.")
+            return
+        if not transcribed.strip():
+            return
+        if forward_context:
+            transcribed = f"{forward_context}\n{transcribed}"
+        await _reply(
+            update,
+            pool,
+            triggered_by_mention=True,
+            transcribed_text=transcribed,
+            detected_language="de",
+        )
+        return
+
+    if mime not in SUPPORTED_MIME:
+        await message.reply_text(
+            f"Dieses Dateiformat ({mime or 'unbekannt'}) kann ich noch nicht lesen."
+        )
+        return
+
     if is_group and not triggered:
         return
     if ratelimit.is_any_limited():
         if triggered:
             await message.reply_text(ratelimit.rate_limit_message())
         return
+    forward_context = _extract_forward_context(message)
     doc_file = await doc.get_file()
     file_bytes = await doc_file.download_as_bytearray()
     await _handle_file_content(
@@ -1494,6 +1594,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         media_type=SUPPORTED_MIME[mime],
         caption=caption,
         triggered_by_mention=triggered,
+        forward_context=forward_context,
     )
 
 
@@ -1537,14 +1638,14 @@ async def handle_callback_query(
                 300, lambda: _pending_rollbacks.pop(rollback_id, None)
             )
             await query.edit_message_text(
-                result,
-                reply_markup=agent_edits.rollback_keyboard(rollback_id),
+                result, reply_markup=agent_edits.rollback_keyboard(rollback_id)
             )
 
         elif action == "no":
             await memory.clear_pending_confirmation(
                 pool, user.id, query.message.chat.id
             )
+            _pending_agent_context.pop(user.id, None)
             await query.edit_message_text("Abgebrochen.")
 
         elif action == "adjust":
