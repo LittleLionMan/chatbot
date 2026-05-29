@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import json
 import logging
 from typing import TypedDict
+
 import asyncpg
+
 from bot import brain
 from bot.models import CAPABILITY_SIMPLE_TASKS
 from bot.utils import clean_llm_json
@@ -37,7 +40,7 @@ Intent-Kategorien:
 - "task_list": User möchte aktive Aufgaben sehen.
 - "scraper_create": User möchte einen Scraper einrichten der eine externe Plattform durchsucht und einen Agenten triggert.
 - "monitor_create": User möchte einen RSS- oder Feed-Monitor einrichten.
-- "none": Normale Unterhaltung, Frage, Reaktion ohne Änderungswunsch, einmalige Anfrage.
+- "none": Normale Unterhaltung, Frage, Reaktion ohne Änderungswunsch, einmalige Anfrage. Auch: Fragen über den Bot selbst ("wer bin ich", "weißt du wer ich bin", "kennst du mich"), Beschwerden, Missverständnisse, alles was kein Agent-Intent ist.
 
 Trennlinien — diese sind entscheidend:
 
@@ -45,8 +48,12 @@ agent_trigger vs agent_talk:
 Unmittelbare Ausführung oder Stopp → trigger. Abfrage oder Änderung für zukünftige Läufe → talk.
 
 agent_talk vs agent_feedback:
-agent_talk: User fragt nach dem Agenten selbst — seinem State, seinen Daten, seiner Konfiguration. Kein Bezug auf einen konkreten Output.
+agent_talk: User fragt nach dem Agenten selbst — seinem State, seinen Daten, seiner Konfiguration. Kein Bezug auf einen konkreten Output. Muss einen klar identifizierbaren Agenten als Gesprächsgegenstand haben.
 agent_feedback: User reagiert auf etwas das der Agent produziert hat — ein Ergebnis, ein Angebot, einen Bericht. Der Output ist der Ausgangspunkt.
+
+agent_talk vs none:
+Wenn unklar ob ein Agent gemeint ist, oder wenn die Frage den Bot selbst betrifft ("weißt du wer ich bin", "kennst du mich", "warum antwortest du so") → none.
+agent_talk nur wenn ein konkreter Agent explizit oder eindeutig implizit gemeint ist.
 
 agent_feedback edit_type — die drei Typen unterscheiden sich durch die Art des Änderungswunsches:
 "data_edit": User möchte etwas in einem gespeicherten Dokument oder Datensatz des Agenten ändern — konkrete Inhalte, nicht Verhalten. Erkennbar daran dass eine bestimmte gespeicherte Information falsch oder veraltet ist.
@@ -75,14 +82,45 @@ Nutze den Output-Inhalt um die Nutzerantwort einzuordnen. Der Output ist der Bez
 - Neutrale Reaktion, Dank, kein Handlungsbedarf → none"""
 
 _VALID_INTENTS = {
-    "agent_system", "agent_create", "agent_trigger", "agent_talk", "agent_feedback",
-    "task_create", "task_stop", "task_list", "agent_list",
-    "scraper_create", "monitor_create", "none",
+    "agent_system",
+    "agent_create",
+    "agent_trigger",
+    "agent_talk",
+    "agent_feedback",
+    "task_create",
+    "task_stop",
+    "task_list",
+    "agent_list",
+    "scraper_create",
+    "monitor_create",
+    "none",
 }
 
-_DATA_EDIT_SIGNALS = {"entferne", "lösche", "ändere den satz", "streiche", "korrigiere den", "ersetze den"}
-_STEP_PATCH_SIGNALS = {"filtere", "rausfiltern", "nicht einbeziehen", "dieser step", "der step", "pipeline"}
-_PREFERENCE_SIGNALS = {"nicht interessant", "kein ", "keine ", "zu klein", "zu groß", "ohne ", "das nicht"}
+_DATA_EDIT_SIGNALS = {
+    "entferne",
+    "lösche",
+    "ändere den satz",
+    "streiche",
+    "korrigiere den",
+    "ersetze den",
+}
+_STEP_PATCH_SIGNALS = {
+    "filtere",
+    "rausfiltern",
+    "nicht einbeziehen",
+    "dieser step",
+    "der step",
+    "pipeline",
+}
+_PREFERENCE_SIGNALS = {
+    "nicht interessant",
+    "kein ",
+    "keine ",
+    "zu klein",
+    "zu groß",
+    "ohne ",
+    "das nicht",
+}
 
 _TRIGGER_PAYLOAD_SYSTEM = """Extrahiere aus einer Nutzeranfrage den Agentennamen und alle relevanten Parameter als JSON.
 
@@ -200,15 +238,22 @@ async def classify(
 ) -> ClassifiedIntent:
     context_hints: list[str] = []
     if not has_active_agents:
-        context_hints.append("Der Nutzer hat keine aktiven Agenten — agent_trigger, agent_talk, agent_feedback und agent_list sind daher unwahrscheinlich.")
+        context_hints.append(
+            "Der Nutzer hat keine aktiven Agenten — agent_trigger, agent_talk, agent_feedback und agent_list sind daher unwahrscheinlich."
+        )
     if not has_active_tasks:
-        context_hints.append("Der Nutzer hat keine aktiven Aufgaben — task_stop und task_list sind daher unwahrscheinlich.")
+        context_hints.append(
+            "Der Nutzer hat keine aktiven Aufgaben — task_stop und task_list sind daher unwahrscheinlich."
+        )
 
     content = text
     if notification_context and notification_context.get("notification_type") not in (
-        "confirmation", "adjust_request"
+        "confirmation",
+        "adjust_request",
     ):
-        notification_summary = (notification_context.get("payload_summary") or {}).get("summary", "")
+        notification_summary = (notification_context.get("payload_summary") or {}).get(
+            "summary", ""
+        )
         if notification_summary:
             content = f"Agent hat folgendes gemeldet:\n{notification_summary}\n\nNutzer antwortet: {text}"
 
@@ -227,7 +272,9 @@ async def classify(
         parsed = json.loads(clean_llm_json(raw))
         intent = parsed.get("intent", "none").strip().lower()
         if intent not in _VALID_INTENTS:
-            logger.warning("classifier returned unknown intent %r, falling back to none", intent)
+            logger.warning(
+                "classifier returned unknown intent %r, falling back to none", intent
+            )
             intent = "none"
         edit_type: str | None = None
         if intent == "agent_feedback":
@@ -242,7 +289,12 @@ async def classify(
         return result
     except Exception as e:
         logger.warning("intent classification failed: %s", e)
-        return {"intent": "none", "needs_search": True, "wants_voice": False, "edit_type": None}
+        return {
+            "intent": "none",
+            "needs_search": True,
+            "wants_voice": False,
+            "edit_type": None,
+        }
 
 
 async def extract_trigger_payload(text: str, pool: asyncpg.Pool) -> dict:

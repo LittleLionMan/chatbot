@@ -1227,7 +1227,7 @@ async def _reply(
     needs_search = classified["needs_search"]
     wants_voice = force_voice or classified["wants_voice"]
 
-    logger.debug(
+    logger.info(
         "_reply intent=%s search=%s voice=%s", intent, needs_search, wants_voice
     )
 
@@ -1454,6 +1454,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             triggered_by_mention=True,
             transcribed_text=text if forward_context else None,
         )
+
+
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    pool: asyncpg.Pool = context.bot_data["pool"]
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not message.audio:
+        return
+    is_group = chat.type in ("group", "supergroup")
+    if ratelimit.is_any_limited():
+        await message.reply_text(ratelimit.rate_limit_message())
+        return
+    forward_context = _extract_forward_context(message)
+    try:
+        result = await _transcribe_audio_message(message)
+        if not result:
+            return
+        audio_bytes, _ = result
+        transcribed, lang = await voice.transcribe(audio_bytes)
+    except Exception as e:
+        logger.error("STT (audio) failed: %s", e)
+        await message.reply_text("Audiodatei konnte nicht transkribiert werden.")
+        return
+    if not transcribed.strip():
+        return
+    if forward_context:
+        transcribed = f"{forward_context}\n{transcribed}"
+    await _reply(
+        update,
+        pool,
+        triggered_by_mention=True,
+        transcribed_text=transcribed,
+        detected_language="de",
+    )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
