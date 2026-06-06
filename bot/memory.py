@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import json
+from datetime import datetime, timedelta, timezone
+
 import asyncpg
-from datetime import datetime, timezone, timedelta
+
 from bot import config
 
 
@@ -15,7 +18,13 @@ async def get_pool() -> asyncpg.Pool:
     )
 
 
-async def upsert_user(pool: asyncpg.Pool, telegram_id: int, username: str | None, first_name: str | None, last_name: str | None) -> None:
+async def upsert_user(
+    pool: asyncpg.Pool,
+    telegram_id: int,
+    username: str | None,
+    first_name: str | None,
+    last_name: str | None,
+) -> None:
     await pool.execute(
         """
         INSERT INTO users (telegram_id, username, first_name, last_name, timezone, last_seen_at)
@@ -26,12 +35,18 @@ async def upsert_user(pool: asyncpg.Pool, telegram_id: int, username: str | None
             last_name = EXCLUDED.last_name,
             last_seen_at = NOW()
         """,
-        telegram_id, username, first_name, last_name, config.BOT_DEFAULT_TIMEZONE,
+        telegram_id,
+        username,
+        first_name,
+        last_name,
+        config.BOT_DEFAULT_TIMEZONE,
     )
 
 
 async def get_user_timezone(pool: asyncpg.Pool, user_id: int) -> str:
-    row = await pool.fetchrow("SELECT timezone FROM users WHERE telegram_id = $1", user_id)
+    row = await pool.fetchrow(
+        "SELECT timezone FROM users WHERE telegram_id = $1", user_id
+    )
     if not row:
         return config.BOT_DEFAULT_TIMEZONE
     return row["timezone"] or config.BOT_DEFAULT_TIMEZONE
@@ -40,7 +55,8 @@ async def get_user_timezone(pool: asyncpg.Pool, user_id: int) -> str:
 async def set_user_timezone(pool: asyncpg.Pool, user_id: int, timezone: str) -> None:
     await pool.execute(
         "UPDATE users SET timezone = $1 WHERE telegram_id = $2",
-        timezone, user_id,
+        timezone,
+        user_id,
     )
 
 
@@ -51,40 +67,90 @@ async def upsert_group(pool: asyncpg.Pool, telegram_id: int, title: str | None) 
         VALUES ($1, $2)
         ON CONFLICT (telegram_id) DO UPDATE SET title = EXCLUDED.title
         """,
-        telegram_id, title,
+        telegram_id,
+        title,
     )
 
 
-async def save_message(pool: asyncpg.Pool, chat_id: int, user_id: int | None, role: str, content: str) -> None:
+async def save_message(
+    pool: asyncpg.Pool, chat_id: int, user_id: int | None, role: str, content: str
+) -> None:
     await pool.execute(
         "INSERT INTO messages (chat_id, user_id, role, content) VALUES ($1, $2, $3, $4)",
-        chat_id, user_id, role, content,
+        chat_id,
+        user_id,
+        role,
+        content,
     )
 
 
-async def get_recent_messages(pool: asyncpg.Pool, chat_id: int, limit: int = 20) -> list[dict]:
+async def save_message_annotated(
+    pool: asyncpg.Pool,
+    chat_id: int,
+    user_id: int | None,
+    role: str,
+    content: str,
+    agent_id: int | None = None,
+    meta: dict | None = None,
+) -> None:
+    await pool.execute(
+        """
+        INSERT INTO messages (chat_id, user_id, role, content, agent_id, meta)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        """,
+        chat_id,
+        user_id,
+        role,
+        content,
+        agent_id,
+        json.dumps(meta) if meta else None,
+    )
+
+
+async def get_recent_messages(
+    pool: asyncpg.Pool,
+    chat_id: int,
+    limit: int = 20,
+    max_agent_messages: int = 3,
+) -> list[dict]:
     rows = await pool.fetch(
         """
-        SELECT role, content, user_id, created_at
+        SELECT role, content, user_id, agent_id, created_at
         FROM messages
         WHERE chat_id = $1
         ORDER BY created_at DESC
         LIMIT $2
         """,
-        chat_id, limit,
+        chat_id,
+        limit * 4,
     )
-    return [dict(r) for r in reversed(rows)]
+    chronological = list(reversed(rows))
+    result: list[dict] = []
+    agent_count = 0
+    for row in chronological:
+        d = dict(row)
+        if d.get("agent_id") is not None:
+            if agent_count >= max_agent_messages:
+                continue
+            agent_count += 1
+        result.append(d)
+    return result[-limit:]
 
 
-async def count_unobserved_messages(pool: asyncpg.Pool, chat_id: int, since: datetime) -> int:
+async def count_unobserved_messages(
+    pool: asyncpg.Pool, chat_id: int, since: datetime
+) -> int:
     row = await pool.fetchrow(
         "SELECT COUNT(*) FROM messages WHERE chat_id = $1 AND created_at > $2",
-        chat_id, since,
+        chat_id,
+        since,
     )
     return row["count"] if row else 0
 
 
-async def get_messages_since(pool: asyncpg.Pool, chat_id: int, since: datetime) -> list[dict]:
+async def get_messages_since(
+    pool: asyncpg.Pool, chat_id: int, since: datetime
+) -> list[dict]:
     rows = await pool.fetch(
         """
         SELECT role, content, user_id, created_at
@@ -92,7 +158,8 @@ async def get_messages_since(pool: asyncpg.Pool, chat_id: int, since: datetime) 
         WHERE chat_id = $1 AND created_at > $2
         ORDER BY created_at ASC
         """,
-        chat_id, since,
+        chat_id,
+        since,
     )
     return [dict(r) for r in rows]
 
@@ -105,17 +172,26 @@ async def add_memory(
     memory_type: str = "fact",
     priority: str | None = None,
     observed_at: datetime | None = None,
+    is_compressed: bool = False,
 ) -> None:
     await pool.execute(
         """
-        INSERT INTO memories (subject_type, subject_id, memory_type, priority, observed_at, content)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO memories (subject_type, subject_id, memory_type, priority, observed_at, content, is_compressed)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         """,
-        subject_type, subject_id, memory_type, priority, observed_at, content,
+        subject_type,
+        subject_id,
+        memory_type,
+        priority,
+        observed_at,
+        content,
+        is_compressed,
     )
 
 
-async def get_memories(pool: asyncpg.Pool, subject_type: str, subject_id: int, limit: int = 10) -> list[str]:
+async def get_memories(
+    pool: asyncpg.Pool, subject_type: str, subject_id: int, limit: int = 10
+) -> list[str]:
     rows = await pool.fetch(
         """
         SELECT content FROM memories
@@ -123,12 +199,16 @@ async def get_memories(pool: asyncpg.Pool, subject_type: str, subject_id: int, l
         ORDER BY created_at DESC
         LIMIT $3
         """,
-        subject_type, subject_id, limit,
+        subject_type,
+        subject_id,
+        limit,
     )
     return [r["content"] for r in rows]
 
 
-async def get_observations(pool: asyncpg.Pool, subject_id: int, limit: int = 40) -> list[dict]:
+async def get_observations(
+    pool: asyncpg.Pool, subject_id: int, limit: int = 40
+) -> list[dict]:
     rows = await pool.fetch(
         """
         SELECT content, priority, observed_at, is_compressed
@@ -137,7 +217,8 @@ async def get_observations(pool: asyncpg.Pool, subject_id: int, limit: int = 40)
         ORDER BY observed_at DESC
         LIMIT $2
         """,
-        subject_id, limit,
+        subject_id,
+        limit,
     )
     return [dict(r) for r in rows]
 
@@ -179,7 +260,9 @@ async def get_reflection_memories(
         ORDER BY created_at DESC
         LIMIT $3
         """,
-        group_id, user_id, limit,
+        group_id,
+        user_id,
+        limit,
     )
     return [r["content"] for r in rows]
 
@@ -217,10 +300,7 @@ async def get_sessions_due_for_extraction(
 
 async def mark_session_extracted(pool: asyncpg.Pool, group_id: int) -> None:
     await pool.execute(
-        """
-        UPDATE session_extractions SET last_extracted_at = NOW()
-        WHERE group_id = $1
-        """,
+        "UPDATE session_extractions SET last_extracted_at = NOW() WHERE group_id = $1",
         group_id,
     )
 
@@ -237,7 +317,8 @@ async def get_session_messages(
         WHERE chat_id = $1 AND created_at > $2
         ORDER BY created_at ASC
         """,
-        group_id, since,
+        group_id,
+        since,
     )
     return [dict(r) for r in rows]
 
@@ -267,7 +348,9 @@ async def get_last_observed_at(pool: asyncpg.Pool, chat_id: int) -> datetime:
     return ts.replace(tzinfo=None) if ts.tzinfo else ts
 
 
-async def get_cooldown_seconds_since_last_spontaneous(pool: asyncpg.Pool, group_id: int) -> float:
+async def get_cooldown_seconds_since_last_spontaneous(
+    pool: asyncpg.Pool, group_id: int
+) -> float:
     row = await pool.fetchrow(
         "SELECT last_spontaneous_at FROM group_cooldowns WHERE group_id = $1",
         group_id,
@@ -304,7 +387,12 @@ async def create_task(
         VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         """,
-        user_id, source_chat_id, target_chat_id, description, schedule, next_run_at,
+        user_id,
+        source_chat_id,
+        target_chat_id,
+        description,
+        schedule,
+        next_run_at,
     )
     return row["id"]
 
@@ -334,10 +422,13 @@ async def get_due_tasks(pool: asyncpg.Pool) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def update_task_run(pool: asyncpg.Pool, task_id: int, next_run_at: datetime) -> None:
+async def update_task_run(
+    pool: asyncpg.Pool, task_id: int, next_run_at: datetime
+) -> None:
     await pool.execute(
         "UPDATE tasks SET last_run_at = NOW(), next_run_at = $1 WHERE id = $2",
-        next_run_at, task_id,
+        next_run_at,
+        task_id,
     )
 
 
@@ -355,7 +446,8 @@ async def deactivate_tasks_by_description(
         UPDATE tasks SET is_active = FALSE
         WHERE user_id = $1 AND id = ANY($2::int[]) AND is_active = TRUE
         """,
-        user_id, task_ids,
+        user_id,
+        task_ids,
     )
     return int(result.split()[-1])
 
@@ -375,7 +467,12 @@ async def create_agent(
         VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         """,
-        user_id, target_chat_id, name, json.dumps(config_json), schedule, next_run_at,
+        user_id,
+        target_chat_id,
+        name,
+        json.dumps(config_json),
+        schedule,
+        next_run_at,
     )
     return row["id"]
 
@@ -412,15 +509,19 @@ async def get_agent_by_name(pool: asyncpg.Pool, user_id: int, name: str) -> dict
         FROM agents
         WHERE user_id = $1 AND LOWER(name) = LOWER($2)
         """,
-        user_id, name,
+        user_id,
+        name,
     )
     return dict(row) if row else None
 
 
-async def update_agent_run(pool: asyncpg.Pool, agent_id: int, next_run_at: datetime) -> None:
+async def update_agent_run(
+    pool: asyncpg.Pool, agent_id: int, next_run_at: datetime
+) -> None:
     await pool.execute(
         "UPDATE agents SET last_run_at = NOW(), next_run_at = $1 WHERE id = $2",
-        next_run_at, agent_id,
+        next_run_at,
+        agent_id,
     )
 
 
@@ -432,10 +533,13 @@ async def rename_agent(pool: asyncpg.Pool, agent_id: int, new_name: str) -> None
     await pool.execute("UPDATE agents SET name = $1 WHERE id = $2", new_name, agent_id)
 
 
-async def update_agent_config(pool: asyncpg.Pool, agent_id: int, config_json: dict) -> None:
+async def update_agent_config(
+    pool: asyncpg.Pool, agent_id: int, config_json: dict
+) -> None:
     await pool.execute(
         "UPDATE agents SET config = $1 WHERE id = $2",
-        json.dumps(config_json), agent_id,
+        json.dumps(config_json),
+        agent_id,
     )
 
 
@@ -447,7 +551,9 @@ async def get_agent_state(pool: asyncpg.Pool, agent_id: int) -> dict[str, str]:
     return {r["key"]: r["value"] for r in rows}
 
 
-async def get_agent_state_by_name(pool: asyncpg.Pool, name: str) -> dict[str, str] | None:
+async def get_agent_state_by_name(
+    pool: asyncpg.Pool, name: str
+) -> dict[str, str] | None:
     row = await pool.fetchrow(
         "SELECT id FROM agents WHERE LOWER(name) = LOWER($1) AND is_active = TRUE LIMIT 1",
         name,
@@ -461,7 +567,9 @@ async def get_agent_state_by_name(pool: asyncpg.Pool, name: str) -> dict[str, st
     return {r["key"]: r["value"] for r in rows}
 
 
-async def set_agent_state(pool: asyncpg.Pool, agent_id: int, state: dict[str, str]) -> None:
+async def set_agent_state(
+    pool: asyncpg.Pool, agent_id: int, state: dict[str, str]
+) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             for key, value in state.items():
@@ -472,11 +580,15 @@ async def set_agent_state(pool: asyncpg.Pool, agent_id: int, state: dict[str, st
                     ON CONFLICT (agent_id, key) DO UPDATE
                     SET value = EXCLUDED.value, updated_at = NOW()
                     """,
-                    agent_id, key, value,
+                    agent_id,
+                    key,
+                    value,
                 )
 
 
-async def get_agent_memories(pool: asyncpg.Pool, agent_id: int, limit: int = 20) -> list[str]:
+async def get_agent_memories(
+    pool: asyncpg.Pool, agent_id: int, limit: int = 20
+) -> list[str]:
     rows = await pool.fetch(
         """
         SELECT content FROM memories
@@ -484,7 +596,8 @@ async def get_agent_memories(pool: asyncpg.Pool, agent_id: int, limit: int = 20)
         ORDER BY created_at DESC
         LIMIT $2
         """,
-        agent_id, limit,
+        agent_id,
+        limit,
     )
     return [r["content"] for r in rows]
 
@@ -503,7 +616,10 @@ async def write_agent_data(
         ON CONFLICT (agent_id, namespace, key) DO UPDATE
         SET value = EXCLUDED.value, updated_at = NOW()
         """,
-        agent_id, namespace, key, value,
+        agent_id,
+        namespace,
+        key,
+        value,
     )
 
 
@@ -515,7 +631,9 @@ async def read_agent_data(
 ) -> str | None:
     row = await pool.fetchrow(
         "SELECT value FROM agent_data WHERE agent_id = $1 AND namespace = $2 AND key = $3",
-        agent_id, namespace, key,
+        agent_id,
+        namespace,
+        key,
     )
     return row["value"] if row else None
 
@@ -535,7 +653,9 @@ async def query_agent_data(
             ORDER BY updated_at DESC
             LIMIT $3
             """,
-            namespace, agent_id, limit,
+            namespace,
+            agent_id,
+            limit,
         )
     else:
         rows = await pool.fetch(
@@ -546,7 +666,8 @@ async def query_agent_data(
             ORDER BY updated_at DESC
             LIMIT $2
             """,
-            namespace, limit,
+            namespace,
+            limit,
         )
     return [dict(r) for r in rows]
 
@@ -564,7 +685,8 @@ async def get_all_agent_data(
         ORDER BY namespace, key
         LIMIT $2
         """,
-        agent_id, limit,
+        agent_id,
+        limit,
     )
     return [dict(r) for r in rows]
 
@@ -581,7 +703,10 @@ async def enqueue_agent_trigger(
         INSERT INTO agent_trigger_queue (source_agent_id, target_agent_name, payload, scheduled_for)
         VALUES ($1, $2, $3, NOW() + ($4 * INTERVAL '1 minute'))
         """,
-        source_agent_id, target_agent_name, json.dumps(payload), delay_minutes,
+        source_agent_id,
+        target_agent_name,
+        json.dumps(payload),
+        delay_minutes,
     )
 
 
@@ -638,7 +763,10 @@ async def log_llm_usage(
 ) -> None:
     await pool.execute(
         "INSERT INTO llm_usage (caller, model, input_tokens, output_tokens) VALUES ($1, $2, $3, $4)",
-        caller, model, input_tokens, output_tokens,
+        caller,
+        model,
+        input_tokens,
+        output_tokens,
     )
 
 
@@ -664,8 +792,15 @@ async def create_monitor_config(
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id
         """,
-        monitor_type, name, source, source_agent, source_state_key, source_format,
-        target_agent, feed_templates, poll_interval_seconds,
+        monitor_type,
+        name,
+        source,
+        source_agent,
+        source_state_key,
+        source_format,
+        target_agent,
+        feed_templates,
+        poll_interval_seconds,
         keywords or [],
         json.dumps(extra_config or {}),
     )
@@ -673,9 +808,7 @@ async def create_monitor_config(
 
 
 async def get_monitor_configs(pool: asyncpg.Pool) -> list[dict]:
-    rows = await pool.fetch(
-        "SELECT * FROM monitor_configs ORDER BY id"
-    )
+    rows = await pool.fetch("SELECT * FROM monitor_configs ORDER BY id")
     return [dict(r) for r in rows]
 
 
@@ -695,14 +828,19 @@ async def create_scraper_config(
         VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         """,
-        platform, category, query,
+        platform,
+        category,
+        query,
         json.dumps(filters or {}),
-        target_agent, poll_interval_seconds,
+        target_agent,
+        poll_interval_seconds,
     )
     return row["id"]
 
 
-async def get_scraper_configs(pool: asyncpg.Pool, active_only: bool = True) -> list[dict]:
+async def get_scraper_configs(
+    pool: asyncpg.Pool, active_only: bool = True
+) -> list[dict]:
     rows = await pool.fetch(
         """
         SELECT id, platform, category, query, filters, target_agent,
@@ -740,7 +878,9 @@ async def get_listings(
         ORDER BY first_seen_at DESC
         LIMIT $3
         """,
-        category, platform, limit,
+        category,
+        platform,
+        limit,
     )
     return [dict(r) for r in rows]
 
@@ -761,6 +901,7 @@ async def get_listing_by_id(pool: asyncpg.Pool, listing_id: int) -> dict | None:
 async def delete_listing(pool: asyncpg.Pool, listing_id: int) -> None:
     await pool.execute("DELETE FROM listings WHERE id = $1", listing_id)
 
+
 async def save_agent_notification(
     pool: asyncpg.Pool,
     message_id: int,
@@ -775,7 +916,10 @@ async def save_agent_notification(
             (message_id, chat_id, agent_id, notification_type, payload_summary)
         VALUES ($1, $2, $3, $4, $5)
         """,
-        message_id, chat_id, agent_id, notification_type,
+        message_id,
+        chat_id,
+        agent_id,
+        notification_type,
         json.dumps(payload_summary or {}),
     )
 
@@ -791,7 +935,8 @@ async def get_agent_notification(
         FROM agent_notifications
         WHERE message_id = $1 AND chat_id = $2
         """,
-        message_id, chat_id,
+        message_id,
+        chat_id,
     )
     if not row:
         return None
@@ -825,14 +970,20 @@ async def save_pending_confirmation(
         ON CONFLICT DO NOTHING
         RETURNING id
         """,
-        chat_id, user_id, agent_id, edit_type, description,
-        json.dumps(payload), expires_at,
+        chat_id,
+        user_id,
+        agent_id,
+        edit_type,
+        description,
+        json.dumps(payload),
+        expires_at,
     )
     if row:
         return row["id"]
     existing = await pool.fetchrow(
         "SELECT id FROM agent_pending_confirmations WHERE chat_id = $1 AND user_id = $2",
-        chat_id, user_id,
+        chat_id,
+        user_id,
     )
     return existing["id"] if existing else 0
 
@@ -851,7 +1002,8 @@ async def get_pending_confirmation(
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        user_id, chat_id,
+        user_id,
+        chat_id,
     )
     if not row:
         return None
@@ -876,7 +1028,8 @@ async def clear_pending_confirmation(
 ) -> None:
     await pool.execute(
         "DELETE FROM agent_pending_confirmations WHERE user_id = $1 AND chat_id = $2",
-        user_id, chat_id,
+        user_id,
+        chat_id,
     )
 
 
@@ -934,12 +1087,14 @@ async def get_agent_state_keys_with_preview(
     for r in rows:
         val = r["value"]
         preview = val[:80] + "…" if len(val) > 80 else val
-        result.append({
-            "key": r["key"],
-            "preview": preview,
-            "length": len(val),
-            "updated_at": r["updated_at"],
-        })
+        result.append(
+            {
+                "key": r["key"],
+                "preview": preview,
+                "length": len(val),
+                "updated_at": r["updated_at"],
+            }
+        )
     return result
 
 
@@ -951,7 +1106,9 @@ async def get_agent_data_by_namespace_and_key(
 ) -> str | None:
     row = await pool.fetchrow(
         "SELECT value FROM agent_data WHERE agent_id = $1 AND namespace = $2 AND key = $3",
-        agent_id, namespace, key,
+        agent_id,
+        namespace,
+        key,
     )
     return row["value"] if row else None
 
@@ -963,6 +1120,87 @@ async def get_agent_data_keys_in_namespace(
 ) -> list[str]:
     rows = await pool.fetch(
         "SELECT key FROM agent_data WHERE agent_id = $1 AND namespace = $2 ORDER BY key",
-        agent_id, namespace,
+        agent_id,
+        namespace,
     )
     return [r["key"] for r in rows]
+
+
+async def get_session(
+    pool: asyncpg.Pool,
+    user_id: int,
+    chat_id: int,
+    session_type: str,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT id, payload, created_at, expires_at
+        FROM bot_sessions
+        WHERE user_id = $1 AND chat_id = $2 AND session_type = $3
+          AND expires_at > NOW()
+        """,
+        user_id,
+        chat_id,
+        session_type,
+    )
+    if not row:
+        return None
+    payload = row["payload"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    return {
+        "id": row["id"],
+        "payload": payload,
+        "created_at": row["created_at"],
+        "expires_at": row["expires_at"],
+    }
+
+
+async def set_session(
+    pool: asyncpg.Pool,
+    user_id: int,
+    chat_id: int,
+    session_type: str,
+    payload: dict,
+    ttl_minutes: int = 60,
+) -> None:
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+    await pool.execute(
+        """
+        INSERT INTO bot_sessions (user_id, chat_id, session_type, payload, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id, chat_id, session_type) DO UPDATE
+        SET payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at
+        """,
+        user_id,
+        chat_id,
+        session_type,
+        json.dumps(payload),
+        expires_at,
+    )
+
+
+async def clear_session(
+    pool: asyncpg.Pool,
+    user_id: int,
+    chat_id: int,
+    session_type: str,
+) -> None:
+    await pool.execute(
+        "DELETE FROM bot_sessions WHERE user_id = $1 AND chat_id = $2 AND session_type = $3",
+        user_id,
+        chat_id,
+        session_type,
+    )
+
+
+async def clear_all_sessions(
+    pool: asyncpg.Pool,
+    user_id: int,
+    chat_id: int,
+) -> None:
+    await pool.execute(
+        "DELETE FROM bot_sessions WHERE user_id = $1 AND chat_id = $2",
+        user_id,
+        chat_id,
+    )

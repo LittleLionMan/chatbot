@@ -38,10 +38,13 @@ CREATE TABLE IF NOT EXISTS messages (
     user_id BIGINT,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    agent_id INT,
+    meta JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS messages_chat_idx ON messages (chat_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS messages_agent_idx ON messages (agent_id, created_at DESC) WHERE agent_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS group_cooldowns (
     group_id BIGINT PRIMARY KEY,
@@ -88,6 +91,10 @@ CREATE TABLE IF NOT EXISTS agents (
 
 CREATE INDEX IF NOT EXISTS agents_active_idx ON agents (is_active, next_run_at);
 CREATE INDEX IF NOT EXISTS agents_user_idx ON agents (user_id);
+
+ALTER TABLE messages ADD CONSTRAINT messages_agent_fk
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL
+    NOT VALID;
 
 CREATE TABLE IF NOT EXISTS agent_state (
     agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -148,6 +155,19 @@ CREATE TABLE IF NOT EXISTS agent_pending_confirmations (
 );
 
 CREATE INDEX IF NOT EXISTS agent_pending_confirmations_chat_idx ON agent_pending_confirmations (chat_id, user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS bot_sessions (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    chat_id BIGINT NOT NULL,
+    session_type TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (user_id, chat_id, session_type)
+);
+
+CREATE INDEX IF NOT EXISTS bot_sessions_lookup_idx ON bot_sessions (user_id, chat_id, session_type, expires_at);
 
 CREATE TABLE IF NOT EXISTS pipeline_edits (
     id SERIAL PRIMARY KEY,
