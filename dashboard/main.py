@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 import json
 import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
-import uuid
 
 import asyncpg
 from dotenv import load_dotenv
@@ -17,9 +18,11 @@ load_dotenv()
 
 _pool: asyncpg.Pool | None = None
 
+
 class AgentRatingBody(BaseModel):
     rating: str
     note: str | None = None
+
 
 class AgentPatch(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
@@ -29,25 +32,31 @@ class AgentPatch(BaseModel):
     pipeline: list | None = None
     steps: list | None = None
 
+
 class MemoryBody(BaseModel):
     content: str
     subject_type: str
+
 
 class MemoryPatch(BaseModel):
     old_content: str
     new_content: str
     subject_type: str
 
+
 class StatePatch(BaseModel):
     value: str
+
 
 class AgentDataBody(BaseModel):
     namespace: str
     key: str
     value: str
 
+
 class AgentDataPatch(BaseModel):
     value: str
+
 
 class MonitorPatch(BaseModel):
     name: str | None = None
@@ -58,6 +67,7 @@ class MonitorPatch(BaseModel):
     source_state_key: str | None = None
     source_format: str | None = None
     target_agent: str | None = None
+
 
 class ScraperPatch(BaseModel):
     query: str | None = None
@@ -116,7 +126,9 @@ async def serve_dashboard() -> HTMLResponse:
     host = os.environ.get("DASHBOARD_HOST", "localhost")
     port = os.environ.get("DASHBOARD_PORT", "8001")
     with open(os.path.join(os.path.dirname(__file__), "index.html")) as f:
-        html = f.read().replace('window.__API_URL__ = ""', f'window.__API_URL__ = "http://{host}:{port}"')
+        html = f.read().replace(
+            'window.__API_URL__ = ""', f'window.__API_URL__ = "http://{host}:{port}"'
+        )
     return HTMLResponse(html)
 
 
@@ -131,14 +143,26 @@ async def get_capabilities() -> list[str]:
 @app.get("/api/step-types")
 async def get_step_types() -> list[str]:
     return [
-        "router_match", "router_llm",
-        "llm_extract", "llm_decide", "llm_summarize", "llm_analyze",
-        "web_search", "finance", "finance_search",
-        "state_read", "state_write",
-        "state_read_external", "state_write_external",
-        "data_read", "data_write",
-        "data_read_external", "data_write_external",
-        "transform", "trigger_agent", "notify_user",
+        "router_match",
+        "router_llm",
+        "llm_extract",
+        "llm_decide",
+        "llm_summarize",
+        "llm_analyze",
+        "web_search",
+        "finance",
+        "finance_search",
+        "state_read",
+        "state_write",
+        "state_read_external",
+        "state_write_external",
+        "data_read",
+        "data_write",
+        "data_read_external",
+        "data_write_external",
+        "transform",
+        "trigger_agent",
+        "notify_user",
     ]
 
 
@@ -156,24 +180,34 @@ async def get_agents() -> list[dict]:
     result = []
     for r in rows:
         config = _parse_config(r["config"])
-        result.append({
-            "id": r["id"],
-            "user_id": r["user_id"],
-            "name": r["name"],
-            "is_active": r["is_active"],
-            "schedule": r["schedule"],
-            "instruction": config.get("instruction", ""),
-            "type": config.get("type", ""),
-            "steps": config.get("steps") or config.get("pipeline", []) + config.get("pipeline_after_template", []),
-            "data_reads": config.get("data_reads", []),
-            "last_run_at": r["last_run_at"].isoformat() if r["last_run_at"] else None,
-            "next_run_at": r["next_run_at"].isoformat() if r["next_run_at"] else None,
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-            "target_chat_id": r["target_chat_id"],
-            "current_rating": r["current_rating"],
-            "current_rating_note": r["current_rating_note"],
-            "last_rated_at": r["last_rated_at"].isoformat() if r["last_rated_at"] else None,
-        })
+        result.append(
+            {
+                "id": r["id"],
+                "user_id": r["user_id"],
+                "name": r["name"],
+                "is_active": r["is_active"],
+                "schedule": r["schedule"],
+                "instruction": config.get("instruction", ""),
+                "type": config.get("type", ""),
+                "steps": config.get("steps")
+                or config.get("pipeline", [])
+                + config.get("pipeline_after_template", []),
+                "data_reads": config.get("data_reads", []),
+                "last_run_at": r["last_run_at"].isoformat()
+                if r["last_run_at"]
+                else None,
+                "next_run_at": r["next_run_at"].isoformat()
+                if r["next_run_at"]
+                else None,
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "target_chat_id": r["target_chat_id"],
+                "current_rating": r["current_rating"],
+                "current_rating_note": r["current_rating_note"],
+                "last_rated_at": r["last_rated_at"].isoformat()
+                if r["last_rated_at"]
+                else None,
+            }
+        )
     return result
 
 
@@ -191,7 +225,9 @@ async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
 
     config = _parse_config(row["config"])
     new_name = body.name if body.name is not None else row["name"]
-    new_schedule = body.schedule if "schedule" in body.model_fields_set else row["schedule"]
+    new_schedule = (
+        body.schedule if "schedule" in body.model_fields_set else row["schedule"]
+    )
 
     dirty = False
 
@@ -200,28 +236,25 @@ async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
         dirty = True
 
     if body.steps is not None:
-        original_steps = (
-            config.get("steps")
-            or config.get("pipeline", []) + config.get("pipeline_after_template", [])
+        original_steps = config.get("steps") or config.get("pipeline", []) + config.get(
+            "pipeline_after_template", []
         )
         edited_steps = body.steps
 
         if original_steps and original_steps != edited_steps:
-            session_id = (
-                await pool().fetchval(
-                    """
+            session_id = await pool().fetchval(
+                """
                     SELECT session_id FROM pipeline_edits
                     WHERE agent_id = $1
                     ORDER BY updated_at DESC LIMIT 1
                     """,
-                    agent_id,
-                )
-                or str(uuid.uuid4())
-            )
+                agent_id,
+            ) or str(uuid.uuid4())
             try:
                 existing = await pool().fetchrow(
                     "SELECT id FROM pipeline_edits WHERE agent_id = $1 AND session_id = $2",
-                    agent_id, session_id,
+                    agent_id,
+                    session_id,
                 )
                 if existing:
                     await pool().execute(
@@ -250,7 +283,10 @@ async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
                     )
             except Exception as e:
                 import logging
-                logging.getLogger(__name__).warning("pipeline_edits insert failed: %s", e)
+
+                logging.getLogger(__name__).warning(
+                    "pipeline_edits insert failed: %s", e
+                )
 
         config["steps"] = edited_steps
         config.pop("pipeline", None)
@@ -259,7 +295,10 @@ async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
 
     await pool().execute(
         "UPDATE agents SET name = $1, schedule = $2, config = $3 WHERE id = $4",
-        new_name, new_schedule, json.dumps(config), agent_id,
+        new_name,
+        new_schedule,
+        json.dumps(config),
+        agent_id,
     )
 
     if dirty:
@@ -274,19 +313,19 @@ async def patch_agent(agent_id: int, body: AgentPatch) -> dict:
     return {"ok": True}
 
 
-
 @app.delete("/api/agents/{agent_id}")
 async def deactivate_agent(agent_id: int) -> dict:
-    await pool().execute(
-        "UPDATE agents SET is_active = FALSE WHERE id = $1", agent_id
-    )
+    await pool().execute("UPDATE agents SET is_active = FALSE WHERE id = $1", agent_id)
     return {"ok": True}
+
 
 @app.post("/api/agents/{agent_id}/rating")
 async def set_agent_rating(agent_id: int, body: AgentRatingBody) -> dict:
     valid = ["perfekt", "sehr_gut", "gut", "ausreichend", "ungenuegend"]
     if body.rating not in valid:
-        raise HTTPException(status_code=400, detail=f"rating muss einer von {valid} sein")
+        raise HTTPException(
+            status_code=400, detail=f"rating muss einer von {valid} sein"
+        )
 
     current = await pool().fetchrow(
         "SELECT current_rating, current_rating_note FROM agents WHERE id = $1", agent_id
@@ -299,7 +338,9 @@ async def set_agent_rating(agent_id: int, body: AgentRatingBody) -> dict:
     if rating_changed or note_changed:
         await pool().execute(
             "INSERT INTO agent_ratings (agent_id, rating, note) VALUES ($1, $2, $3)",
-            agent_id, body.rating, body.note,
+            agent_id,
+            body.rating,
+            body.note,
         )
 
     await pool().execute(
@@ -308,7 +349,9 @@ async def set_agent_rating(agent_id: int, body: AgentRatingBody) -> dict:
         SET current_rating = $1, current_rating_note = $2, last_rated_at = NOW()
         WHERE id = $3
         """,
-        body.rating, body.note, agent_id,
+        body.rating,
+        body.note,
+        agent_id,
     )
     await pool().execute(
         """
@@ -351,7 +394,10 @@ async def trigger_skill_extraction() -> dict:
         ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()
         """,
     )
-    return {"ok": True, "message": "Extraktion wird beim naechsten Scheduler-Tick gestartet."}
+    return {
+        "ok": True,
+        "message": "Extraktion wird beim naechsten Scheduler-Tick gestartet.",
+    }
 
 
 @app.get("/api/skills/patterns")
@@ -363,7 +409,11 @@ async def get_skill_patterns() -> dict:
         "SELECT value FROM skill_store WHERE key = 'pipeline_patterns_dirty'"
     )
     dirty_val = dirty_row["value"] if dirty_row else True
-    is_dirty = dirty_val == "true" or dirty_val is True if isinstance(dirty_val, (str, bool)) else True
+    is_dirty = (
+        dirty_val == "true" or dirty_val is True
+        if isinstance(dirty_val, (str, bool))
+        else True
+    )
 
     if not row:
         return {"patterns": None, "updated_at": None, "is_dirty": is_dirty}
@@ -373,6 +423,7 @@ async def get_skill_patterns() -> dict:
         "updated_at": row["updated_at"].isoformat(),
         "is_dirty": is_dirty,
     }
+
 
 @app.post("/api/agents/{agent_id}/trigger")
 async def trigger_agent(agent_id: int) -> dict:
@@ -386,7 +437,8 @@ async def trigger_agent(agent_id: int) -> dict:
         INSERT INTO agent_trigger_queue (source_agent_id, target_agent_name, payload, scheduled_for)
         VALUES ($1, $2, '{}', NOW())
         """,
-        agent_id, row["name"],
+        agent_id,
+        row["name"],
     )
     return {"ok": True}
 
@@ -397,7 +449,14 @@ async def get_agent_state(agent_id: int) -> list[dict]:
         "SELECT key, value, updated_at FROM agent_state WHERE agent_id = $1 ORDER BY key",
         agent_id,
     )
-    return [{"key": r["key"], "value": r["value"], "updated_at": r["updated_at"].isoformat()} for r in rows]
+    return [
+        {
+            "key": r["key"],
+            "value": r["value"],
+            "updated_at": r["updated_at"].isoformat(),
+        }
+        for r in rows
+    ]
 
 
 @app.patch("/api/agents/{agent_id}/state/{key}")
@@ -408,7 +467,9 @@ async def patch_agent_state(agent_id: int, key: str, body: StatePatch) -> dict:
         VALUES ($1, $2, $3, NOW())
         ON CONFLICT (agent_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
         """,
-        agent_id, key, body.value,
+        agent_id,
+        key,
+        body.value,
     )
     return {"ok": True}
 
@@ -417,7 +478,8 @@ async def patch_agent_state(agent_id: int, key: str, body: StatePatch) -> dict:
 async def delete_agent_state(agent_id: int, key: str) -> dict:
     await pool().execute(
         "DELETE FROM agent_state WHERE agent_id = $1 AND key = $2",
-        agent_id, key,
+        agent_id,
+        key,
     )
     return {"ok": True}
 
@@ -432,7 +494,8 @@ async def get_agent_notifications(agent_id: int, limit: int = 20) -> list[dict]:
         ORDER BY created_at DESC
         LIMIT $2
         """,
-        agent_id, limit,
+        agent_id,
+        limit,
     )
     return [
         {
@@ -440,7 +503,13 @@ async def get_agent_notifications(agent_id: int, limit: int = 20) -> list[dict]:
             "message_id": r["message_id"],
             "chat_id": r["chat_id"],
             "notification_type": r["notification_type"],
-            "payload_summary": r["payload_summary"] if isinstance(r["payload_summary"], dict) else {},
+            "payload_summary": (
+                r["payload_summary"]
+                if isinstance(r["payload_summary"], dict)
+                else json.loads(r["payload_summary"])
+            )
+            if r["payload_summary"]
+            else {},
             "created_at": r["created_at"].isoformat(),
         }
         for r in rows
@@ -453,7 +522,15 @@ async def get_agent_data(agent_id: int) -> list[dict]:
         "SELECT namespace, key, value, updated_at FROM agent_data WHERE agent_id = $1 ORDER BY namespace, key",
         agent_id,
     )
-    return [{"namespace": r["namespace"], "key": r["key"], "value": r["value"], "updated_at": r["updated_at"].isoformat()} for r in rows]
+    return [
+        {
+            "namespace": r["namespace"],
+            "key": r["key"],
+            "value": r["value"],
+            "updated_at": r["updated_at"].isoformat(),
+        }
+        for r in rows
+    ]
 
 
 @app.post("/api/agents/{agent_id}/data")
@@ -464,19 +541,27 @@ async def add_agent_data(agent_id: int, body: AgentDataBody) -> dict:
         VALUES ($1, $2, $3, $4, NOW())
         ON CONFLICT (agent_id, namespace, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
         """,
-        agent_id, body.namespace, body.key, body.value,
+        agent_id,
+        body.namespace,
+        body.key,
+        body.value,
     )
     return {"ok": True}
 
 
 @app.patch("/api/agents/{agent_id}/data/{namespace}/{key}")
-async def patch_agent_data(agent_id: int, namespace: str, key: str, body: AgentDataPatch) -> dict:
+async def patch_agent_data(
+    agent_id: int, namespace: str, key: str, body: AgentDataPatch
+) -> dict:
     await pool().execute(
         """
         UPDATE agent_data SET value = $1, updated_at = NOW()
         WHERE agent_id = $2 AND namespace = $3 AND key = $4
         """,
-        body.value, agent_id, namespace, key,
+        body.value,
+        agent_id,
+        namespace,
+        key,
     )
     return {"ok": True}
 
@@ -485,7 +570,9 @@ async def patch_agent_data(agent_id: int, namespace: str, key: str, body: AgentD
 async def delete_agent_data(agent_id: int, namespace: str, key: str) -> dict:
     await pool().execute(
         "DELETE FROM agent_data WHERE agent_id = $1 AND namespace = $2 AND key = $3",
-        agent_id, namespace, key,
+        agent_id,
+        namespace,
+        key,
     )
     return {"ok": True}
 
@@ -502,7 +589,9 @@ async def get_users() -> list[dict]:
             "first_name": r["first_name"],
             "last_name": r["last_name"],
             "timezone": r["timezone"],
-            "last_seen_at": r["last_seen_at"].isoformat() if r["last_seen_at"] else None,
+            "last_seen_at": r["last_seen_at"].isoformat()
+            if r["last_seen_at"]
+            else None,
         }
         for r in rows
     ]
@@ -518,7 +607,15 @@ async def get_user_memories(user_id: int) -> list[dict]:
         """,
         user_id,
     )
-    return [{"id": r["id"], "type": r["subject_type"], "content": r["content"], "created_at": r["created_at"].isoformat()} for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "type": r["subject_type"],
+            "content": r["content"],
+            "created_at": r["created_at"].isoformat(),
+        }
+        for r in rows
+    ]
 
 
 @app.post("/api/users/{user_id}/memories")
@@ -528,7 +625,9 @@ async def add_user_memory(user_id: int, body: MemoryBody) -> dict:
         INSERT INTO memories (subject_type, subject_id, content, memory_type)
         VALUES ($1, $2, $3, 'fact')
         """,
-        body.subject_type, user_id, body.content,
+        body.subject_type,
+        user_id,
+        body.content,
     )
     return {"ok": True}
 
@@ -540,7 +639,10 @@ async def patch_user_memory(user_id: int, body: MemoryPatch) -> dict:
         UPDATE memories SET content = $1
         WHERE subject_type = $2 AND subject_id = $3 AND content = $4 AND memory_type = 'fact'
         """,
-        body.new_content, body.subject_type, user_id, body.old_content,
+        body.new_content,
+        body.subject_type,
+        user_id,
+        body.old_content,
     )
     return {"ok": True}
 
@@ -552,7 +654,9 @@ async def delete_user_memory(user_id: int, body: MemoryBody) -> dict:
         DELETE FROM memories
         WHERE subject_type = $1 AND subject_id = $2 AND content = $3 AND memory_type = 'fact'
         """,
-        body.subject_type, user_id, body.content,
+        body.subject_type,
+        user_id,
+        body.content,
     )
     return {"ok": True}
 
@@ -566,7 +670,9 @@ async def get_groups() -> list[dict]:
         {
             "id": r["telegram_id"],
             "title": r["title"],
-            "first_seen_at": r["first_seen_at"].isoformat() if r["first_seen_at"] else None,
+            "first_seen_at": r["first_seen_at"].isoformat()
+            if r["first_seen_at"]
+            else None,
         }
         for r in rows
     ]
@@ -582,7 +688,15 @@ async def get_group_memories(group_id: int) -> list[dict]:
         """,
         group_id,
     )
-    return [{"id": r["id"], "type": r["subject_type"], "content": r["content"], "created_at": r["created_at"].isoformat()} for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "type": r["subject_type"],
+            "content": r["content"],
+            "created_at": r["created_at"].isoformat(),
+        }
+        for r in rows
+    ]
 
 
 @app.post("/api/groups/{group_id}/memories")
@@ -592,7 +706,9 @@ async def add_group_memory(group_id: int, body: MemoryBody) -> dict:
         INSERT INTO memories (subject_type, subject_id, content, memory_type)
         VALUES ($1, $2, $3, 'fact')
         """,
-        body.subject_type, group_id, body.content,
+        body.subject_type,
+        group_id,
+        body.content,
     )
     return {"ok": True}
 
@@ -604,7 +720,10 @@ async def patch_group_memory(group_id: int, body: MemoryPatch) -> dict:
         UPDATE memories SET content = $1
         WHERE subject_type = $2 AND subject_id = $3 AND content = $4 AND memory_type = 'fact'
         """,
-        body.new_content, body.subject_type, group_id, body.old_content,
+        body.new_content,
+        body.subject_type,
+        group_id,
+        body.old_content,
     )
     return {"ok": True}
 
@@ -616,7 +735,9 @@ async def delete_group_memory(group_id: int, body: MemoryBody) -> dict:
         DELETE FROM memories
         WHERE subject_type = $1 AND subject_id = $2 AND content = $3 AND memory_type = 'fact'
         """,
-        body.subject_type, group_id, body.content,
+        body.subject_type,
+        group_id,
+        body.content,
     )
     return {"ok": True}
 
@@ -653,7 +774,8 @@ async def delete_observation(chat_id: int, observation_id: int) -> dict:
         DELETE FROM memories
         WHERE id = $1 AND subject_type = 'chat' AND subject_id = $2 AND memory_type = 'observation'
         """,
-        observation_id, chat_id,
+        observation_id,
+        chat_id,
     )
     return {"ok": True}
 
@@ -690,20 +812,32 @@ async def get_usage() -> dict:
     for r in by_model:
         input_cost = float(r["input_cost_per_mtok"] or 0)
         output_cost = float(r["output_cost_per_mtok"] or 0)
-        total_cost = (r["input"] * input_cost / 1_000_000) + (r["output"] * output_cost / 1_000_000)
-        model_stats.append({
-            "model": r["model"],
-            "input": r["input"],
-            "output": r["output"],
-            "calls": r["calls"],
-            "input_cost_per_mtok": input_cost,
-            "output_cost_per_mtok": output_cost,
-            "estimated_cost_usd": round(total_cost, 4),
-        })
+        total_cost = (r["input"] * input_cost / 1_000_000) + (
+            r["output"] * output_cost / 1_000_000
+        )
+        model_stats.append(
+            {
+                "model": r["model"],
+                "input": r["input"],
+                "output": r["output"],
+                "calls": r["calls"],
+                "input_cost_per_mtok": input_cost,
+                "output_cost_per_mtok": output_cost,
+                "estimated_cost_usd": round(total_cost, 4),
+            }
+        )
     return {
         "total_input": total["input"] or 0,
         "total_output": total["output"] or 0,
-        "by_caller": [{"caller": r["caller"], "input": r["input"], "output": r["output"], "calls": r["calls"]} for r in by_caller],
+        "by_caller": [
+            {
+                "caller": r["caller"],
+                "input": r["input"],
+                "output": r["output"],
+                "calls": r["calls"],
+            }
+            for r in by_caller
+        ],
         "by_model": model_stats,
     }
 
@@ -718,7 +852,8 @@ async def get_usage_history(page: int = 0, limit: int = 10) -> dict:
         ORDER BY created_at DESC
         LIMIT $1 OFFSET $2
         """,
-        limit, offset,
+        limit,
+        offset,
     )
     total = await pool().fetchval("SELECT COUNT(*) FROM llm_usage")
     return {
@@ -751,10 +886,16 @@ async def get_triggers() -> list[dict]:
             "id": r["id"],
             "source_agent_id": r["source_agent_id"],
             "target_agent_name": r["target_agent_name"],
-            "payload": r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"]),
-            "scheduled_for": r["scheduled_for"].isoformat() if r["scheduled_for"] else None,
+            "payload": r["payload"]
+            if isinstance(r["payload"], dict)
+            else json.loads(r["payload"]),
+            "scheduled_for": r["scheduled_for"].isoformat()
+            if r["scheduled_for"]
+            else None,
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-            "processed_at": r["processed_at"].isoformat() if r["processed_at"] else None,
+            "processed_at": r["processed_at"].isoformat()
+            if r["processed_at"]
+            else None,
         }
         for r in rows
     ]
@@ -807,7 +948,9 @@ async def get_registry() -> dict:
                 "is_local": r["is_local"],
                 "notes": r["notes"],
                 "is_available": r["is_available"],
-                "last_checked_at": r["last_checked_at"].isoformat() if r["last_checked_at"] else None,
+                "last_checked_at": r["last_checked_at"].isoformat()
+                if r["last_checked_at"]
+                else None,
                 "error_message": r["error_message"],
             }
             for r in models
@@ -841,18 +984,22 @@ async def get_scrapers() -> list[dict]:
         filters = r["filters"]
         if isinstance(filters, str):
             filters = json.loads(filters or "{}")
-        result.append({
-            "id": r["id"],
-            "platform": r["platform"],
-            "category": r["category"],
-            "query": r["query"],
-            "filters": filters,
-            "target_agent": r["target_agent"],
-            "poll_interval_seconds": r["poll_interval_seconds"],
-            "is_active": r["is_active"],
-            "last_scraped_at": r["last_scraped_at"].isoformat() if r["last_scraped_at"] else None,
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-        })
+        result.append(
+            {
+                "id": r["id"],
+                "platform": r["platform"],
+                "category": r["category"],
+                "query": r["query"],
+                "filters": filters,
+                "target_agent": r["target_agent"],
+                "poll_interval_seconds": r["poll_interval_seconds"],
+                "is_active": r["is_active"],
+                "last_scraped_at": r["last_scraped_at"].isoformat()
+                if r["last_scraped_at"]
+                else None,
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+        )
     return result
 
 
@@ -881,29 +1028,39 @@ async def get_listings(
         ORDER BY first_seen_at DESC
         LIMIT $3
         """,
-        category, platform, limit,
+        category,
+        platform,
+        limit,
     )
     result = []
     for r in rows:
         attrs = r["attributes"]
         if isinstance(attrs, str):
             attrs = json.loads(attrs or "{}")
-        result.append({
-            "id": r["id"],
-            "platform": r["platform"],
-            "category": r["category"],
-            "url": r["url"],
-            "title": r["title"],
-            "price": float(r["price"]) if r["price"] is not None else None,
-            "currency": r["currency"],
-            "location": r["location"],
-            "condition": r["condition"],
-            "seller_name": r["seller_name"],
-            "seller_rating": float(r["seller_rating"]) if r["seller_rating"] is not None else None,
-            "attributes": attrs,
-            "first_seen_at": r["first_seen_at"].isoformat() if r["first_seen_at"] else None,
-            "last_seen_at": r["last_seen_at"].isoformat() if r["last_seen_at"] else None,
-        })
+        result.append(
+            {
+                "id": r["id"],
+                "platform": r["platform"],
+                "category": r["category"],
+                "url": r["url"],
+                "title": r["title"],
+                "price": float(r["price"]) if r["price"] is not None else None,
+                "currency": r["currency"],
+                "location": r["location"],
+                "condition": r["condition"],
+                "seller_name": r["seller_name"],
+                "seller_rating": float(r["seller_rating"])
+                if r["seller_rating"] is not None
+                else None,
+                "attributes": attrs,
+                "first_seen_at": r["first_seen_at"].isoformat()
+                if r["first_seen_at"]
+                else None,
+                "last_seen_at": r["last_seen_at"].isoformat()
+                if r["last_seen_at"]
+                else None,
+            }
+        )
     return result
 
 
@@ -926,21 +1083,23 @@ async def get_monitors() -> list[dict]:
     )
     result = []
     for r in rows:
-        result.append({
-            "id": r["id"],
-            "monitor_type": r["monitor_type"],
-            "name": r["name"],
-            "source": r["source"],
-            "source_agent": r["source_agent"],
-            "source_state_key": r["source_state_key"],
-            "source_format": r["source_format"],
-            "target_agent": r["target_agent"],
-            "feed_templates": list(r["feed_templates"]),
-            "poll_interval_seconds": r["poll_interval_seconds"],
-            "keywords": list(r["keywords"]),
-            "is_active": r["is_active"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-        })
+        result.append(
+            {
+                "id": r["id"],
+                "monitor_type": r["monitor_type"],
+                "name": r["name"],
+                "source": r["source"],
+                "source_agent": r["source_agent"],
+                "source_state_key": r["source_state_key"],
+                "source_format": r["source_format"],
+                "target_agent": r["target_agent"],
+                "feed_templates": list(r["feed_templates"]),
+                "poll_interval_seconds": r["poll_interval_seconds"],
+                "keywords": list(r["keywords"]),
+                "is_active": r["is_active"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+        )
     return result
 
 
@@ -953,12 +1112,30 @@ async def patch_monitor(monitor_id: int, body: MonitorPatch) -> dict:
         raise HTTPException(status_code=404, detail="Monitor not found")
     new_name = body.name if body.name is not None else row["name"]
     new_keywords = body.keywords if body.keywords is not None else list(row["keywords"])
-    new_poll = body.poll_interval_seconds if body.poll_interval_seconds is not None else row["poll_interval_seconds"]
-    new_feeds = body.feed_templates if body.feed_templates is not None else list(row["feed_templates"])
-    new_source_agent = body.source_agent if body.source_agent is not None else row["source_agent"]
-    new_source_state_key = body.source_state_key if body.source_state_key is not None else row["source_state_key"]
-    new_source_format = body.source_format if body.source_format is not None else row["source_format"]
-    new_target_agent = body.target_agent if body.target_agent is not None else row["target_agent"]
+    new_poll = (
+        body.poll_interval_seconds
+        if body.poll_interval_seconds is not None
+        else row["poll_interval_seconds"]
+    )
+    new_feeds = (
+        body.feed_templates
+        if body.feed_templates is not None
+        else list(row["feed_templates"])
+    )
+    new_source_agent = (
+        body.source_agent if body.source_agent is not None else row["source_agent"]
+    )
+    new_source_state_key = (
+        body.source_state_key
+        if body.source_state_key is not None
+        else row["source_state_key"]
+    )
+    new_source_format = (
+        body.source_format if body.source_format is not None else row["source_format"]
+    )
+    new_target_agent = (
+        body.target_agent if body.target_agent is not None else row["target_agent"]
+    )
     await pool().execute(
         """
         UPDATE monitor_configs
@@ -967,9 +1144,15 @@ async def patch_monitor(monitor_id: int, body: MonitorPatch) -> dict:
             source_format = $7, target_agent = $8
         WHERE id = $9
         """,
-        new_name, new_keywords, new_poll, new_feeds,
-        new_source_agent, new_source_state_key, new_source_format,
-        new_target_agent, monitor_id,
+        new_name,
+        new_keywords,
+        new_poll,
+        new_feeds,
+        new_source_agent,
+        new_source_state_key,
+        new_source_format,
+        new_target_agent,
+        monitor_id,
     )
     return {"ok": True}
 
@@ -992,9 +1175,13 @@ async def get_monitor_seen(monitor_id: int, limit: int = 50) -> list[dict]:
         ORDER BY seen_at DESC
         LIMIT $2
         """,
-        monitor_id, limit,
+        monitor_id,
+        limit,
     )
-    return [{"fingerprint": r["fingerprint"], "seen_at": r["seen_at"].isoformat()} for r in rows]
+    return [
+        {"fingerprint": r["fingerprint"], "seen_at": r["seen_at"].isoformat()}
+        for r in rows
+    ]
 
 
 @app.delete("/api/monitors/{monitor_id}/seen")
@@ -1004,6 +1191,7 @@ async def clear_monitor_seen(monitor_id: int) -> dict:
     )
     count = int(result.split()[-1])
     return {"ok": True, "deleted": count}
+
 
 @app.patch("/api/scrapers/{config_id}")
 async def patch_scraper(config_id: int, body: ScraperPatch) -> dict:
@@ -1015,8 +1203,14 @@ async def patch_scraper(config_id: int, body: ScraperPatch) -> dict:
         raise HTTPException(status_code=404, detail="Scraper not found")
     new_query = body.query if body.query is not None else row["query"]
     new_category = body.category if body.category is not None else row["category"]
-    new_target = body.target_agent if body.target_agent is not None else row["target_agent"]
-    new_interval = body.poll_interval_seconds if body.poll_interval_seconds is not None else row["poll_interval_seconds"]
+    new_target = (
+        body.target_agent if body.target_agent is not None else row["target_agent"]
+    )
+    new_interval = (
+        body.poll_interval_seconds
+        if body.poll_interval_seconds is not None
+        else row["poll_interval_seconds"]
+    )
     existing_filters = row["filters"]
     if isinstance(existing_filters, str):
         existing_filters = json.loads(existing_filters or "{}")
@@ -1028,7 +1222,11 @@ async def patch_scraper(config_id: int, body: ScraperPatch) -> dict:
             poll_interval_seconds = $4, filters = $5
         WHERE id = $6
         """,
-        new_query, new_category, new_target,
-        new_interval, json.dumps(new_filters), config_id,
+        new_query,
+        new_category,
+        new_target,
+        new_interval,
+        json.dumps(new_filters),
+        config_id,
     )
     return {"ok": True}
