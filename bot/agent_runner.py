@@ -26,6 +26,25 @@ from bot.utils import clean_llm_json, parse_agent_config
 logger = logging.getLogger(__name__)
 
 
+class StepAbortError(Exception):
+    def __init__(self, step_id: str, reason: str) -> None:
+        self.step_id = step_id
+        self.reason = reason
+        super().__init__(f"Step {step_id} aborted run: {reason}")
+
+
+def _check_fetch_result(step: dict, result: str, context_msg: str) -> str:
+    if result:
+        return result
+    default = step.get("default")
+    if default is not None:
+        return default
+    if step.get("required", True) is False:
+        logger.info("optional step %r returned empty, continuing", step.get("id", "?"))
+        return ""
+    raise StepAbortError(step.get("id", "?"), context_msg)
+
+
 _RELAY_SYSTEM_TEMPLATE = """Du bist {name}. Formuliere den folgenden Bericht als direkte Nachricht in der ersten Person.
 Beginne immer mit "{name}:" — nie mit "Bob" oder einem anderen Namen.
 Keine Einleitung, kein Abschluss — nur die Nachricht direkt.
@@ -245,47 +264,28 @@ async def _handle_web_search(
     name: str,
     **_,
 ) -> str:
-    from bot import search as _search
-    from bot.models import select_model_for_provider
-
-    query_template = step.get("query_template", "")
-    query = _resolve_template(query_template, context)
-    time_range: str | None = step.get("time_range")
-    categories: str | None = step.get("categories")
+    query = _resolve_template(step.get("query_template", ""), context)
     prompt = _resolve_template(
         step.get("prompt", "Fasse die Suchergebnisse zusammen."), context
     )
-
-    if not await _search.is_available():
-        force_model = select_model_for_provider(CAPABILITY_CHAT, "anthropic")
+    try:
         result = await brain.chat(
             system=agent_system,
             messages=[{"role": "user", "content": prompt}],
             use_web_search=True,
+            search_queries=[query],
+            search_time_range=step.get("time_range"),
+            search_categories=step.get("categories"),
             capability=CAPABILITY_CHAT,
-            force_model=force_model,
             caller=f"agent_web_search:{name}",
             pool=pool,
         )
+        logger.info("agent %s web_search %r: %d chars", name, query, len(result))
         return result
-
-    search_result = await _search.search(
-        query, time_range=time_range, categories=categories
-    )
-    if not search_result:
-        logger.info("agent %s web_search %r: no results", name, query)
-        return ""
-
-    augmented_prompt = f"{prompt}\n\n[Suchergebnisse für '{query}']\n\n{search_result}"
-    result = await brain.chat(
-        system=agent_system,
-        messages=[{"role": "user", "content": augmented_prompt}],
-        capability=CAPABILITY_CHAT,
-        caller=f"agent_web_search:{name}",
-        pool=pool,
-    )
-    logger.info("agent %s web_search %r: %d chars", name, query, len(result))
-    return result
+    except brain.NoSearchResultsError:
+        return _check_fetch_result(
+            step, "", f"web_search: no results for query '{query}'"
+        )
 
 
 async def _handle_finance(step: dict, context: dict[str, str], **_) -> str:
@@ -295,10 +295,12 @@ async def _handle_finance(step: dict, context: dict[str, str], **_) -> str:
     ticker = context.get(ticker_key, "").strip()
     if not ticker:
         logger.warning("finance step: no ticker in context key %r", ticker_key)
-        return ""
+        return _check_fetch_result(
+            step, "", f"finance: no ticker in context key '{ticker_key}'"
+        )
     result = await _finance.get_quote_summary(ticker)
     logger.info("finance step: fetched %s (%d chars)", ticker, len(result))
-    return result
+    return _check_fetch_result(step, result, f"finance: no data for ticker '{ticker}'")
 
 
 async def _handle_finance_search(step: dict, context: dict[str, str], **_) -> str:
@@ -308,11 +310,12 @@ async def _handle_finance_search(step: dict, context: dict[str, str], **_) -> st
     query = _get(context, query_key).strip()
     if not query:
         logger.warning("finance_search step: no query in context key %r", query_key)
-        return "{}"
+        return _check_fetch_result(
+            step, "", f"finance_search: no query in context key '{query_key}'"
+        )
     result = await _finance.search_ticker(query)
     if result is None:
-        logger.info("finance_search: no result for %r", query)
-        return "{}"
+        return _check_fetch_result(step, "", f"finance_search: no result for '{query}'")
     logger.info(
         "finance_search: found %s (%s) for %r",
         result.get("symbol"),
@@ -686,12 +689,25 @@ def _transform_list_append(step: dict, context: dict[str, str]) -> str:
     target_key: str = step["target_key"]
     max_items: int = int(step.get("max_items", 10000))
     output_format: str = step.get("output_format", "json_array")
-    value = _get(context, value_key)
-    if not value:
+    value_raw = _get(context, value_key)
+    if not value_raw:
         logger.warning("transform list_append: value_key %r is empty", value_key)
         return context.get(target_key, "[]")
+    try:
+        value: object = json.loads(value_raw)
+    except Exception:
+        value = value_raw
     items = _parse_json_list(context.get(target_key, "[]"))
-    if value not in items:
+    value_str = (
+        json.dumps(value, ensure_ascii=False)
+        if isinstance(value, (dict, list))
+        else str(value)
+    )
+    existing_strs = [
+        json.dumps(i, ensure_ascii=False) if isinstance(i, (dict, list)) else str(i)
+        for i in items
+    ]
+    if value_str not in existing_strs:
         items.append(value)
     if len(items) > max_items:
         items = items[-max_items:]
@@ -1069,7 +1085,7 @@ async def _handle_http_fetch(step: dict, context: dict[str, str], **_) -> str:
     url = _resolve_template(url_template, context)
     if not url:
         logger.warning("http_fetch: no url configured")
-        return step.get("default", "")
+        return _check_fetch_result(step, "", "http_fetch: no url configured")
 
     method: str = step.get("method", "GET").upper()
     headers: dict[str, str] = step.get("headers", {})
@@ -1085,7 +1101,9 @@ async def _handle_http_fetch(step: dict, context: dict[str, str], **_) -> str:
                 resp = await client.post(url, headers=resolved_headers, content=body)
             else:
                 logger.warning("http_fetch: unsupported method %r", method)
-                return step.get("default", "")
+                return _check_fetch_result(
+                    step, "", f"http_fetch: unsupported method {method!r}"
+                )
             resp.raise_for_status()
             result = resp.text
             logger.info(
@@ -1095,15 +1113,21 @@ async def _handle_http_fetch(step: dict, context: dict[str, str], **_) -> str:
                 resp.status_code,
                 len(result),
             )
-            return result
+            return _check_fetch_result(
+                step, result, f"http_fetch: empty response from {url[:80]}"
+            )
+    except StepAbortError:
+        raise
     except httpx.HTTPStatusError as e:
         logger.warning(
             "http_fetch: HTTP error %d for %s", e.response.status_code, url[:80]
         )
-        return step.get("default", "")
+        return _check_fetch_result(
+            step, "", f"http_fetch: HTTP {e.response.status_code} for {url[:80]}"
+        )
     except Exception as e:
         logger.warning("http_fetch: failed for %s: %s", url[:80], e)
-        return step.get("default", "")
+        return _check_fetch_result(step, "", f"http_fetch failed for {url[:80]}: {e}")
 
 
 async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
@@ -1111,7 +1135,7 @@ async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
     url = _resolve_template(url_template, context)
     if not url:
         logger.warning("xlsx_fetch: no url configured")
-        return step.get("default", "[]")
+        return _check_fetch_result(step, "", "xlsx_fetch: no url configured")
 
     sheet_ref = step.get("sheet", 0)
     columns: list[str] = step.get("columns", [])
@@ -1137,7 +1161,8 @@ async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
         ws = wb.worksheets[sheet_ref] if isinstance(sheet_ref, int) else wb[sheet_ref]
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
-            return "[]"
+            wb.close()
+            return _check_fetch_result(step, "", f"xlsx_fetch: no rows from {url[:60]}")
 
         header = [
             str(c).strip() if c is not None else f"col_{i}"
@@ -1204,11 +1229,17 @@ async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
 
         wb.close()
         logger.info("xlsx_fetch: extracted %d rows from %s", len(result), url[:60])
-        return json.dumps(result, ensure_ascii=False)
+        return _check_fetch_result(
+            step,
+            json.dumps(result, ensure_ascii=False) if result else "",
+            f"xlsx_fetch: no rows matched filters from {url[:60]}",
+        )
 
+    except StepAbortError:
+        raise
     except Exception as e:
         logger.warning("xlsx_fetch: failed for %s: %s", url[:80], e)
-        return step.get("default", "[]")
+        return _check_fetch_result(step, "", f"xlsx_fetch failed for {url[:80]}: {e}")
 
 
 async def _handle_trigger_agent(
@@ -1452,6 +1483,8 @@ async def _execute_pipeline(
             result = await handler(
                 step=step, step_type=step_type, context=context, **shared_kwargs
             )
+        except StepAbortError:
+            raise
         except Exception as e:
             logger.error("agent %s step %r failed: %s", name, step_id, e)
             raise
@@ -1678,6 +1711,16 @@ async def execute_agent(
             )
             logger.info("agent %d done. trigger-only, no next run.", agent_id)
 
+    except StepAbortError as e:
+        logger.info("agent %s run aborted at step %s: %s", name, e.step_id, e.reason)
+        if schedule:
+            tz = await memory.get_user_timezone(pool, user_id)
+            next_run = next_agent_run_after(schedule, tz)
+            await memory.update_agent_run(pool, agent_id, next_run)
+        else:
+            await pool.execute(
+                "UPDATE agents SET last_run_at = NOW() WHERE id = $1", agent_id
+            )
     except ProviderRateLimitError as e:
         logger.error("agent %d rate limit on %s", agent_id, e.provider)
     except Exception as e:

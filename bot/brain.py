@@ -1,21 +1,26 @@
 from __future__ import annotations
+
 import logging
 import os
-import httpx
+
 import anthropic
 import asyncpg
+import httpx
+
 from bot import config, ratelimit
 from bot.models import (
-    Capability,
     CAPABILITY_CHAT,
-    get_provider_for_model,
+    Capability,
     get_max_output_tokens,
+    get_provider_for_model,
     select_model,
 )
-from bot.soul import SOUL, BEHAVIOR_RULES as _BEHAVIOR_RULES
+from bot.soul import BEHAVIOR_RULES as _BEHAVIOR_RULES
+from bot.soul import SOUL
 from bot.utils import parse_agent_config
 
 logger = logging.getLogger(__name__)
+
 
 class ProviderRateLimitError(Exception):
     def __init__(self, provider: str, retry_after: int = 3600) -> None:
@@ -23,10 +28,19 @@ class ProviderRateLimitError(Exception):
         self.retry_after = retry_after
         super().__init__(f"Rate limit hit for provider {provider}")
 
+
 class ProviderAuthError(Exception):
     def __init__(self, provider: str) -> None:
         self.provider = provider
         super().__init__(f"Auth error for provider {provider}")
+
+
+class NoSearchResultsError(Exception):
+    def __init__(self, caller: str) -> None:
+        self.caller = caller
+        super().__init__(f"No search results for caller {caller}")
+
+
 _anthropic_client: anthropic.AsyncAnthropic | None = None
 
 _WEB_SEARCH_TOOL_BASE: dict = {
@@ -56,10 +70,12 @@ _PROVIDER_ENV_KEYS: dict[str, str] = {
     "kimi": "MOONSHOT_API_KEY",
 }
 
+
 def _web_search_tool(max_uses: int | None = None) -> dict:
     if max_uses is not None:
         return {**_WEB_SEARCH_TOOL_BASE, "max_uses": max_uses}
     return _WEB_SEARCH_TOOL_BASE
+
 
 def _get_anthropic_client() -> anthropic.AsyncAnthropic:
     global _anthropic_client
@@ -67,10 +83,16 @@ def _get_anthropic_client() -> anthropic.AsyncAnthropic:
         _anthropic_client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
     return _anthropic_client
 
+
 def _infer_provider(model: str) -> str:
     if "claude" in model:
         return "anthropic"
-    if "gpt" in model or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"):
+    if (
+        "gpt" in model
+        or model.startswith("o1")
+        or model.startswith("o3")
+        or model.startswith("o4")
+    ):
         return "openai"
     if "gemini" in model:
         return "google"
@@ -88,6 +110,7 @@ def _infer_provider(model: str) -> str:
         return "kimi"
     return "ollama"
 
+
 async def _call_anthropic(
     system: str,
     messages: list[dict],
@@ -99,6 +122,7 @@ async def _call_anthropic(
     pool: asyncpg.Pool | None,
 ) -> str:
     from bot import memory as mem
+
     client = _get_anthropic_client()
     kwargs: dict = dict(
         model=model,
@@ -120,9 +144,13 @@ async def _call_anthropic(
             output_tokens = final.usage.output_tokens
         if pool is not None:
             try:
-                await mem.log_llm_usage(pool, caller, input_tokens, output_tokens, model=model)
+                await mem.log_llm_usage(
+                    pool, caller, input_tokens, output_tokens, model=model
+                )
             except Exception as log_err:
-                logger.warning("Token logging failed for caller %s: %s", caller, log_err)
+                logger.warning(
+                    "Token logging failed for caller %s: %s", caller, log_err
+                )
         return "".join(text_parts)
     except anthropic.RateLimitError as e:
         retry_after = 3600
@@ -137,6 +165,7 @@ async def _call_anthropic(
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
         raise ProviderAuthError("anthropic") from e
 
+
 async def _call_openai_compatible(
     system: str,
     messages: list[dict],
@@ -147,6 +176,7 @@ async def _call_openai_compatible(
     pool: asyncpg.Pool | None,
 ) -> str:
     from bot import memory as mem
+
     if provider == "ollama":
         base_url = config.OLLAMA_BASE_URL + "/v1"
         api_key = "ollama"
@@ -178,19 +208,28 @@ async def _call_openai_compatible(
         if pool is not None:
             try:
                 await mem.log_llm_usage(
-                    pool, caller,
+                    pool,
+                    caller,
                     usage.get("prompt_tokens", 0),
                     usage.get("completion_tokens", 0),
                     model=model,
                 )
             except Exception as log_err:
-                logger.warning("Token logging failed for caller %s: %s", caller, log_err)
+                logger.warning(
+                    "Token logging failed for caller %s: %s", caller, log_err
+                )
         return content
     except (ProviderRateLimitError, ProviderAuthError):
         raise
     except Exception as e:
-        logger.error("OpenAI-compatible call failed for provider %s model %s: %s", provider, model, e)
+        logger.error(
+            "OpenAI-compatible call failed for provider %s model %s: %s",
+            provider,
+            model,
+            e,
+        )
         raise
+
 
 async def chat(
     system: str,
@@ -206,50 +245,103 @@ async def chat(
     search_time_range: str | None = None,
     search_categories: str | None = None,
 ) -> str:
-    model = force_model or (select_model(capability) if capability else select_model(CAPABILITY_CHAT))
-    provider = get_provider_for_model(model) if not force_model else _infer_provider(model)
-    resolved_max_tokens = max_tokens or get_max_output_tokens(capability or CAPABILITY_CHAT)
-    logger.debug("chat caller=%s capability=%s model=%s provider=%s max_tokens=%d", caller, capability, model, provider, resolved_max_tokens)
+    model = force_model or (
+        select_model(capability) if capability else select_model(CAPABILITY_CHAT)
+    )
+    provider = (
+        get_provider_for_model(model) if not force_model else _infer_provider(model)
+    )
+    resolved_max_tokens = max_tokens or get_max_output_tokens(
+        capability or CAPABILITY_CHAT
+    )
+    logger.debug(
+        "chat caller=%s capability=%s model=%s provider=%s max_tokens=%d",
+        caller,
+        capability,
+        model,
+        provider,
+        resolved_max_tokens,
+    )
+
     if use_web_search:
         from bot import search as _search
+
         searxng_available = await _search.is_available()
         if searxng_available:
-            augmented_messages = await _inject_search_results(messages, search_queries, search_time_range, search_categories, _search)
+            augmented_messages = await _inject_search_results(
+                messages, search_queries, search_time_range, search_categories, _search
+            )
             if augmented_messages is messages:
-                logger.info("chat caller=%s: no search results injected, skipping LLM call", caller)
-                return ""
+                raise NoSearchResultsError(caller)
             try:
                 if provider == "anthropic":
                     return await _call_anthropic(
-                        system, augmented_messages, model, resolved_max_tokens,
-                        False, None, caller, pool,
+                        system,
+                        augmented_messages,
+                        model,
+                        resolved_max_tokens,
+                        False,
+                        None,
+                        caller,
+                        pool,
                     )
                 return await _call_openai_compatible(
-                    system, augmented_messages, model, provider, resolved_max_tokens, caller, pool,
+                    system,
+                    augmented_messages,
+                    model,
+                    provider,
+                    resolved_max_tokens,
+                    caller,
+                    pool,
                 )
             except (ProviderRateLimitError, ProviderAuthError):
                 raise
-        else:
-            logger.warning("SearXNG not available — falling back to Anthropic native search for caller %s", caller)
+        elif provider == "anthropic":
+            logger.warning(
+                "SearXNG not available — falling back to Anthropic native search for caller %s",
+                caller,
+            )
             from bot.models import _available_models
+
             anthropic_candidates = [
-                m for m in _available_models
-                if m["provider"] == "anthropic" and (capability is None or capability in m["capabilities"])
+                m
+                for m in _available_models
+                if m["provider"] == "anthropic"
+                and (capability is None or capability in m["capabilities"])
             ]
             if anthropic_candidates:
                 anthropic_candidates.sort(key=lambda m: m["input_cost_per_mtok"])
                 model = anthropic_candidates[0]["api_model_name"]
             else:
                 model = "claude-sonnet-4-6"
-            provider = "anthropic"
+        else:
+            logger.warning(
+                "SearXNG not available and provider %s has no native search — raising NoSearchResultsError for caller %s",
+                provider,
+                caller,
+            )
+            raise NoSearchResultsError(caller)
+
     try:
         if provider == "anthropic":
             return await _call_anthropic(
-                system, messages, model, resolved_max_tokens,
-                use_web_search and not (await _searxng_available_cached()), web_search_max_uses, caller, pool,
+                system,
+                messages,
+                model,
+                resolved_max_tokens,
+                use_web_search and not (await _searxng_available_cached()),
+                web_search_max_uses,
+                caller,
+                pool,
             )
         return await _call_openai_compatible(
-            system, messages, model, provider, resolved_max_tokens, caller, pool,
+            system,
+            messages,
+            model,
+            provider,
+            resolved_max_tokens,
+            caller,
+            pool,
         )
     except ProviderRateLimitError as e:
         ratelimit.set_rate_limited(e.provider, e.retry_after)
@@ -257,13 +349,19 @@ async def chat(
     except ProviderAuthError as e:
         ratelimit.set_no_credits(e.provider)
         raise
+
+
 _searxng_available: bool | None = None
+
+
 async def _searxng_available_cached() -> bool:
     global _searxng_available
     if _searxng_available is None:
         from bot import search as _search
+
         _searxng_available = await _search.is_available()
     return _searxng_available
+
 
 _QUERY_EXTRACTION_SYSTEM = """Extrahiere aus dieser Nutzernachricht 1-3 optimierte Suchanfragen für eine Suchmaschine.
 Antworte NUR mit einem JSON-Array von Strings, kein anderer Text, keine Markdown-Backticks.
@@ -274,10 +372,13 @@ Beispiele:
 "Neueste Nachrichten zu OpenAI" → ["OpenAI News 2026"]
 "Vergleich Python vs JavaScript für Backend" → ["Python JavaScript Backend Vergleich"]"""
 
+
 async def _extract_search_queries(text: str) -> list[str]:
+    import json
+
     from bot import brain as _brain
     from bot.models import CAPABILITY_SIMPLE_TASKS
-    import json
+
     try:
         raw = await _brain.chat(
             system=_QUERY_EXTRACTION_SYSTEM,
@@ -292,6 +393,7 @@ async def _extract_search_queries(text: str) -> list[str]:
         return [text[:100]]
     except Exception:
         return [text[:100]]
+
 
 async def _inject_search_results(
     messages: list[dict],
@@ -316,7 +418,9 @@ async def _inject_search_results(
     for query in queries:
         if not query.strip():
             continue
-        result = await search_module.search(query, time_range=search_time_range, categories=search_categories)
+        result = await search_module.search(
+            query, time_range=search_time_range, categories=search_categories
+        )
         if result:
             all_results.append(f"Suchanfrage: {query}\n\n{result}")
     if not all_results:
@@ -334,6 +438,7 @@ async def _inject_search_results(
         last["content"] = list(last["content"]) + [{"type": "text", "text": injection}]
     augmented.append(last)
     return augmented
+
 
 def build_system_prompt(
     memories_user: list[str],
@@ -357,10 +462,14 @@ def build_system_prompt(
         parts.append(f"\n## Was du über die Gruppe '{group_title}' weißt\n- {joined}")
     if memories_bot:
         joined = "\n- ".join(memories_bot)
-        parts.append(f"\n## Was dir über dich selbst in diesem Kontext gesagt wurde\n- {joined}")
+        parts.append(
+            f"\n## Was dir über dich selbst in diesem Kontext gesagt wurde\n- {joined}"
+        )
     if memories_reflection:
         joined = "\n- ".join(memories_reflection)
-        parts.append(f"\n## Deine eigenen Beobachtungen aus früheren Gesprächen\n- {joined}")
+        parts.append(
+            f"\n## Deine eigenen Beobachtungen aus früheren Gesprächen\n- {joined}"
+        )
     if active_agents:
         lines = "\n".join(
             f"- {a['name']}: {parse_agent_config(a['config']).get('instruction', '')[:100]}"
@@ -379,6 +488,7 @@ def build_system_prompt(
         )
     parts.append(_BEHAVIOR_RULES)
     return "\n".join(parts)
+
 
 def history_to_llm_messages(history: list[dict]) -> list[dict]:
     result: list[dict] = []

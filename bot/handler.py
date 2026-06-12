@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from datetime import datetime, timezone
 
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -14,7 +13,6 @@ from bot import (
     agent_edits,
     agent_parser,
     agent_planner,
-    agent_runner,
     brain,
     config,
     decider,
@@ -27,7 +25,7 @@ from bot import (
     task_parser,
     voice,
 )
-from bot.brain import ProviderAuthError, ProviderRateLimitError
+from bot.brain import NoSearchResultsError, ProviderAuthError, ProviderRateLimitError
 from bot.models import CAPABILITY_CHAT, CAPABILITY_MULTIMODAL
 from bot.utils import parse_agent_config
 
@@ -427,10 +425,6 @@ async def _parse_and_execute_edit_signal(
     chat_id: int,
     message,
 ) -> str:
-    """
-    Parst Edit-Signale aus Bobs Antwort und leitet sie in die agent_edits-Pipeline.
-    Gibt die bereinigte Antwort ohne den Signal-Block zurück.
-    """
     import re
 
     signal_pattern = re.compile(
@@ -546,12 +540,6 @@ async def _handle_agent_notification_reply(
     wants_voice: bool,
     detected_language: str,
 ) -> None:
-    """
-    Pfad A: User antwortet auf eine Agent-Notification.
-    Bob antwortet konversationell — der Agent-Output ist bereits in der History.
-    Wenn Bob einen Änderungswunsch erkennt, signalisiert er das strukturiert und
-    die agent_edits-Pipeline wird mit Bestätigung und Rollback aktiviert.
-    """
     message = update.effective_message
     agent_id = notification.get("agent_id")
     target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
@@ -597,6 +585,10 @@ async def _handle_agent_notification_reply(
         await message.reply_text(ratelimit.rate_limit_message(e.provider))
         return
 
+    if not response:
+        logger.warning("_handle_agent_notification_reply: unexpected empty response")
+        return
+
     if target_agent:
         response = await _parse_and_execute_edit_signal(
             response, pool, target_agent, user_id, chat_id, message
@@ -623,9 +615,6 @@ async def _handle_explicit_intent(
     active_agents: list[dict],
     active_tasks: list[dict],
 ) -> None:
-    """
-    Pfad B: Expliziter Befehl der einen Classifier-Intent hat.
-    """
     message = update.effective_message
 
     if intent == "agent_create":
@@ -805,9 +794,6 @@ async def _handle_chat(
     display: str,
     group_title: str | None,
 ) -> None:
-    """
-    Pfad C: Normaler Chat — kein Agent-Kontext, kein expliziter Intent.
-    """
     message = update.effective_message
     user_memories = await memory.get_memories(pool, "user", user_id)
     group_memories = (
@@ -850,6 +836,11 @@ async def _handle_chat(
             caller="handler",
             pool=pool,
         )
+    except NoSearchResultsError:
+        await message.reply_text(
+            "Dazu habe ich gerade keine aktuellen Informationen gefunden."
+        )
+        return
     except (ProviderRateLimitError, ProviderAuthError) as e:
         if triggered_by_mention:
             await message.reply_text(ratelimit.rate_limit_message(e.provider))
@@ -1441,9 +1432,8 @@ async def handle_callback_query(
             result = await agent_edits.execute_edit(pool, edit_payload)
             rollback_id = confirmation_id
             _pending_rollbacks[rollback_id] = edit_payload
-            asyncio.get_event_loop().call_later(
-                300, lambda: _pending_rollbacks.pop(rollback_id, None)
-            )
+            loop = asyncio.get_running_loop()
+            loop.call_later(300, lambda: _pending_rollbacks.pop(rollback_id, None))
             await query.edit_message_text(
                 result, reply_markup=agent_edits.rollback_keyboard(rollback_id)
             )

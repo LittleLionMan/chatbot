@@ -1,10 +1,18 @@
 from __future__ import annotations
+
 import json
 import re
 
 
 def clean_llm_json(raw: str) -> str:
-    return re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
+    cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
+    match = re.search(r"[{\[]", cleaned)
+    if match:
+        cleaned = cleaned[match.start() :]
+    last = max(cleaned.rfind("}"), cleaned.rfind("]"))
+    if last != -1:
+        cleaned = cleaned[: last + 1]
+    return cleaned
 
 
 def parse_agent_config(raw: object) -> dict:
