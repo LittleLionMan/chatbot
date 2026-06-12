@@ -746,7 +746,7 @@ async def get_agent_id_by_name(pool: asyncpg.Pool, name: str) -> int | None:
     row = await pool.fetchrow(
         """
         SELECT id FROM agents
-        WHERE LOWER(name) = LOWER($1) AND is_active = TRUE
+        WHERE LOWER(name) = LOWER($1)
         LIMIT 1
         """,
         name,
