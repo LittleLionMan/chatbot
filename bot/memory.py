@@ -555,7 +555,7 @@ async def get_agent_state_by_name(
     pool: asyncpg.Pool, name: str
 ) -> dict[str, str] | None:
     row = await pool.fetchrow(
-        "SELECT id FROM agents WHERE LOWER(name) = LOWER($1) AND is_active = TRUE LIMIT 1",
+        "SELECT id FROM agents WHERE LOWER(name) = LOWER($1)",
         name,
     )
     if not row:
