@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
+from datetime import datetime, timezone
 
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -33,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 _SESSION_PLAN = "plan"
 _SESSION_CLARIFICATION = "clarification"
+_SESSION_AGENT_TALK = "agent_talk"
+_AGENT_TALK_TTL_MINUTES = 30
 _pending_rollbacks: dict[int, dict] = {}
 
 
@@ -95,12 +99,11 @@ def _confirmation_keyboard(confirmation_id: int) -> InlineKeyboardMarkup:
 
 
 async def _send_response(
-    update: Update,
+    message,
     response_text: str,
     use_voice: bool,
     detected_language: str = "de",
 ) -> None:
-    message = update.effective_message
     if not use_voice:
         await message.reply_text(response_text)
         return
@@ -118,6 +121,16 @@ def _build_snippet(history: list[dict], current_user_turn: str, display: str) ->
         prefix = "Bot" if entry["role"] == "assistant" else display
         lines.append(f"{prefix}: {entry['content']}")
     lines.append(f"{display}: {current_user_turn}")
+    return "\n".join(lines)
+
+
+def _summarize_history_for_membership(history: list[dict], limit: int = 6) -> str:
+    lines = []
+    for entry in history[-limit:]:
+        prefix = "Bob" if entry["role"] == "assistant" else "User"
+        content = entry["content"]
+        preview = content[:200] + "…" if len(content) > 200 else content
+        lines.append(f"{prefix}: {preview}")
     return "\n".join(lines)
 
 
@@ -342,7 +355,9 @@ async def _handle_clarification_session(
     _CONFIRM_SIGNALS = ("ja", "genau", "richtig", "stimmt", "korrekt", "yes", "yep")
     final_key = (
         most_likely_key
-        if any(s in text.lower() for s in _CONFIRM_SIGNALS)
+        if any(
+            re.search(rf"\b{re.escape(s)}\b", text.lower()) for s in _CONFIRM_SIGNALS
+        )
         else (text.lower().strip() if "_" in text.lower() else most_likely_key)
     )
 
@@ -387,34 +402,38 @@ async def _handle_clarification_session(
     return True
 
 
-_AGENT_REPLY_SYSTEM_SUFFIX = """
-## Reaktion auf Agent-Output
+_AGENT_TALK_SYSTEM_SUFFIX = """
+## Gespräch über einen deiner Agenten
 
-Du antwortest gerade auf eine Meldung eines deiner Agenten. Der Output ist bereits in der Konversation.
+Du sprichst gerade über einen deiner laufenden Agenten. Seine Pipeline-Struktur und sein Kontext stehen oben. Du sprichst ÜBER den Agenten in deiner eigenen Stimme — du bist nicht der Agent.
 
-Antworte normal und in Bobs Stimme. Wenn der User einen konkreten Änderungswunsch formuliert der dauerhaft gelten soll — ein neues Kriterium, eine Präferenz, eine Korrektur eines gespeicherten Wertes, ein Verhaltensproblem — dann signalisiere das am Ende deiner Antwort mit einem dieser Blöcke:
+Führe ein normales, offenes Gespräch. Wenn der User ein Problem mit dem Agenten anspricht (eine Fehlbewertung, ein unerwünschtes Verhalten), dann analysiere es ehrlich anhand der Pipeline die du siehst: Welcher Step ist verantwortlich? Warum konnte das passieren? Spekuliere nicht über Steps die du nicht siehst.
 
-Für neue Präferenz oder Kriterium:
+Dräng nicht auf eine Änderung. Erst wenn das Gespräch zu einem KONKRETEN, vom User bestätigten Änderungswunsch gekommen ist — ihr seid euch einig was geändert werden soll — signalisierst du das am Ende deiner Antwort mit GENAU EINEM dieser Blöcke:
+
+Für eine neue Präferenz oder ein neues Kriterium:
 ```edit_preference
 <Beschreibung der gewünschten Änderung in einem Satz>
 ```
 
-Für Korrektur eines gespeicherten Inhalts:
+Für die Korrektur eines gespeicherten Inhalts:
 ```edit_data
 <Beschreibung was konkret geändert werden soll>
 ```
 
-Für systematisches Verhaltensproblem der Pipeline:
+Für ein systematisches Verhaltensproblem der Pipeline (z.B. ein llm_decide-Step der etwas übersieht):
 ```edit_step
-<Beschreibung des Problems und was anders sein soll>
+<Beschreibung des Problems und was am Step anders sein soll>
 ```
 
-Setze keinen dieser Blöcke wenn:
-- Der User nur reagiert, fragt oder kommentiert ohne Änderungswunsch
-- Der User lobt oder bestätigt
-- Unklar ist ob eine dauerhafte Änderung gewünscht ist
+Setze KEINEN Block wenn:
+- Ihr noch in der Diagnose seid oder Ursachen besprecht
+- Der User nur reagiert, fragt oder kommentiert
+- Unklar ist ob und was genau geändert werden soll
 
-Setze maximal einen Block pro Antwort."""
+Wenn der User den Agenten UMBENENNEN will: Das geht nicht über das Gespräch. Verweise ihn auf den Umbenennen-Button in der Agentenübersicht (/agents). Versuche nicht selbst umzubenennen.
+
+Setze maximal einen Block pro Antwort, und nur am Ende."""
 
 
 async def _parse_and_execute_edit_signal(
@@ -424,16 +443,14 @@ async def _parse_and_execute_edit_signal(
     user_id: int,
     chat_id: int,
     message,
-) -> str:
-    import re
-
+) -> tuple[str, bool]:
     signal_pattern = re.compile(
         r"```(edit_preference|edit_data|edit_step)\n(.*?)```",
         re.DOTALL,
     )
     match = signal_pattern.search(response)
     if not match:
-        return response
+        return response, False
 
     signal_type = match.group(1)
     description = match.group(2).strip()
@@ -452,7 +469,7 @@ async def _parse_and_execute_edit_signal(
                     pool,
                     user_id,
                     chat_id,
-                    "clarification",
+                    _SESSION_CLARIFICATION,
                     {
                         "agent_id": target_agent["id"],
                         "most_likely_key": most_likely_key,
@@ -462,11 +479,11 @@ async def _parse_and_execute_edit_signal(
                     ttl_minutes=30,
                 )
                 await message.reply_text(clarification_text)
-                return clean_response
+                return clean_response, True
             edit_payload = pref_result
 
         elif signal_type == "edit_data":
-            ctx = await agent_context.load_deep(pool, target_agent, description)
+            ctx = await agent_context.load(pool, target_agent, description)
             loaded_data = ctx.get("loaded_data", {})
             edit_payload = None
             if loaded_data:
@@ -494,10 +511,10 @@ async def _parse_and_execute_edit_signal(
                 edit_payload = pref_result if isinstance(pref_result, dict) else None
 
         else:
-            return clean_response
+            return clean_response, False
 
         if not edit_payload or not isinstance(edit_payload, dict):
-            return clean_response
+            return clean_response, False
 
         edit_payload["agent_type"] = config_data.get("type", "unknown")
         confirmation_msg = agent_edits.format_confirmation_message(edit_payload)
@@ -522,11 +539,157 @@ async def _parse_and_execute_edit_signal(
             "confirmation",
             {"confirmation_id": conf_id},
         )
+        return clean_response, True
 
     except Exception as e:
         logger.warning("edit signal processing failed: %s", e)
+        return clean_response, False
 
-    return clean_response
+
+async def _run_agent_talk_turn(
+    pool: asyncpg.Pool,
+    reply_target,
+    user_id: int,
+    chat_id: int,
+    agent: dict,
+    user_text: str,
+    active_agents: list[dict],
+    wants_voice: bool = False,
+    detected_language: str = "de",
+    quoted_text: str | None = None,
+    open_session: bool = True,
+) -> None:
+    """
+    Ein Gesprächs-Turn über genau einen Agenten. Kennt kein Update-Objekt — bekommt
+    das Antwortziel (eine Telegram-Message) übergeben. Speist sich aus Notification-Reply,
+    Status-Button und Folgenachrichten der laufenden Agent-Talk-Session.
+    """
+    display = "User"
+    user_memories = await memory.get_memories(pool, "user", user_id)
+    history = await memory.get_recent_messages(pool, chat_id)
+
+    ctx = await agent_context.load(pool, agent, user_text)
+    agent_ctx_text = agent_context.format_for_system_prompt(ctx)
+
+    base_system = brain.build_system_prompt(
+        user_memories,
+        [],
+        [],
+        [],
+        display,
+        None,
+        active_agents=active_agents,
+        agent_context=agent_ctx_text or None,
+    )
+    system = base_system + _AGENT_TALK_SYSTEM_SUFFIX
+
+    llm_messages = brain.history_to_llm_messages(history)
+    turn_text = user_text
+    if quoted_text:
+        turn_text = f"[Zitierte Agent-Meldung: {quoted_text}]\n{user_text}"
+    llm_messages.append({"role": "user", "content": turn_text})
+
+    try:
+        response = await brain.chat(
+            system=system,
+            messages=llm_messages,
+            capability=CAPABILITY_CHAT,
+            caller="agent_talk",
+            pool=pool,
+        )
+    except (ProviderRateLimitError, ProviderAuthError) as e:
+        await reply_target.reply_text(ratelimit.rate_limit_message(e.provider))
+        return
+
+    if not response:
+        logger.warning("_run_agent_talk_turn: unexpected empty response")
+        return
+
+    clean_response, edit_triggered = await _parse_and_execute_edit_signal(
+        response, pool, agent, user_id, chat_id, reply_target
+    )
+
+    await memory.save_message(pool, chat_id, user_id, "user", turn_text)
+    await memory.save_message(pool, chat_id, None, "assistant", clean_response)
+
+    if clean_response:
+        await _send_response(
+            reply_target, clean_response, wants_voice, detected_language
+        )
+
+    if edit_triggered:
+        await memory.clear_session(pool, user_id, chat_id, _SESSION_AGENT_TALK)
+    elif open_session:
+        new_history = await memory.get_recent_messages(pool, chat_id)
+        await memory.set_session(
+            pool,
+            user_id,
+            chat_id,
+            _SESSION_AGENT_TALK,
+            {
+                "agent_id": agent["id"],
+                "conversation_summary": _summarize_history_for_membership(new_history),
+            },
+            ttl_minutes=_AGENT_TALK_TTL_MINUTES,
+        )
+
+    snippet = _build_snippet(history, user_text, display)
+    asyncio.create_task(
+        extractor.extract_and_store_automatic(pool, user_id, display, snippet)
+    )
+
+
+async def _handle_agent_talk_session(
+    update: Update,
+    pool: asyncpg.Pool,
+    user_id: int,
+    chat_id: int,
+    text: str,
+    active_agents: list[dict],
+    wants_voice: bool,
+    detected_language: str,
+) -> bool:
+    """
+    Prüft ob eine laufende Agent-Talk-Session existiert und ob die Nachricht dazugehört.
+    'continue' → Turn läuft, True. 'closed' → Session weg, False (normaler Pfad greift).
+    'unrelated' → Session bleibt, False (normaler Pfad greift, Session überlebt).
+    """
+    session = await memory.get_session(pool, user_id, chat_id, _SESSION_AGENT_TALK)
+    if not session:
+        return False
+
+    payload = session["payload"]
+    agent_id: int = payload.get("agent_id", 0)
+    target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
+    if not target_agent:
+        await memory.clear_session(pool, user_id, chat_id, _SESSION_AGENT_TALK)
+        return False
+
+    verdict = await agent_context.classify_talk_membership(
+        target_agent["name"],
+        payload.get("conversation_summary", ""),
+        text,
+    )
+
+    if verdict == "closed":
+        await memory.clear_session(pool, user_id, chat_id, _SESSION_AGENT_TALK)
+        return False
+
+    if verdict == "unrelated":
+        return False
+
+    await _run_agent_talk_turn(
+        pool,
+        update.effective_message,
+        user_id,
+        chat_id,
+        target_agent,
+        text,
+        active_agents,
+        wants_voice=wants_voice,
+        detected_language=detected_language,
+    )
+    return True
 
 
 async def _handle_agent_notification_reply(
@@ -540,68 +703,28 @@ async def _handle_agent_notification_reply(
     wants_voice: bool,
     detected_language: str,
 ) -> None:
+    """
+    Pfad A: User antwortet auf eine Agent-Notification. Öffnet/führt die Agent-Talk-Session
+    und zieht den zitierten Meldungstext als Kontext mit.
+    """
     message = update.effective_message
     agent_id = notification.get("agent_id")
     target_agent = next((a for a in active_agents if a["id"] == agent_id), None)
-    display = _display_name(update.effective_user)
-
-    user_memories = await memory.get_memories(pool, "user", user_id)
-    history = await memory.get_recent_messages(pool, chat_id)
-
-    agent_ctx_text = ""
-    if target_agent:
-        use_deep = agent_context.needs_deep_load(text)
-        ctx = (
-            await agent_context.load_deep(pool, target_agent, text)
-            if use_deep
-            else await agent_context.load_shallow(pool, target_agent)
-        )
-        agent_ctx_text = agent_context.format_for_system_prompt(ctx)
-
-    base_system = brain.build_system_prompt(
-        user_memories,
-        [],
-        [],
-        [],
-        display,
-        None,
-        active_agents=active_agents,
-        agent_context=agent_ctx_text or None,
-    )
-    system = base_system + _AGENT_REPLY_SYSTEM_SUFFIX
-
-    llm_messages = brain.history_to_llm_messages(history)
-    llm_messages.append({"role": "user", "content": text})
-
-    try:
-        response = await brain.chat(
-            system=system,
-            messages=llm_messages,
-            capability=CAPABILITY_CHAT,
-            caller="handler_agent_reply",
-            pool=pool,
-        )
-    except (ProviderRateLimitError, ProviderAuthError) as e:
-        await message.reply_text(ratelimit.rate_limit_message(e.provider))
+    if not target_agent:
         return
 
-    if not response:
-        logger.warning("_handle_agent_notification_reply: unexpected empty response")
-        return
-
-    if target_agent:
-        response = await _parse_and_execute_edit_signal(
-            response, pool, target_agent, user_id, chat_id, message
-        )
-
-    await memory.save_message(pool, chat_id, user_id, "user", text)
-    await memory.save_message(pool, chat_id, None, "assistant", response)
-
-    await _send_response(update, response, wants_voice, detected_language)
-
-    snippet = _build_snippet(history, text, display)
-    asyncio.create_task(
-        extractor.extract_and_store_automatic(pool, user_id, display, snippet)
+    quoted = _quoted_text(message)
+    await _run_agent_talk_turn(
+        pool,
+        message,
+        user_id,
+        chat_id,
+        target_agent,
+        text,
+        active_agents,
+        wants_voice=wants_voice,
+        detected_language=detected_language,
+        quoted_text=quoted,
     )
 
 
@@ -853,7 +976,7 @@ async def _handle_chat(
     if not triggered_by_mention and is_group:
         await memory.update_spontaneous_timestamp(pool, chat_id)
 
-    await _send_response(update, response, wants_voice, detected_language)
+    await _send_response(message, response, wants_voice, detected_language)
 
     snippet = _build_snippet(history, text, display)
     asyncio.create_task(
@@ -1020,6 +1143,7 @@ async def _reply(
     )
 
     if intent != "none":
+        await memory.clear_session(pool, user.id, chat.id, _SESSION_AGENT_TALK)
         await _handle_explicit_intent(
             update,
             pool,
@@ -1050,6 +1174,18 @@ async def _reply(
                 detected_language,
             )
             return
+
+    if await _handle_agent_talk_session(
+        update,
+        pool,
+        user.id,
+        chat.id,
+        text,
+        active_agents,
+        wants_voice,
+        detected_language,
+    ):
+        return
 
     await _handle_chat(
         update,
@@ -1113,9 +1249,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if forward_context:
         transcribed = f"{forward_context}\n{transcribed}"
+    transcribed_lower = transcribed.lower()
     is_mention = (
-        bot_username and f"@{bot_username}".lower() in transcribed.lower()
-    ) or config.BOT_NAME.lower() in transcribed.lower()
+        bot_username and f"@{bot_username}".lower() in transcribed_lower
+    ) or bool(
+        re.search(rf"\b{re.escape(config.BOT_NAME.lower())}\b", transcribed_lower)
+    )
     is_reply_to_bot = (
         message.reply_to_message is not None
         and message.reply_to_message.from_user is not None
@@ -1182,10 +1321,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         agents_for_mention = await memory.get_active_agents_for_user(pool, user.id)
         agent_names_lower = [a["name"].lower() for a in agents_for_mention]
 
+    text_lower = text.lower()
     is_mention = (
-        (bot_username and f"@{bot_username}".lower() in text.lower())
-        or config.BOT_NAME.lower() in text.lower()
-        or any(name in text.lower() for name in agent_names_lower)
+        (bot_username and f"@{bot_username}".lower() in text_lower)
+        or bool(re.search(rf"\b{re.escape(config.BOT_NAME.lower())}\b", text_lower))
+        or any(
+            re.search(rf"\b{re.escape(name)}\b", text_lower)
+            for name in agent_names_lower
+        )
     )
     is_reply_to_bot = (
         message.reply_to_message is not None
@@ -1269,11 +1412,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     bot_username = context.bot.username
     is_group = chat.type in ("group", "supergroup")
     caption = (message.caption or "").strip() or None
+    caption_lower = caption.lower() if caption else ""
     is_mention = bool(
         caption
         and (
-            (bot_username and f"@{bot_username}".lower() in caption.lower())
-            or config.BOT_NAME.lower() in caption.lower()
+            (bot_username and f"@{bot_username}".lower() in caption_lower)
+            or re.search(rf"\b{re.escape(config.BOT_NAME.lower())}\b", caption_lower)
         )
     )
     is_reply_to_bot = (
@@ -1312,6 +1456,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     doc = message.document
     mime = doc.mime_type or ""
     caption = (message.caption or "").strip() or None
+    caption_lower = caption.lower() if caption else ""
     SUPPORTED_MIME: dict[str, str] = {
         "image/jpeg": "image/jpeg",
         "image/png": "image/png",
@@ -1331,8 +1476,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     is_mention = bool(
         caption
         and (
-            (bot_username and f"@{bot_username}".lower() in caption.lower())
-            or config.BOT_NAME.lower() in caption.lower()
+            (bot_username and f"@{bot_username}".lower() in caption_lower)
+            or re.search(rf"\b{re.escape(config.BOT_NAME.lower())}\b", caption_lower)
         )
     )
     is_reply_to_bot = (
@@ -1416,9 +1561,8 @@ async def handle_callback_query(
         except ValueError:
             return
 
-        pending = await memory.get_pending_confirmation(
-            pool, user.id, query.message.chat.id
-        )
+        chat_id = query.message.chat.id
+        pending = await memory.get_pending_confirmation(pool, user.id, chat_id)
         if not pending or pending["id"] != confirmation_id:
             await query.edit_message_text("Diese Bestätigung ist abgelaufen.")
             return
@@ -1426,9 +1570,8 @@ async def handle_callback_query(
         edit_payload = pending["payload"]
 
         if action == "yes":
-            await memory.clear_pending_confirmation(
-                pool, user.id, query.message.chat.id
-            )
+            await memory.clear_pending_confirmation(pool, user.id, chat_id)
+            await memory.clear_session(pool, user.id, chat_id, _SESSION_AGENT_TALK)
             result = await agent_edits.execute_edit(pool, edit_payload)
             rollback_id = confirmation_id
             _pending_rollbacks[rollback_id] = edit_payload
@@ -1439,9 +1582,8 @@ async def handle_callback_query(
             )
 
         elif action == "no":
-            await memory.clear_pending_confirmation(
-                pool, user.id, query.message.chat.id
-            )
+            await memory.clear_pending_confirmation(pool, user.id, chat_id)
+            await memory.clear_session(pool, user.id, chat_id, _SESSION_AGENT_TALK)
             await query.edit_message_text("Abgebrochen.")
 
         elif action == "adjust":
@@ -1449,7 +1591,7 @@ async def handle_callback_query(
             await memory.save_agent_notification(
                 pool,
                 sent.message_id,
-                query.message.chat.id,
+                chat_id,
                 edit_payload.get("agent_id", 0),
                 "adjust_request",
                 {"confirmation_id": confirmation_id},
@@ -1473,6 +1615,7 @@ async def handle_callback_query(
         except ValueError:
             return
 
+        chat_id = query.message.chat.id
         active_agents = await memory.get_active_agents_for_user(pool, user.id)
         agent = next((a for a in active_agents if a["id"] == agent_id), None)
         if not agent:
@@ -1483,18 +1626,14 @@ async def handle_callback_query(
             await memory.deactivate_agent(pool, agent_id)
             await query.edit_message_text(f"{agent['name']} wurde gestoppt.")
         elif action == "status":
-            state = await memory.get_agent_state(pool, agent_id)
-            agent_memories = await memory.get_agent_memories(pool, agent_id)
-            status_text, _, _ = await agent_parser.handle_agent_talk(
-                "Was ist dein aktueller Status und was hast du bisher beobachtet?",
+            await _run_agent_talk_turn(
+                pool,
+                query.message,
+                user.id,
+                chat_id,
                 agent,
-                state,
-                agent_memories,
-                pool=pool,
-            )
-            await query.message.reply_text(
-                f"{agent['name']} — Status:\n\n{status_text}",
-                reply_markup=_agent_keyboard(agent_id),
+                "Was ist dein aktueller Status und was hast du bisher beobachtet?",
+                active_agents,
             )
         elif action == "rename":
             context.user_data["awaiting_rename_agent_id"] = agent_id

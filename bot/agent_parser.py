@@ -8,8 +8,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import asyncpg
 from croniter import croniter
 
-from bot import agent_skills, brain, config, memory
-from bot.models import CAPABILITY_CHAT, CAPABILITY_DEEP_REASONING, CAPABILITY_REASONING
+from bot import agent_skills, brain, config
+from bot.models import CAPABILITY_REASONING
 from bot.utils import clean_llm_json, parse_agent_config
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ Felder:
   - "operation": Nur für transform-Bausteine. Einer von: array_push, group_by, statistics, json_path, xml_extract, regex_extract, arithmetic, compare
   - "condition": Nur wenn diese Teilaufgabe nur unter bestimmten Bedingungen läuft. Freitext.
   - "route": Nur wenn diese Teilaufgabe nur auf einem bestimmten Route-Pfad läuft.
+  - "required": false wenn dieser Subtask optional ist und ein leeres Ergebnis die Pipeline NICHT abbrechen soll. Standard ist true. Setze required=false nur bei datenabrufenden Subtasks (web_search, http_fetch, finance, finance_search, xlsx_fetch), wenn mehrere gleichartige Abrufe parallel laufen und ein einzelner leerer Rückgabewert verkraftbar ist.
   - "parameters": Strukturierte Parameter die direkt aus der Instruction ableitbar sind. MUSS bei xlsx_fetch gesetzt werden — ohne parameters ist ein xlsx_fetch-Subtask unvollständig und ungültig. Bei xlsx_fetch enthält parameters zwingend: "columns" (alle in der Instruction genannten Spaltennamen als Liste) und "filters" (alle in der Instruction beschriebenen Filterbedingungen als Liste). Jede Filterbedingung hat "column", "operator" und optional "value". Verfügbare Operatoren: not_empty, empty, equals, not_equals, contains, not_contains, starts_with, ends_with. Ein xlsx_fetch-Subtask ohne parameters.filters ist ein Fehler.
 
 PFLICHTREGELN FÜR URTEILENDE SUBTASKS:
@@ -152,6 +153,13 @@ Wenn ein Step vom Typ llm_decide oder llm_analyze ein inhaltliches Urteil trifft
 
 4. Nach dem llm_decide/llm_analyze Step MUSS state_write folgen der Ergebnisse akkumuliert.
 
+DATENABRUF UND ABBRUCH:
+Steps die externe Daten holen (web_search, http_fetch, finance, finance_search, xlsx_fetch) brechen den
+gesamten Lauf ab wenn sie ein leeres Ergebnis liefern — es sei denn, ein "default" ist gesetzt oder "required": false.
+- Setze "required": false NUR wenn mehrere gleichartige Abruf-Steps parallel laufen und ein einzelner
+  leerer Rückgabewert die Pipeline nicht sinnlos macht.
+- Bei einem einzelnen, für den Lauf zwingenden Abruf: required weglassen (Default true).
+
 Step-Schemas nach Typ:
 
 router_match:
@@ -173,7 +181,7 @@ llm_summarize:
 {"id": "summarize", "type": "llm_summarize", "prompt": "Fasse zusammen.", "output_key": "summary"}
 
 web_search:
-{"id": "search", "type": "web_search", "query_template": "{{context_key}} relevante begriffe", "prompt": "Fasse zusammen.", "time_range": "week", "categories": "general", "output_key": "search_result"}
+{"id": "search", "type": "web_search", "query_template": "{{context_key}} relevante begriffe", "prompt": "Fasse zusammen.", "time_range": "week", "categories": "general", "output_key": "search_result", "required": false}
 
 finance:
 {"id": "get_quote", "type": "finance", "ticker_key": "selected_ticker", "output_key": "quote_data"}
@@ -295,260 +303,6 @@ async def resolve_agent_by_text(
     except Exception as e:
         logger.warning("agent name resolution failed: %s", e)
         return None
-
-
-_AGENT_PARSER_SYSTEM = """Du extrahierst einen persistenten Agenten aus einer Nutzeranfrage.
-Ein Agent läuft nach Plan, erinnert sich an frühere Ergebnisse und handelt nur wenn sich etwas Relevantes ändert.
-
-Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
-
-Felder:
-- "instruction": Vollständige, eigenständige Anweisung in natürlicher Sprache.
-- "schedule": Cron-Expression (5 Felder). Beispiele: stündlich = "0 * * * *", täglich um 9 = "0 9 * * *".
-- "target": "same" für denselben Chat, "dm" für Privatnachricht.
-- "wants_name": true wenn der User einen Namen erwähnt oder explizit fragt.
-- "suggested_name": Konkreter Name wenn der User einen nennt, sonst null.
-- "wants_monitor": true wenn ein RSS-Monitor sinnvoll wäre.
-- "wants_scraper": true wenn ein Scraper-Service sinnvoll wäre.
-
-Wenn kein sinnvoller Zeitplan erkennbar ist, setze schedule auf null."""
-
-
-async def parse_agent_creation(
-    text: str,
-    user_id: int,
-    source_chat_id: int,
-    pool: asyncpg.Pool,
-) -> dict | None:
-    try:
-        raw = await brain.chat(
-            system=_AGENT_PARSER_SYSTEM,
-            messages=[{"role": "user", "content": text}],
-            capability=CAPABILITY_CHAT,
-            caller="agent_parser",
-        )
-        logger.debug("agent parser raw: %r", raw[:200])
-        parsed = json.loads(clean_llm_json(raw))
-        if not isinstance(parsed, dict):
-            return None
-
-        schedule_raw = parsed.get("schedule")
-        schedule: str | None = None
-        if schedule_raw and croniter.is_valid(schedule_raw):
-            schedule = schedule_raw
-        else:
-            logger.info("no valid schedule — agent will be trigger-only")
-
-        instruction = parsed.get("instruction", "").strip()
-        if not instruction:
-            return None
-
-        decomposition = await _decompose_task(instruction, pool=pool)
-        if decomposition is None:
-            logger.warning("task decomposition failed for agent creation")
-            return None
-
-        pipeline_result = await _generate_pipeline(
-            instruction, decomposition, pool=pool
-        )
-        agent_type: str = decomposition.get("type", "default")
-
-        next_run_utc: datetime | None = None
-        next_run_local: datetime | None = None
-
-        if schedule:
-            tz_str = await memory.get_user_timezone(pool, user_id)
-            try:
-                tz = ZoneInfo(tz_str)
-            except ZoneInfoNotFoundError:
-                tz = ZoneInfo("UTC")
-            now = datetime.now(tz)
-            next_run_local = croniter(schedule, now).get_next(datetime)
-            next_run_utc = next_run_local.astimezone(ZoneInfo("UTC"))
-
-        target_chat_id = user_id if parsed.get("target") == "dm" else source_chat_id
-
-        agent_config: dict = {
-            "instruction": instruction,
-            "type": agent_type,
-            "data_reads": [],
-        }
-        if pipeline_result:
-            agent_config["steps"] = pipeline_result.get("steps", [])
-
-        raw_suggested: str | None = parsed.get("suggested_name")
-        if raw_suggested and raw_suggested.strip().lower() == config.BOT_NAME.lower():
-            raw_suggested = None
-
-        return {
-            "config": agent_config,
-            "schedule": schedule,
-            "target_chat_id": target_chat_id,
-            "next_run_at": next_run_utc,
-            "next_run_display": next_run_local,
-            "wants_name": bool(parsed.get("wants_name", False)),
-            "suggested_name": raw_suggested,
-            "wants_monitor": bool(parsed.get("wants_monitor", False)),
-            "wants_scraper": bool(parsed.get("wants_scraper", False)),
-        }
-    except Exception as e:
-        logger.warning("agent parsing failed: %s", e)
-        return None
-
-
-_AGENT_TALK_SYSTEM = """Du bist Bob. Ein Nutzer fragt nach einem deiner laufenden Agenten oder möchte dessen Konfiguration ändern.
-
-Du sprichst ÜBER den Agenten in Bobs Stimme — identifiziere dich immer mit dem Agenten-Namen.
-Du bist nicht der Agent und schlüpfst nicht in seine Rolle.
-
-Mögliche Anfragen:
-- Statusabfrage → fasse State, Beobachtungen und gespeicherte Daten zusammen
-- Inhaltliche Konfigurationsänderung → bestätige knapp was geändert wird, gib vollständiges neues config-Objekt zurück: ```config\\n{...}\\n```
-- Umbenennung → bestätige knapp, gib neuen Namen zurück: ```name\\nNeuerName\\n```
-
-Wenn du die Konfiguration änderst: gib das vollständige config-Objekt zurück mit ALLEN bestehenden Feldern.
-Ändere NUR instruction und type — niemals steps direkt."""
-
-
-async def handle_agent_talk(
-    text: str,
-    agent: dict,
-    state: dict[str, str],
-    agent_memories: list[str],
-    pool: asyncpg.Pool | None = None,
-) -> tuple[str, dict | None, str | None]:
-    """
-    Führt ein Gespräch über einen Agenten — Statusabfragen und Konfigurationsänderungen.
-    Gibt (response, new_config, new_name) zurück.
-    Feedback-Verarbeitung und Clarifications laufen über den Handler-Pfad A, nicht hier.
-    """
-    config_data = parse_agent_config(agent["config"])
-    state_summary = (
-        "\n".join(f"{k}: {v}" for k, v in state.items()) if state else "noch kein State"
-    )
-    memories_summary = (
-        "\n- ".join(agent_memories) if agent_memories else "noch keine Beobachtungen"
-    )
-
-    data_summary = ""
-    full_content_blocks: list[str] = []
-
-    if pool is not None:
-        try:
-            data_rows = await memory.get_all_agent_data(pool, agent["id"])
-            if data_rows:
-                text_lower = text.lower()
-                ns_lines: list[str] = []
-                for row in data_rows[:50]:
-                    key_lower = row["key"].lower()
-                    if key_lower in text_lower or any(
-                        word in text_lower
-                        for word in key_lower.replace("_", " ")
-                        .replace(".", " ")
-                        .split()
-                        if len(word) > 3
-                    ):
-                        full_content_blocks.append(
-                            f"[Vollständiger Inhalt — {row['namespace']}/{row['key']}]\n{row['value']}"
-                        )
-                    else:
-                        preview = (
-                            row["value"][:120] + "…"
-                            if len(row["value"]) > 120
-                            else row["value"]
-                        )
-                        ns_lines.append(f"{row['namespace']}/{row['key']}: {preview}")
-                data_summary = "\n".join(ns_lines)
-        except Exception as e:
-            logger.warning("failed to load agent data for talk: %s", e)
-
-    context = (
-        f"Agent: {agent['name']}\n"
-        f"Konfiguration: {json.dumps(config_data, ensure_ascii=False)}\n\n"
-        f"Aktueller State:\n{state_summary}\n\n"
-        f"Bisherige Beobachtungen:\n- {memories_summary}"
-        + (f"\n\nGespeicherte Daten:\n{data_summary}" if data_summary else "")
-        + (f"\n\n{chr(10).join(full_content_blocks)}" if full_content_blocks else "")
-    )
-
-    try:
-        response = await brain.chat(
-            system=_AGENT_TALK_SYSTEM,
-            messages=[
-                {"role": "user", "content": f"{context}\n\nNutzeranfrage: {text}"}
-            ],
-            capability=CAPABILITY_CHAT,
-            caller="agent_talk",
-        )
-    except Exception as e:
-        logger.warning("agent talk failed: %s", e)
-        return "Konnte den Agenten nicht befragen.", None, None
-
-    new_config: dict | None = None
-    new_name: str | None = None
-
-    if "```config" in response:
-        try:
-            start = response.index("```config") + len("```config")
-            end = response.index("```", start)
-            raw_config = json.loads(response[start:end].strip())
-            if isinstance(raw_config, dict):
-                new_config = raw_config
-                if new_config.get("instruction") and new_config[
-                    "instruction"
-                ] != config_data.get("instruction"):
-                    decomposition = await _decompose_task(
-                        new_config["instruction"], pool=pool
-                    )
-                    if decomposition:
-                        new_pipeline = await _generate_pipeline(
-                            new_config["instruction"], decomposition, pool=pool
-                        )
-                        if new_pipeline:
-                            new_config["steps"] = new_pipeline.get("steps", [])
-                            new_config.pop("pipeline", None)
-                            new_config.pop("pipeline_after_template", None)
-                            new_config["type"] = decomposition.get(
-                                "type", config_data.get("type", "default")
-                            )
-            response = response[: response.index("```config")].strip()
-        except Exception as e:
-            logger.warning("config extraction from agent talk failed: %s", e)
-
-    if "```name" in response:
-        try:
-            start = response.index("```name") + len("```name")
-            end = response.index("```", start)
-            new_name = response[start:end].strip()
-            response = response[: response.index("```name")].strip()
-        except Exception as e:
-            logger.warning("name extraction from agent talk failed: %s", e)
-
-    return response, new_config, new_name
-
-
-async def regenerate_pipeline_for_agent(
-    agent_config: dict, pool: asyncpg.Pool | None = None
-) -> dict:
-    instruction = agent_config.get("instruction", "")
-    if not instruction:
-        return agent_config
-
-    decomposition = await _decompose_task(instruction, pool=pool)
-    if decomposition is None:
-        return agent_config
-
-    pipeline_result = await _generate_pipeline(instruction, decomposition, pool=pool)
-    if pipeline_result is None:
-        return agent_config
-
-    updated = dict(agent_config)
-    updated["steps"] = pipeline_result.get("steps", [])
-    updated.pop("pipeline", None)
-    updated.pop("pipeline_after_template", None)
-    updated["type"] = decomposition.get("type", agent_config.get("type", "default"))
-    updated.pop("work_capability", None)
-    return updated
 
 
 def next_agent_run_after(schedule: str, timezone: str) -> datetime:

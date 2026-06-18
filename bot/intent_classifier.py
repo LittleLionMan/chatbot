@@ -101,7 +101,7 @@ async def classify(
         return result
     except Exception as e:
         logger.warning("intent classification failed: %s", e)
-        return {"intent": "none", "needs_search": True, "wants_voice": False}
+        return {"intent": "none", "needs_search": False, "wants_voice": False}
 
 
 _TRIGGER_PAYLOAD_SYSTEM = """Extrahiere aus einer Nutzeranfrage den Agentennamen und alle relevanten Parameter.

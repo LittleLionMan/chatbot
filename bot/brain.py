@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import anthropic
 import asyncpg
@@ -266,7 +267,7 @@ async def chat(
     if use_web_search:
         from bot import search as _search
 
-        searxng_available = await _search.is_available()
+        searxng_available = await _searxng_available_cached()
         if searxng_available:
             augmented_messages = await _inject_search_results(
                 messages, search_queries, search_time_range, search_categories, _search
@@ -352,14 +353,19 @@ async def chat(
 
 
 _searxng_available: bool | None = None
+_searxng_checked_at: float = 0.0
+_SEARXNG_CACHE_TTL_SECONDS = 60.0
 
 
 async def _searxng_available_cached() -> bool:
-    global _searxng_available
-    if _searxng_available is None:
+    global _searxng_available, _searxng_checked_at
+    now = time.monotonic()
+    is_stale = (now - _searxng_checked_at) > _SEARXNG_CACHE_TTL_SECONDS
+    if _searxng_available is None or is_stale:
         from bot import search as _search
 
         _searxng_available = await _search.is_available()
+        _searxng_checked_at = now
     return _searxng_available
 
 

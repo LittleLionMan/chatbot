@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -122,7 +123,7 @@ def _evaluate_condition(condition: str, context: dict[str, str]) -> bool:
         return False
 
     lhs_key, op, rhs_raw = match.group(1), match.group(2), match.group(3).strip()
-    lhs_raw = context.get(lhs_key.replace(".", "_"), context.get(lhs_key, ""))
+    lhs_raw = _get(context, lhs_key)
     rhs = rhs_raw.strip("'\"")
     if rhs_raw.lower() in ("null", "") or rhs == "":
         rhs = None
@@ -689,25 +690,12 @@ def _transform_list_append(step: dict, context: dict[str, str]) -> str:
     target_key: str = step["target_key"]
     max_items: int = int(step.get("max_items", 10000))
     output_format: str = step.get("output_format", "json_array")
-    value_raw = _get(context, value_key)
-    if not value_raw:
+    value = _get(context, value_key)
+    if not value:
         logger.warning("transform list_append: value_key %r is empty", value_key)
         return context.get(target_key, "[]")
-    try:
-        value: object = json.loads(value_raw)
-    except Exception:
-        value = value_raw
     items = _parse_json_list(context.get(target_key, "[]"))
-    value_str = (
-        json.dumps(value, ensure_ascii=False)
-        if isinstance(value, (dict, list))
-        else str(value)
-    )
-    existing_strs = [
-        json.dumps(i, ensure_ascii=False) if isinstance(i, (dict, list)) else str(i)
-        for i in items
-    ]
-    if value_str not in existing_strs:
+    if value not in items:
         items.append(value)
     if len(items) > max_items:
         items = items[-max_items:]
@@ -1130,6 +1118,75 @@ async def _handle_http_fetch(step: dict, context: dict[str, str], **_) -> str:
         return _check_fetch_result(step, "", f"http_fetch failed for {url[:80]}: {e}")
 
 
+def _parse_xlsx_sync(
+    raw_bytes: bytes,
+    sheet_ref: object,
+    columns: list[str],
+    all_filters: list[dict],
+) -> list[dict]:
+    wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), read_only=True, data_only=True)
+    try:
+        ws = wb.worksheets[sheet_ref] if isinstance(sheet_ref, int) else wb[sheet_ref]
+        rows = list(ws.iter_rows(values_only=True))
+    finally:
+        wb.close()
+
+    if not rows:
+        return []
+
+    header = [
+        str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(rows[0])
+    ]
+
+    if columns:
+        col_indices = [header.index(col) for col in columns if col in header]
+        use_cols = [col for col in columns if col in header]
+    else:
+        col_indices = list(range(len(header)))
+        use_cols = header
+
+    def _cell_str(val: object) -> str:
+        return str(val).strip() if val is not None else ""
+
+    def _matches_xlsx_filter(row: tuple, f: dict) -> bool:
+        col_name: str = f.get("column", "")
+        operator: str = f.get("operator", "equals")
+        value: str = str(f.get("value", ""))
+        if col_name not in header:
+            return True
+        col_idx = header.index(col_name)
+        cell = _cell_str(row[col_idx] if col_idx < len(row) else None)
+        if operator == "equals":
+            return cell == value
+        if operator == "not_equals":
+            return cell != value
+        if operator == "contains":
+            return value.lower() in cell.lower()
+        if operator == "not_contains":
+            return value.lower() not in cell.lower()
+        if operator == "not_empty":
+            return cell != ""
+        if operator == "empty":
+            return cell == ""
+        if operator == "starts_with":
+            return cell.lower().startswith(value.lower())
+        if operator == "ends_with":
+            return cell.lower().endswith(value.lower())
+        return True
+
+    result: list[dict] = []
+    for row in rows[1:]:
+        if all_filters and not all(_matches_xlsx_filter(row, f) for f in all_filters):
+            continue
+        record: dict[str, str] = {}
+        for i, idx in enumerate(col_indices):
+            val = row[idx] if idx < len(row) else None
+            record[use_cols[i]] = _cell_str(val)
+        result.append(record)
+
+    return result
+
+
 async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
     url_template: str = step.get("url_template") or step.get("url", "")
     url = _resolve_template(url_template, context)
@@ -1143,6 +1200,16 @@ async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
     row_filters: list[dict] = step.get("filters", [])
     timeout: float = float(step.get("timeout", 30.0))
 
+    all_filters: list[dict] = list(row_filters)
+    if row_filter and not row_filters:
+        all_filters = [
+            {
+                "column": row_filter["column"],
+                "operator": "equals",
+                "value": str(row_filter["value"]),
+            }
+        ]
+
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             resp = await client.get(url, headers={"User-Agent": "BobAgent/1.0"})
@@ -1155,79 +1222,10 @@ async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
                 len(raw_bytes),
             )
 
-        wb = openpyxl.load_workbook(
-            io.BytesIO(raw_bytes), read_only=True, data_only=True
+        result = await asyncio.to_thread(
+            _parse_xlsx_sync, raw_bytes, sheet_ref, columns, all_filters
         )
-        ws = wb.worksheets[sheet_ref] if isinstance(sheet_ref, int) else wb[sheet_ref]
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            wb.close()
-            return _check_fetch_result(step, "", f"xlsx_fetch: no rows from {url[:60]}")
 
-        header = [
-            str(c).strip() if c is not None else f"col_{i}"
-            for i, c in enumerate(rows[0])
-        ]
-
-        if columns:
-            col_indices = [header.index(col) for col in columns if col in header]
-            use_cols = [col for col in columns if col in header]
-        else:
-            col_indices = list(range(len(header)))
-            use_cols = header
-
-        def _cell_str(val: object) -> str:
-            return str(val).strip() if val is not None else ""
-
-        def _matches_xlsx_filter(row: tuple, f: dict) -> bool:
-            col_name: str = f.get("column", "")
-            operator: str = f.get("operator", "equals")
-            value: str = str(f.get("value", ""))
-            if col_name not in header:
-                return True
-            col_idx = header.index(col_name)
-            cell = _cell_str(row[col_idx] if col_idx < len(row) else None)
-            if operator == "equals":
-                return cell == value
-            if operator == "not_equals":
-                return cell != value
-            if operator == "contains":
-                return value.lower() in cell.lower()
-            if operator == "not_contains":
-                return value.lower() not in cell.lower()
-            if operator == "not_empty":
-                return cell != ""
-            if operator == "empty":
-                return cell == ""
-            if operator == "starts_with":
-                return cell.lower().startswith(value.lower())
-            if operator == "ends_with":
-                return cell.lower().endswith(value.lower())
-            return True
-
-        all_filters: list[dict] = list(row_filters)
-        if row_filter and not row_filters:
-            all_filters = [
-                {
-                    "column": row_filter["column"],
-                    "operator": "equals",
-                    "value": str(row_filter["value"]),
-                }
-            ]
-
-        result: list[dict] = []
-        for row in rows[1:]:
-            if all_filters and not all(
-                _matches_xlsx_filter(row, f) for f in all_filters
-            ):
-                continue
-            record: dict[str, str] = {}
-            for i, idx in enumerate(col_indices):
-                val = row[idx] if idx < len(row) else None
-                record[use_cols[i]] = _cell_str(val)
-            result.append(record)
-
-        wb.close()
         logger.info("xlsx_fetch: extracted %d rows from %s", len(result), url[:60])
         return _check_fetch_result(
             step,
@@ -1656,6 +1654,7 @@ async def execute_agent(
             await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls)
 
         has_notify_tool = any(c.get("tool") == "notify_user" for c in tool_calls)
+        did_notify = False
         if (
             notify_user
             and not has_notify_tool
@@ -1696,9 +1695,14 @@ async def execute_agent(
                 )
 
             await memory.add_memory(pool, "agent", agent_id, report[:200])
+            did_notify = True
             logger.info("agent %s notified user", name)
         else:
             logger.info("agent %s: no change or notify suppressed", name)
+
+        await memory.record_agent_run(
+            pool, agent_id, status="ok", notified=did_notify or has_notify_tool
+        )
 
         if schedule:
             tz = await memory.get_user_timezone(pool, user_id)
@@ -1713,6 +1717,12 @@ async def execute_agent(
 
     except StepAbortError as e:
         logger.info("agent %s run aborted at step %s: %s", name, e.step_id, e.reason)
+        try:
+            await memory.record_agent_run(pool, agent_id, status="aborted")
+        except Exception as rec_err:
+            logger.warning(
+                "agent %d failed to record aborted run: %s", agent_id, rec_err
+            )
         if schedule:
             tz = await memory.get_user_timezone(pool, user_id)
             next_run = next_agent_run_after(schedule, tz)
@@ -1725,6 +1735,10 @@ async def execute_agent(
         logger.error("agent %d rate limit on %s", agent_id, e.provider)
     except Exception as e:
         logger.error("agent %d execution failed: %s", agent_id, e)
+        try:
+            await memory.record_agent_run(pool, agent_id, status="error")
+        except Exception as rec_err:
+            logger.warning("agent %d failed to record error run: %s", agent_id, rec_err)
         try:
             if schedule:
                 tz = await memory.get_user_timezone(pool, user_id)

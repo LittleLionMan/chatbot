@@ -124,17 +124,19 @@ async def get_recent_messages(
         chat_id,
         limit * 4,
     )
-    chronological = list(reversed(rows))
-    result: list[dict] = []
+    selected: list[dict] = []
     agent_count = 0
-    for row in chronological:
+    for row in rows:
         d = dict(row)
         if d.get("agent_id") is not None:
             if agent_count >= max_agent_messages:
                 continue
             agent_count += 1
-        result.append(d)
-    return result[-limit:]
+        selected.append(d)
+        if len(selected) >= limit:
+            break
+    selected.reverse()
+    return selected
 
 
 async def count_unobserved_messages(
@@ -480,7 +482,8 @@ async def create_agent(
 async def get_active_agents_for_user(pool: asyncpg.Pool, user_id: int) -> list[dict]:
     rows = await pool.fetch(
         """
-        SELECT id, name, config, schedule, target_chat_id, next_run_at, last_run_at
+        SELECT id, name, config, schedule, target_chat_id, next_run_at, last_run_at,
+               current_rating, current_rating_note
         FROM agents
         WHERE user_id = $1 AND is_active = TRUE
         ORDER BY created_at ASC
@@ -525,6 +528,38 @@ async def update_agent_run(
     )
 
 
+async def record_agent_run(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    status: str = "ok",
+    notified: bool = False,
+) -> None:
+    await pool.execute(
+        "INSERT INTO agent_runs (agent_id, status, notified) VALUES ($1, $2, $3)",
+        agent_id,
+        status,
+        notified,
+    )
+
+
+async def count_agent_runs_since(
+    pool: asyncpg.Pool,
+    agent_id: int,
+    since: datetime,
+    status: str = "ok",
+) -> int:
+    row = await pool.fetchrow(
+        """
+        SELECT COUNT(*) FROM agent_runs
+        WHERE agent_id = $1 AND run_at > $2 AND status = $3
+        """,
+        agent_id,
+        since,
+        status,
+    )
+    return row["count"] if row else 0
+
+
 async def deactivate_agent(pool: asyncpg.Pool, agent_id: int) -> None:
     await pool.execute("UPDATE agents SET is_active = FALSE WHERE id = $1", agent_id)
 
@@ -555,7 +590,7 @@ async def get_agent_state_by_name(
     pool: asyncpg.Pool, name: str
 ) -> dict[str, str] | None:
     row = await pool.fetchrow(
-        "SELECT id FROM agents WHERE LOWER(name) = LOWER($1)",
+        "SELECT id FROM agents WHERE LOWER(name) = LOWER($1) AND is_active = TRUE LIMIT 1",
         name,
     )
     if not row:
@@ -746,7 +781,7 @@ async def get_agent_id_by_name(pool: asyncpg.Pool, name: str) -> int | None:
     row = await pool.fetchrow(
         """
         SELECT id FROM agents
-        WHERE LOWER(name) = LOWER($1)
+        WHERE LOWER(name) = LOWER($1) AND is_active = TRUE
         LIMIT 1
         """,
         name,
@@ -952,42 +987,6 @@ async def get_agent_notification(
     }
 
 
-async def save_pending_confirmation(
-    pool: asyncpg.Pool,
-    chat_id: int,
-    user_id: int,
-    agent_id: int,
-    edit_type: str,
-    description: str,
-    payload: dict,
-) -> int:
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    row = await pool.fetchrow(
-        """
-        INSERT INTO agent_pending_confirmations
-            (chat_id, user_id, agent_id, edit_type, description, payload, expires_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT DO NOTHING
-        RETURNING id
-        """,
-        chat_id,
-        user_id,
-        agent_id,
-        edit_type,
-        description,
-        json.dumps(payload),
-        expires_at,
-    )
-    if row:
-        return row["id"]
-    existing = await pool.fetchrow(
-        "SELECT id FROM agent_pending_confirmations WHERE chat_id = $1 AND user_id = $2",
-        chat_id,
-        user_id,
-    )
-    return existing["id"] if existing else 0
-
-
 async def get_pending_confirmation(
     pool: asyncpg.Pool,
     user_id: int,
@@ -1043,9 +1042,23 @@ async def replace_pending_confirmation(
     payload: dict,
 ) -> int:
     await clear_pending_confirmation(pool, user_id, chat_id)
-    return await save_pending_confirmation(
-        pool, chat_id, user_id, agent_id, edit_type, description, payload
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    row = await pool.fetchrow(
+        """
+        INSERT INTO agent_pending_confirmations
+            (chat_id, user_id, agent_id, edit_type, description, payload, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        """,
+        chat_id,
+        user_id,
+        agent_id,
+        edit_type,
+        description,
+        json.dumps(payload),
+        expires_at,
     )
+    return row["id"]
 
 
 async def get_agent_state_keys(

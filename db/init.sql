@@ -92,6 +92,17 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE INDEX IF NOT EXISTS agents_active_idx ON agents (is_active, next_run_at);
 CREATE INDEX IF NOT EXISTS agents_user_idx ON agents (user_id);
 
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id SERIAL PRIMARY KEY,
+    agent_id INT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    run_at TIMESTAMPTZ DEFAULT NOW(),
+    notified BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'ok'
+);
+
+CREATE INDEX IF NOT EXISTS agent_runs_agent_idx ON agent_runs (agent_id, run_at DESC);
+CREATE INDEX IF NOT EXISTS agent_runs_stability_idx ON agent_runs (agent_id, run_at) WHERE status = 'ok';
+
 ALTER TABLE messages ADD CONSTRAINT messages_agent_fk
     FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL
     NOT VALID;

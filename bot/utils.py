@@ -5,7 +5,7 @@ import re
 
 
 def clean_llm_json(raw: str) -> str:
-    cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
+    cleaned = raw.strip()
     match = re.search(r"[{\[]", cleaned)
     if match:
         cleaned = cleaned[match.start() :]

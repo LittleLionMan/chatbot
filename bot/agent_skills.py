@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import json
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
 import asyncpg
 
 from bot import brain
@@ -109,22 +111,23 @@ async def _load_agents_with_ratings(pool: asyncpg.Pool) -> list[dict]:
     result: list[dict] = []
     for r in rows:
         config = parse_agent_config(r["config"])
-        steps = (
-            config.get("steps")
-            or config.get("pipeline", []) + config.get("pipeline_after_template", [])
+        steps = config.get("steps") or config.get("pipeline", []) + config.get(
+            "pipeline_after_template", []
         )
         if not steps:
             continue
-        result.append({
-            "id": r["id"],
-            "name": r["name"],
-            "instruction": config.get("instruction", ""),
-            "type": config.get("type", "unknown"),
-            "steps": steps,
-            "rating": r["current_rating"],
-            "rating_note": r["current_rating_note"],
-            "last_run_at": r["last_run_at"],
-        })
+        result.append(
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "instruction": config.get("instruction", ""),
+                "type": config.get("type", "unknown"),
+                "steps": steps,
+                "rating": r["current_rating"],
+                "rating_note": r["current_rating_note"],
+                "last_run_at": r["last_run_at"],
+            }
+        )
     return result
 
 
@@ -151,18 +154,20 @@ async def _load_stable_edits(pool: asyncpg.Pool) -> list[dict]:
             orig = json.loads(orig)
         if isinstance(edited, str):
             edited = json.loads(edited)
-        result.append({
-            "agent_type": r["agent_type"],
-            "instruction": r["instruction"],
-            "original_steps": orig,
-            "edited_steps": edited,
-            "rating": r["current_rating"],
-            "rating_note": r["current_rating_note"],
-        })
+        result.append(
+            {
+                "agent_type": r["agent_type"],
+                "instruction": r["instruction"],
+                "original_steps": orig,
+                "edited_steps": edited,
+                "rating": r["current_rating"],
+                "rating_note": r["current_rating_note"],
+            }
+        )
     return result
 
 
-def _summarize_steps(steps: list[dict]) -> str:
+def summarize_steps(steps: list[dict]) -> str:
     parts: list[str] = []
     for s in steps:
         entry = f"{s.get('id', '?')}:{s.get('type', '?')}"
@@ -183,7 +188,7 @@ def _build_extraction_content(agents: list[dict], edits: list[dict]) -> str:
         if a.get("rating_note"):
             lines.append(f"Notiz: {a['rating_note']}")
         lines.append(f"Instruction: {a['instruction'][:300]}")
-        lines.append(f"Pipeline: {_summarize_steps(a['steps'])}")
+        lines.append(f"Pipeline: {summarize_steps(a['steps'])}")
         lines.append(f"Steps ({len(a['steps'])}):")
         for s in a["steps"]:
             lines.append(f"  - {json.dumps(s, ensure_ascii=False)[:200]}")
@@ -197,8 +202,8 @@ def _build_extraction_content(agents: list[dict], edits: list[dict]) -> str:
             if e.get("rating_note"):
                 lines.append(f"Notiz: {e['rating_note']}")
             lines.append(f"Instruction: {e['instruction'][:200]}")
-            lines.append(f"LLM-Original: {_summarize_steps(e['original_steps'])}")
-            lines.append(f"Menschlich korrigiert: {_summarize_steps(e['edited_steps'])}")
+            lines.append(f"LLM-Original: {summarize_steps(e['original_steps'])}")
+            lines.append(f"Menschlich korrigiert: {summarize_steps(e['edited_steps'])}")
             lines.append("")
 
     return "\n".join(lines)
@@ -220,7 +225,8 @@ async def extract_and_store_patterns(pool: asyncpg.Pool, force: bool = False) ->
 
     logger.info(
         "agent_skills: extracting patterns from %d agents, %d stable edits",
-        len(agents), len(edits),
+        len(agents),
+        len(edits),
     )
 
     try:
@@ -279,7 +285,9 @@ async def load_skill_context(pool: asyncpg.Pool) -> str:
     for p in parsed.get("step_patterns", []):
         conf = p.get("confidence", "")
         conf_str = f" (Konfidenz: {conf:.1f})" if isinstance(conf, float) else ""
-        lines.append(f"- [{p.get('frequency', '')}]{conf_str} Wenn: {p.get('trigger', '')}")
+        lines.append(
+            f"- [{p.get('frequency', '')}]{conf_str} Wenn: {p.get('trigger', '')}"
+        )
         lines.append(f"  Muster: {p.get('pattern', '')}")
         lines.append(f"  Grund: {p.get('rationale', '')}")
     if parsed.get("step_patterns"):
@@ -329,7 +337,8 @@ async def record_pipeline_edit(
     try:
         existing = await pool.fetchrow(
             "SELECT id FROM pipeline_edits WHERE agent_id = $1 AND session_id = $2",
-            agent_id, session_id,
+            agent_id,
+            session_id,
         )
         if existing:
             await pool.execute(
@@ -380,13 +389,11 @@ async def update_stability(pool: asyncpg.Pool) -> None:
         for row in rows:
             run_count = await pool.fetchval(
                 """
-                SELECT COUNT(*) FROM agent_trigger_queue
-                WHERE target_agent_name = (
-                    SELECT name FROM agents WHERE id = $1
-                )
-                AND processed_at > $2
+                SELECT COUNT(*) FROM agent_runs
+                WHERE agent_id = $1 AND run_at > $2 AND status = 'ok'
                 """,
-                row["agent_id"], cutoff,
+                row["agent_id"],
+                cutoff,
             )
             if (run_count or 0) >= _STABILITY_MIN_RUNS:
                 await pool.execute(
@@ -395,7 +402,9 @@ async def update_stability(pool: asyncpg.Pool) -> None:
                 )
                 logger.info(
                     "agent_skills: marked edit %d as stable (agent %d, %d runs)",
-                    row["id"], row["agent_id"], run_count,
+                    row["id"],
+                    row["agent_id"],
+                    run_count,
                 )
     except Exception as e:
         logger.warning("agent_skills: stability update failed: %s", e)
@@ -416,7 +425,9 @@ async def set_rating(
             INSERT INTO agent_ratings (agent_id, rating, note)
             VALUES ($1, $2, $3)
             """,
-            agent_id, rating, note,
+            agent_id,
+            rating,
+            note,
         )
 
     await pool.execute(
@@ -425,7 +436,9 @@ async def set_rating(
         SET current_rating = $1, current_rating_note = $2, last_rated_at = NOW()
         WHERE id = $3
         """,
-        rating, note, agent_id,
+        rating,
+        note,
+        agent_id,
     )
     await mark_dirty(pool)
     logger.info("agent_skills: rated agent %d as %s", agent_id, rating)

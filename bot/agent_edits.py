@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import json
 import logging
 from datetime import datetime, timezone
+
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -13,19 +15,33 @@ logger = logging.getLogger(__name__)
 
 
 def confirmation_keyboard(confirmation_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+    return InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("Bestätigen", callback_data=f"confirm:yes:{confirmation_id}"),
-            InlineKeyboardButton("Abbrechen", callback_data=f"confirm:no:{confirmation_id}"),
-            InlineKeyboardButton("Anpassen", callback_data=f"confirm:adjust:{confirmation_id}"),
+            [
+                InlineKeyboardButton(
+                    "Bestätigen", callback_data=f"confirm:yes:{confirmation_id}"
+                ),
+                InlineKeyboardButton(
+                    "Abbrechen", callback_data=f"confirm:no:{confirmation_id}"
+                ),
+                InlineKeyboardButton(
+                    "Anpassen", callback_data=f"confirm:adjust:{confirmation_id}"
+                ),
+            ]
         ]
-    ])
+    )
 
 
 def rollback_keyboard(confirmation_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Rückgängig", callback_data=f"confirm:rollback:{confirmation_id}")]
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Rückgängig", callback_data=f"confirm:rollback:{confirmation_id}"
+                )
+            ]
+        ]
+    )
 
 
 _DATA_EDIT_SYSTEM = """Du führst einen präzisen Edit an einem gespeicherten Dokument durch.
@@ -34,14 +50,21 @@ Du bekommst:
 - Die Nutzeranfrage (was soll geändert werden)
 - Den aktuellen Dokumentinhalt
 
+Du schreibst NICHT das ganze Dokument neu. Du benennst nur die eine Stelle die sich
+ändert, als wörtliches Vorher/Nachher. Den unveränderten Rest fasst das System nicht an.
+
 Antworte NUR mit einem JSON-Objekt, kein anderer Text, keine Markdown-Backticks.
 
 Felder:
-- "found": true wenn die zu ändernde Stelle gefunden wurde
+- "found": true wenn die zu ändernde Stelle eindeutig gefunden wurde, sonst false
 - "change_description": Kurze Beschreibung was geändert wird (1 Satz)
-- "original_excerpt": Die Originalstelle (max 200 Zeichen) die geändert wird
-- "new_content": Der vollständige neue Dokumentinhalt nach der Änderung
-- "affected_section": Welcher Abschnitt/Bereich betroffen ist"""
+- "original_excerpt": Die zu ersetzende Stelle, ZEICHENGENAU aus dem Dokument kopiert —
+  gleiche Umbrüche, Satzzeichen und Schreibweise. Nimm so viel umgebenden Text mit, dass
+  die Stelle GENAU EINMAL im Dokument vorkommt, aber nicht mehr als nötig.
+- "replacement": Der Text der die Stelle ersetzt. Leerer String, wenn die Stelle ersatzlos entfernt werden soll.
+- "affected_section": Welcher Abschnitt/Bereich betroffen ist
+
+Wenn die Stelle nicht eindeutig und zeichengenau auffindbar ist, setze "found" auf false."""
 
 
 _STEP_PATCH_SYSTEM = """Du identifizierst welcher Pipeline-Step ein beschriebenes Problem verursacht und formulierst einen chirurgischen Prompt-Patch.
@@ -134,12 +157,18 @@ async def _find_relevant_preference_keys(
         val = state.get(key, "[]")
         try:
             parsed = json.loads(val)
-            preview = json.dumps(parsed[:2], ensure_ascii=False) if isinstance(parsed, list) else str(parsed)[:100]
+            preview = (
+                json.dumps(parsed[:2], ensure_ascii=False)
+                if isinstance(parsed, list)
+                else str(parsed)[:100]
+            )
         except Exception:
             preview = val[:100]
         key_descriptions.append(f"{key}: {preview}")
 
-    content = f"Feedback: {user_query}\n\nVorhandene State-Keys:\n" + "\n".join(key_descriptions)
+    content = f"Feedback: {user_query}\n\nVorhandene State-Keys:\n" + "\n".join(
+        key_descriptions
+    )
 
     try:
         raw = await brain.chat(
@@ -224,6 +253,25 @@ async def prepare_data_edit(
     if not result.get("found"):
         return None
 
+    original_excerpt = result.get("original_excerpt", "")
+    replacement = result.get("replacement", "")
+    if not original_excerpt:
+        logger.warning("agent_edits: data_edit lieferte kein original_excerpt")
+        return None
+
+    occurrences = current_value.count(original_excerpt)
+    if occurrences == 0:
+        logger.warning("agent_edits: data_edit excerpt nicht im Dokument gefunden")
+        return None
+    if occurrences > 1:
+        logger.warning(
+            "agent_edits: data_edit excerpt mehrdeutig (%d Treffer), Edit verworfen",
+            occurrences,
+        )
+        return None
+
+    new_value = current_value.replace(original_excerpt, replacement, 1)
+
     return {
         "edit_type": "data_edit",
         "agent_id": agent["id"],
@@ -231,9 +279,10 @@ async def prepare_data_edit(
         "namespace": namespace,
         "key": key,
         "original_value": current_value,
-        "new_value": result.get("new_content", ""),
+        "new_value": new_value,
         "change_description": result.get("change_description", ""),
-        "original_excerpt": result.get("original_excerpt", ""),
+        "original_excerpt": original_excerpt,
+        "replacement": replacement,
         "affected_section": result.get("affected_section", ""),
     }
 
@@ -303,7 +352,9 @@ async def prepare_preference(
     state_key: str | None = None,
 ) -> dict | tuple[str, str, str] | None:
     if state_key is None:
-        relevant_keys, most_likely = await _find_relevant_preference_keys(pool, agent, user_query)
+        relevant_keys, most_likely = await _find_relevant_preference_keys(
+            pool, agent, user_query
+        )
 
         if len(relevant_keys) > 1 and most_likely:
             clarification = await build_clarification_question(
@@ -357,13 +408,18 @@ def format_confirmation_message(edit_payload: dict) -> str:
         key = edit_payload.get("key", "")
         change = edit_payload.get("change_description", "")
         excerpt = edit_payload.get("original_excerpt", "")
+        replacement = edit_payload.get("replacement", "")
         section = edit_payload.get("affected_section", "")
         msg = f"{name} — Data-Edit in {ns}/{key}"
         if section:
             msg += f" (Abschnitt: {section})"
         msg += f"\n\n{change}"
         if excerpt:
-            msg += f"\n\nEntfernt wird: »{excerpt}«"
+            msg += f"\n\nVorher: »{excerpt}«"
+            if replacement:
+                msg += f"\nNachher: »{replacement}«"
+            else:
+                msg += "\nNachher: (Stelle wird entfernt)"
         return msg
 
     if edit_type == "step_patch":
@@ -412,11 +468,20 @@ async def execute_edit(
 
         try:
             from bot import agent_skills as _skills
+
             await _skills.record_pipeline_edit(
-                pool, agent_id,
+                pool,
+                agent_id,
                 edit_payload.get("agent_type", "unknown"),
                 f"data_edit:{ns}/{key}",
-                [{"type": "data", "namespace": ns, "key": key, "value": original_value}],
+                [
+                    {
+                        "type": "data",
+                        "namespace": ns,
+                        "key": key,
+                        "value": original_value,
+                    }
+                ],
                 [{"type": "data", "namespace": ns, "key": key, "value": new_value}],
                 session_id=f"data_edit_{agent_id}_{ns}_{key}",
             )
@@ -424,7 +489,9 @@ async def execute_edit(
             pass
 
         await memory.write_agent_data(pool, agent_id, ns, key, new_value)
-        logger.info("agent_edits: data_edit executed for agent %d %s/%s", agent_id, ns, key)
+        logger.info(
+            "agent_edits: data_edit executed for agent %d %s/%s", agent_id, ns, key
+        )
         return f"Erledigt. {name}: {ns}/{key} wurde aktualisiert."
 
     if edit_type == "step_patch":
@@ -435,13 +502,19 @@ async def execute_edit(
 
         try:
             from bot import agent_skills as _skills
-            orig_step = next((s for s in original_steps if s.get("id") == step_id), None)
+
+            orig_step = next(
+                (s for s in original_steps if s.get("id") == step_id), None
+            )
             new_step = next((s for s in new_steps if s.get("id") == step_id), None)
             if orig_step and new_step:
                 await _skills.record_pipeline_edit(
-                    pool, agent_id, agent_type,
+                    pool,
+                    agent_id,
+                    agent_type,
                     edit_payload.get("problem_description", ""),
-                    [orig_step], [new_step],
+                    [orig_step],
+                    [new_step],
                     session_id=f"step_patch_{agent_id}_{step_id}",
                 )
         except Exception:
@@ -456,11 +529,14 @@ async def execute_edit(
 
         try:
             from bot import agent_skills as _skills
+
             await _skills.mark_dirty(pool)
         except Exception:
             pass
 
-        logger.info("agent_edits: step_patch executed for agent %d step %s", agent_id, step_id)
+        logger.info(
+            "agent_edits: step_patch executed for agent %d step %s", agent_id, step_id
+        )
         return f"Erledigt. {name}: Step {step_id} wurde angepasst."
 
     if edit_type == "preference":
@@ -471,17 +547,24 @@ async def execute_edit(
         conflicts = edit_payload.get("conflicts", [])
 
         updated = [p for p in existing if p.get("rule") not in conflicts]
-        updated.append({
-            "rule": rule,
-            "description": description,
-            "added_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "confirmed": True,
-        })
+        updated.append(
+            {
+                "rule": rule,
+                "description": description,
+                "added_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "confirmed": True,
+            }
+        )
 
-        await memory.set_agent_state(pool, agent_id, {
-            state_key: json.dumps(updated, ensure_ascii=False)
-        })
-        logger.info("agent_edits: preference added for agent %d key=%r rule=%r", agent_id, state_key, rule)
+        await memory.set_agent_state(
+            pool, agent_id, {state_key: json.dumps(updated, ensure_ascii=False)}
+        )
+        logger.info(
+            "agent_edits: preference added for agent %d key=%r rule=%r",
+            agent_id,
+            state_key,
+            rule,
+        )
 
         replaced = f" ({len(conflicts)} Regel(n) ersetzt)" if conflicts else ""
         return f"Erledigt. {name}: Präferenz '{description}' in '{state_key}' gespeichert{replaced}."
@@ -517,9 +600,9 @@ async def rollback_edit(
     if edit_type == "preference":
         state_key = edit_payload.get("state_key", "user_preferences")
         existing = edit_payload.get("existing_preferences", [])
-        await memory.set_agent_state(pool, agent_id, {
-            state_key: json.dumps(existing, ensure_ascii=False)
-        })
+        await memory.set_agent_state(
+            pool, agent_id, {state_key: json.dumps(existing, ensure_ascii=False)}
+        )
         return f"Rückgängig. {name}: Präferenz in '{state_key}' wurde entfernt."
 
     return "Rollback nicht möglich."
