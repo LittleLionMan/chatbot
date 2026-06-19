@@ -60,15 +60,18 @@ function _readStepFromForm() {
       if (tr) step.time_range = tr;
       const cat = _val("sf-categories");
       if (cat) step.categories = cat;
+      if (_val("sf-required") === "false") step.required = false;
       break;
     }
     case "finance":
       step.ticker_key = _val("sf-ticker-key") || "selected_ticker";
+      if (_val("sf-required") === "false") step.required = false;
       break;
     case "finance_search":
       step.query_key = _val("sf-query-key") || "selected_isin";
       const fsDef = _val("sf-default");
       if (fsDef) step.default = fsDef;
+      if (_val("sf-required") === "false") step.required = false;
       break;
     case "state_read": {
       step.key = _val("sf-key") || "";
@@ -248,6 +251,7 @@ function _readStepFromForm() {
       if (to) step.timeout = parseFloat(to);
       const def = _val("sf-default");
       if (def) step.default = def;
+      if (_val("sf-required") === "false") step.required = false;
       break;
     }
     case "xlsx_fetch": {
@@ -274,6 +278,7 @@ function _readStepFromForm() {
       if (to) step.timeout = parseFloat(to);
       const def = _val("sf-default");
       if (def) step.default = def;
+      if (_val("sf-required") === "false") step.required = false;
       break;
     }
     case "trigger_agent": {

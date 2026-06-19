@@ -28,6 +28,10 @@ function buildStepFormBody(step) {
     "default",
     textInput("sf-default", step.default, ""),
   );
+  const requiredField = field(
+    "required (Lauf abbrechen wenn leer)",
+    `<select class="modal-select" id="sf-required"><option value="true" ${step.required === false ? "" : "selected"}>true — Lauf abbrechen</option><option value="false" ${step.required === false ? "selected" : ""}>false — leer durchreichen</option></select>`,
+  );
   const sourceKey = field(
     "source_key (Context-Key: woher kommt der Wert)",
     contextDropdown("sf-source-key", step.source_key, "z.B. extracted_isins"),
@@ -115,14 +119,17 @@ function buildStepFormBody(step) {
           "categories",
           `<select class="modal-select" id="sf-categories">${categoryOptions(step.categories)}</select>`,
         ) +
-        outputKey;
+        outputKey +
+        requiredField;
       break;
     case "finance":
       typeSpecific =
         field(
           "ticker_key",
           contextDropdown("sf-ticker-key", step.ticker_key, "selected_ticker"),
-        ) + outputKey;
+        ) +
+        outputKey +
+        requiredField;
       break;
     case "finance_search":
       typeSpecific =
@@ -131,7 +138,8 @@ function buildStepFormBody(step) {
           contextDropdown("sf-query-key", step.query_key, "selected_isin"),
         ) +
         outputKey +
-        defaultVal;
+        defaultVal +
+        requiredField;
       break;
     case "http_fetch":
       typeSpecific =
@@ -157,7 +165,8 @@ function buildStepFormBody(step) {
         ) +
         field("timeout", textInput("sf-timeout", step.timeout, "15")) +
         defaultVal +
-        outputKey;
+        outputKey +
+        requiredField;
       break;
     case "xlsx_fetch": {
       const columnsStr = Array.isArray(step.columns)
@@ -206,7 +215,8 @@ function buildStepFormBody(step) {
         ) +
         field("timeout", textInput("sf-timeout", step.timeout, "30")) +
         defaultVal +
-        outputKey;
+        outputKey +
+        requiredField;
       break;
     }
     case "state_read":

@@ -7,6 +7,7 @@ function stepSummary(step) {
   const type = step.type || "?";
   const parts = [];
   if (step.is_output) parts.push("output");
+  if (step.required === false) parts.push("optional");
   if (step.only_if_route) {
     const r = Array.isArray(step.only_if_route)
       ? step.only_if_route.join("|")
