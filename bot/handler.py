@@ -4,7 +4,6 @@ import asyncio
 import base64
 import logging
 import re
-from datetime import datetime, timezone
 
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -1577,8 +1576,13 @@ async def handle_callback_query(
             _pending_rollbacks[rollback_id] = edit_payload
             loop = asyncio.get_running_loop()
             loop.call_later(300, lambda: _pending_rollbacks.pop(rollback_id, None))
+            result_with_hint = (
+                f"{result}\n\n(Rückgängig nur in den nächsten 5 Minuten möglich — "
+                "und nicht über einen Neustart hinweg.)"
+            )
             await query.edit_message_text(
-                result, reply_markup=agent_edits.rollback_keyboard(rollback_id)
+                result_with_hint,
+                reply_markup=agent_edits.rollback_keyboard(rollback_id),
             )
 
         elif action == "no":
@@ -1601,7 +1605,8 @@ async def handle_callback_query(
             rollback_payload = _pending_rollbacks.pop(confirmation_id, None)
             if not rollback_payload:
                 await query.edit_message_text(
-                    "Rückgängig nicht mehr möglich — Zeit abgelaufen."
+                    "Rückgängig nicht mehr möglich — das 5-Minuten-Fenster ist vorbei "
+                    "oder der Bot wurde zwischenzeitlich neu gestartet."
                 )
                 return
             result = await agent_edits.rollback_edit(pool, rollback_payload)

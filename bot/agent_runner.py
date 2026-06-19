@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import ipaddress
 import json
 import logging
 import re
+import socket
 import statistics
 from typing import Awaitable, Callable
 
@@ -1068,6 +1070,54 @@ async def _handle_transform(step: dict, context: dict[str, str], **_) -> str:
     return handler(step, context)
 
 
+class BlockedTargetError(Exception):
+    def __init__(self, host: str, reason: str) -> None:
+        self.host = host
+        self.reason = reason
+        super().__init__(f"blocked target {host}: {reason}")
+
+
+def _ip_is_internal(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def _assert_public_host(host: str) -> None:
+    if not host:
+        raise BlockedTargetError(host, "empty host")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as e:
+        raise BlockedTargetError(host, f"DNS resolution failed: {e}") from e
+    for info in infos:
+        ip_str = info[4][0]
+        if _ip_is_internal(ip_str):
+            raise BlockedTargetError(host, f"resolves to internal address {ip_str}")
+
+
+async def _ssrf_request_hook(request: httpx.Request) -> None:
+    host = request.url.host or ""
+    await asyncio.to_thread(_assert_public_host, host)
+
+
+def _ssrf_guarded_client(timeout: float) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        event_hooks={"request": [_ssrf_request_hook]},
+    )
+
+
 async def _handle_http_fetch(step: dict, context: dict[str, str], **_) -> str:
     url_template: str = step.get("url_template") or step.get("url", "")
     url = _resolve_template(url_template, context)
@@ -1082,7 +1132,7 @@ async def _handle_http_fetch(step: dict, context: dict[str, str], **_) -> str:
     resolved_headers = {k: _resolve_template(v, context) for k, v in headers.items()}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with _ssrf_guarded_client(timeout) as client:
             if method == "GET":
                 resp = await client.get(url, headers=resolved_headers)
             elif method == "POST":
@@ -1106,6 +1156,11 @@ async def _handle_http_fetch(step: dict, context: dict[str, str], **_) -> str:
             )
     except StepAbortError:
         raise
+    except BlockedTargetError as e:
+        logger.warning(
+            "http_fetch: blocked internal target for %s: %s", url[:80], e.reason
+        )
+        return _check_fetch_result(step, "", f"http_fetch: target blocked ({e.reason})")
     except httpx.HTTPStatusError as e:
         logger.warning(
             "http_fetch: HTTP error %d for %s", e.response.status_code, url[:80]
@@ -1211,7 +1266,7 @@ async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
         ]
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with _ssrf_guarded_client(timeout) as client:
             resp = await client.get(url, headers={"User-Agent": "BobAgent/1.0"})
             resp.raise_for_status()
             raw_bytes = resp.content
@@ -1235,6 +1290,11 @@ async def _handle_xlsx_fetch(step: dict, context: dict[str, str], **_) -> str:
 
     except StepAbortError:
         raise
+    except BlockedTargetError as e:
+        logger.warning(
+            "xlsx_fetch: blocked internal target for %s: %s", url[:80], e.reason
+        )
+        return _check_fetch_result(step, "", f"xlsx_fetch: target blocked ({e.reason})")
     except Exception as e:
         logger.warning("xlsx_fetch: failed for %s: %s", url[:80], e)
         return _check_fetch_result(step, "", f"xlsx_fetch failed for {url[:80]}: {e}")
@@ -1350,9 +1410,18 @@ async def _execute_tool_calls(
     agent_id: int,
     target_chat_id: int,
     tool_calls: list[dict],
+    allowed_tools: list[str] | None = None,
 ) -> None:
     for call in tool_calls:
         tool = call.get("tool")
+        if allowed_tools is not None and tool not in allowed_tools:
+            logger.warning(
+                "agent %d: tool_call %r not in allowed_tools %r — discarded",
+                agent_id,
+                tool,
+                allowed_tools,
+            )
+            continue
         try:
             if tool == "notify_user":
                 msg = call.get("message", "")
@@ -1651,7 +1720,19 @@ async def execute_agent(
         await memory.set_agent_state(pool, agent_id, state)
 
         if tool_calls:
-            await _execute_tool_calls(pool, bot, agent_id, target_chat_id, tool_calls)
+            allowed_tools_raw = config_data.get("allowed_tools")
+            if allowed_tools_raw is not None and not isinstance(
+                allowed_tools_raw, list
+            ):
+                logger.warning(
+                    "agent %d: allowed_tools is not a list (%r) — ignoring restriction",
+                    agent_id,
+                    allowed_tools_raw,
+                )
+                allowed_tools_raw = None
+            await _execute_tool_calls(
+                pool, bot, agent_id, target_chat_id, tool_calls, allowed_tools_raw
+            )
 
         has_notify_tool = any(c.get("tool") == "notify_user" for c in tool_calls)
         did_notify = False
