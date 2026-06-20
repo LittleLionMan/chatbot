@@ -460,10 +460,13 @@ async def _handle_state_write_external(
     return value
 
 
-def _matches_item_filter(item: object, f: dict) -> bool:
+def _matches_item_filter(
+    item: object, f: dict, context: dict[str, str] | None = None
+) -> bool:
     field: str = f.get("field", "")
     operator: str = f.get("operator", "equals")
-    value: str = str(f.get("value", ""))
+    raw_value: str = str(f.get("value", ""))
+    value: str = _resolve_template(raw_value, context) if context else raw_value
     cell = (
         str(item.get(field, "")).strip()
         if isinstance(item, dict)
