@@ -889,7 +889,7 @@ def _transform_statistics(step: dict, context: dict[str, str]) -> str:
 
 def _transform_json_path(step: dict, context: dict[str, str]) -> str:
     source_key: str = step["source_key"]
-    path: str = step["path"]
+    path: str = _resolve_template(step["path"], context)
     raw = context.get(source_key, "")
     try:
         data = json.loads(raw)
